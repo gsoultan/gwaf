@@ -119,6 +119,20 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - run: go test -run 'TestEvasionCorpus|TestBenignCorpus|TestInterpretation|TestVerbatim' -v .
 
+  # Confidence is measured, not declared (docs/CONCEPT.md §8). A rule claiming
+  # more precision than the corpus supports fails the build here rather than
+  # surfacing as a support ticket about blocked legitimate traffic.
+  calibrate:
+    name: confidence calibration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: go run ./cmd/gwaf calibrate
+      - run: go run ./cmd/gwaf lint
+
   # The SLOs in CLAUDE.md §2 — zero allocations, zero rules evaluated on benign
   # traffic, sub-linear ruleset scaling, bounded fuel — are asserted as tests so
   # a regression fails the build rather than going unnoticed.

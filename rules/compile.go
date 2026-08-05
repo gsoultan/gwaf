@@ -359,6 +359,13 @@ func (rs *Ruleset) Report() Report { return rs.report }
 // Len returns the number of compiled rules.
 func (rs *Ruleset) Len() int { return len(rs.all) }
 
+// All returns every compiled rule, in evaluation order.
+//
+// It exists for tooling that has to reason about the whole ruleset — the
+// calibration harness, the linter, a control plane listing what is loaded —
+// rather than about one request.
+func (rs *Ruleset) All() []*CompiledRule { return rs.all }
+
 // ByID returns the compiled rule with the given ID.
 func (rs *Ruleset) ByID(id types.RuleID) (*CompiledRule, bool) {
 	cr, ok := rs.byID[id]

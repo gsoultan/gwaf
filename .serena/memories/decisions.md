@@ -208,3 +208,32 @@ it, because the standard library **vendors** packages under
 `vendor/golang.org/x/net/...` which look third-party and are not. Now checks
 both `go list -m` (the declaration) and `.Standard` on the package walk (what
 actually links). Stronger than before.
+
+## SHIPPED: `gwaf calibrate` — and it reports its own limits
+Confidence is now measured against `testdata/corpus/benign.jsonl` and gated in
+CI. This was the largest doc/code gap in the project: cited as a build gate in
+CLAUDE.md and as "the highest-leverage accuracy idea" in CONCEPT.md §8, while
+being a claim rather than a tool.
+
+**The part worth remembering is the honesty check.** 71 benign requests can only
+observe false-positive rates above 1.4% (1 in 71). A `Certain` claim means 1 in
+10,000. So a clean run today proves the rule did not match those 71 requests —
+*not* that its rate is below the ceiling. The tool prints exactly that, names
+which tiers it cannot validate, and says how many requests each would need.
+
+Without that warning a green calibration run is a rubber stamp, and someone
+would eventually "fix" a failure by loosening a ceiling. **Grow the corpus;
+never loosen the ceiling.**
+
+Counting unit: a rule is counted **once per request**, not once per matching
+value. Four matching arguments in one request is one false positive to the
+operator who has to deal with it.
+
+`calibrate.NewWAF` exists because three settings are easy to get wrong by hand:
+detection-only (so a blocking rule does not hide later matches), lowest minimum
+confidence (so every tier is compiled in, not just what a production policy
+runs), and unmetered fuel.
+
+Also added `Transaction.Matches()` — every rule that fired, not just the
+terminal one. Calibration needs the full set, and so does any control plane
+explaining a decision (the "no UI but expose everything" corollary).

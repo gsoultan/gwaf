@@ -1,0 +1,74 @@
+# gwaf calibration corpus -- benign traffic.
+# One request per line so the file is appendable and diffable.
+# Every rule is measured against this; see docs/CONCEPT.md section 8.
+{"name": "root", "target": "/"}
+{"name": "rest path", "target": "/api/v1/orders/12345"}
+{"name": "nested rest", "target": "/api/v2/users/42/orders/99/items"}
+{"name": "static asset", "target": "/assets/app.min.v2.js"}
+{"name": "versioned asset", "target": "/static/vendor-1.2.3.bundle.css"}
+{"name": "trailing slash", "target": "/docs/getting-started/"}
+{"name": "health check", "target": "/healthz"}
+{"name": "plain search", "args": {"q": "golang web application framework"}}
+{"name": "search with apostrophe", "args": {"q": "it's a great product"}}
+{"name": "possessive", "args": {"q": "the user's account settings"}}
+{"name": "sql word: select", "args": {"q": "please select a delivery option"}}
+{"name": "sql word: union", "args": {"q": "credit union membership application"}}
+{"name": "sql word: drop", "args": {"q": "drop off location near me"}}
+{"name": "sql word: insert", "args": {"q": "insert the card and wait"}}
+{"name": "sql word: update", "args": {"q": "update my mailing address"}}
+{"name": "sql word: delete", "args": {"q": "delete my account permanently"}}
+{"name": "sql phrase in prose", "args": {"q": "we should select a new union representative"}}
+{"name": "or in prose", "args": {"q": "coffee or tea, either is fine"}}
+{"name": "equals in prose", "args": {"q": "the total = 42 dollars"}}
+{"name": "script word in prose", "args": {"q": "the shooting script was rewritten"}}
+{"name": "quoted phrase", "args": {"q": "he said \"that's the one\" and left"}}
+{"name": "math expression", "args": {"q": "1 + 1 = 2"}}
+{"name": "comparison", "args": {"q": "price < 100 and rating > 4"}}
+{"name": "encoded space", "args": {"q": "hello%20world"}}
+{"name": "encoded email", "args": {"q": "user%40example.com"}}
+{"name": "encoded ampersand", "args": {"q": "research%20%26%20development"}}
+{"name": "plus as space", "args": {"q": "hello+world+again"}}
+{"name": "encoded query in redirect", "args": {"q": "/dashboard%3Ftab%3Dsettings"}}
+{"name": "percent in text", "args": {"q": "50% off today"}}
+{"name": "percent sign encoded", "args": {"q": "50%25 off today"}}
+{"name": "uuid", "args": {"q": "550e8400-e29b-41d4-a716-446655440000"}}
+{"name": "iso timestamp", "args": {"q": "2026-08-05T07:38:00Z"}}
+{"name": "jwt-like token", "args": {"q": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc-_123"}}
+{"name": "base64 payload", "args": {"q": "SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0Lg=="}}
+{"name": "hex hash", "args": {"q": "d41d8cd98f00b204e9800998ecf8427e"}}
+{"name": "semver", "args": {"q": "1.2.3-beta.4+build.567"}}
+{"name": "content hash path", "target": "/static/app.a1b2c3d4e5f6.js"}
+{"name": "relative link", "args": {"q": "/dashboard/settings"}}
+{"name": "filename with dots", "args": {"q": "report.2026.final.pdf"}}
+{"name": "dotfile name", "args": {"q": ".gitignore"}}
+{"name": "double extension", "args": {"q": "archive.tar.gz"}}
+{"name": "path with single dot", "target": "/api/./v1/status"}
+{"name": "html in comment body", "body": "{\"comment\":\"use the <b>bold</b> tag\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "code sample in body", "body": "{\"snippet\":\"if (a < b) { return; }\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "markdown body", "body": "{\"md\":\"# Title\\n\\nSome *emphasis* and a [link](/x).\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "entity in prose", "body": "{\"c\":\"AT&T and Johnson &amp; Johnson\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "ampersand in name", "args": {"q": "Smith & Sons Ltd"}}
+{"name": "json order", "body": "{\"name\":\"Alice\",\"qty\":3,\"note\":\"deliver before 5pm\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "json nested", "body": "{\"user\":{\"id\":1,\"prefs\":{\"theme\":\"dark\",\"lang\":\"en\"}}}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "json array", "body": "{\"ids\":[1,2,3,4,5],\"action\":\"archive\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "form body", "body": "email=user%40example.com&subject=Hello+there&msg=Thanks", "method": "POST", "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+{"name": "json with url", "body": "{\"callback\":\"https://example.com/hook?id=42&t=1\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "json with unicode", "body": "{\"name\":\"José García\",\"city\":\"München\"}", "method": "POST", "headers": {"Content-Type": "application/json"}}
+{"name": "chrome ua", "headers": {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}}
+{"name": "safari ua", "headers": {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"}}
+{"name": "curl ua", "headers": {"User-Agent": "curl/8.4.0"}}
+{"name": "go client ua", "headers": {"User-Agent": "Go-http-client/2.0"}}
+{"name": "googlebot ua", "headers": {"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}}
+{"name": "accept header", "headers": {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,*/*;q=0.8"}}
+{"name": "accept language", "headers": {"Accept-Language": "en-GB,en;q=0.9,fr;q=0.8"}}
+{"name": "referer", "headers": {"Referer": "https://example.com/search?q=widgets"}}
+{"name": "auth bearer", "headers": {"Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sig"}}
+{"name": "content type json", "headers": {"Content-Type": "application/json; charset=utf-8"}}
+{"name": "content type multipart", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}}
+{"name": "cache control", "headers": {"Cache-Control": "max-age=0, must-revalidate"}}
+{"name": "traceparent", "headers": {"Traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}}
+{"name": "accented text", "args": {"q": "café résumé naïve"}}
+{"name": "cjk text", "args": {"q": "日本語のテキスト"}}
+{"name": "cyrillic text", "args": {"q": "Привет мир"}}
+{"name": "emoji", "args": {"q": "great product 👍🎉"}}
+{"name": "rtl text", "args": {"q": "مرحبا بالعالم"}}

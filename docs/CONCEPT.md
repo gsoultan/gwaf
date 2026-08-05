@@ -269,7 +269,13 @@ Concepts 1–7 buy speed and anti-evasion. But **false positives are why WAFs ge
 WAF in detection-only mode protects nothing. These five exist to attack FP rate directly — without
 giving up the stateless boundary (CLAUDE.md §1).
 
-### 8. Confidence is measured, not declared
+### 8. Confidence is measured, not declared — SHIPPED
+
+> **Status: built and gated.** `gwaf calibrate` measures every rule against a
+> committed benign corpus and fails the build when a rule's rate exceeds its
+> declared tier. It also reports the corpus's own statistical power, so a clean
+> run is not mistaken for a stronger guarantee than it is.
+
 
 Rules declare a `Confidence` (RULES.md §8). Letting the *author* pick it is how every ruleset drifts:
 everyone believes their rule is precise.

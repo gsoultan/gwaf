@@ -64,6 +64,9 @@ type Transaction struct {
 	// bodyParseFailed carries that reason into the decision.
 	bodyParseFailed string
 
+	// matches is the reusable buffer behind Matches.
+	matches []Match
+
 	// violation records the first schema violation seen, so the request is
 	// rejected with the reason rather than merely failing to match a rule.
 	violation  schema.Violation
@@ -109,6 +112,61 @@ func (tx *Transaction) Close() {
 	tx.spans = tx.spans[:0]
 	tx.arena.Reset()
 	w.txPool.Put(tx)
+}
+
+// Match is one rule that fired during a transaction.
+//
+// Decisions report the rule responsible for the outcome; this reports every
+// rule that matched, including scoring rules that did not block on their own.
+// Calibration needs the full set — a rule's false-positive rate is how often it
+// matches benign traffic, whether or not that match decided anything — and so
+// does any control plane explaining a decision to an operator.
+type Match struct {
+	RuleID     types.RuleID
+	Msg        string
+	Severity   types.Severity
+	Confidence types.Confidence
+	Target     types.Target
+	Key        string
+	Span       types.Span
+
+	// Interpretation names the alternative decoding that revealed the payload,
+	// or "none" when it matched the bytes as sent.
+	Interpretation string
+
+	// Score is this match's contribution to the anomaly total.
+	Score int
+}
+
+// Matches returns every rule that fired in the phase most recently evaluated.
+//
+// The slice is owned by the transaction and is invalidated by the next phase or
+// by Close. Callers that retain matches must copy them.
+func (tx *Transaction) Matches() []Match {
+	if cap(tx.matches) < len(tx.result.Hits) {
+		tx.matches = make([]Match, 0, len(tx.result.Hits))
+	}
+	tx.matches = tx.matches[:0]
+
+	for i := range tx.result.Hits {
+		h := &tx.result.Hits[i]
+		score := h.Outcome.Score
+		if h.Outcome.Kind == rules.ActionScore && score == 0 {
+			score = h.Rule.Rule.Severity.Score()
+		}
+		tx.matches = append(tx.matches, Match{
+			RuleID:         h.Rule.Rule.ID,
+			Msg:            h.Rule.Rule.Msg,
+			Severity:       h.Rule.Rule.Severity,
+			Confidence:     h.Rule.Rule.Confidence,
+			Target:         h.Target,
+			Key:            h.Key,
+			Span:           h.Match.Span,
+			Interpretation: h.Reading.String(),
+			Score:          score,
+		})
+	}
+	return tx.matches
 }
 
 // Score returns the accumulated anomaly score.

@@ -119,7 +119,15 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        between readings, so the NUL is what to detect, not the extension.
 7. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
 6. [ ] **SecLang parser** (pulled forward — gateon's DB requires it)
-7. [ ] Core ruleset with **calibrated** confidence
+7. [x] **`gwaf calibrate`** — confidence is now measured against a committed
+       benign corpus and gated in CI, which was the largest doc/code gap: it was
+       cited as a gate in CLAUDE.md and CONCEPT.md §8 while being a claim rather
+       than a tool. It also reports **what the corpus cannot measure**: 71
+       requests can only observe rates above 1.4%, so a `Certain` claim of
+       1-in-10,000 is currently unfalsifiable. The fix is always more corpus,
+       never a looser ceiling.
+8. [x] **`gwaf lint`** — prefilter coverage and the per-request cost of
+       unconditional rules (RULES.md §5), also gated.
 
 **Gates:**
 - Every detector beats the RE2 baseline on the corpus at **equal-or-lower FP**

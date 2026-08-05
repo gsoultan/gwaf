@@ -7,7 +7,7 @@ FUZZTIME ?= 30s
 
 ## check: everything CI runs.
 .PHONY: check
-check: fmt-check vet lint test race deps
+check: fmt-check vet lint test race deps calibrate lint-rules
 
 ## fmt: format the tree.
 .PHONY: fmt
@@ -40,6 +40,21 @@ test:
 .PHONY: race
 race:
 	$(GO) test -race ./...
+
+## calibrate: measure each rule's false-positive rate against the benign corpus.
+##
+## Confidence is a measured property, not an authored one (docs/CONCEPT.md §8).
+## A rule declaring more precision than the corpus supports fails here rather
+## than in production. The tool also reports what the corpus *cannot* measure;
+## the fix for that is always more corpus, never a looser ceiling.
+.PHONY: calibrate
+calibrate:
+	$(GO) run ./cmd/gwaf calibrate
+
+## lint: report prefilter coverage and the cost of unconditional rules.
+.PHONY: lint-rules
+lint-rules:
+	$(GO) run ./cmd/gwaf lint
 
 ## corpus: detection rate and false-positive rate, reported together.
 .PHONY: corpus
