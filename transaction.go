@@ -85,6 +85,12 @@ type Transaction struct {
 	// was never really inspected.
 	undecodable string
 
+	// bodyStart is the index in values where request-body data begins, so a
+	// body phase made entirely of generated counterparts does not re-walk the
+	// request line, the headers, and the query arguments that the header phase
+	// already evaluated against the same operators.
+	bodyStart int
+
 	// Response-phase state. responseStart is the index in values where response
 	// data begins, so response phases do not re-walk the request.
 	responseStart int
@@ -144,6 +150,7 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.framingConflict = ""
 	tx.oversizeKey = ""
 	tx.oversizeLen = 0
+	tx.bodyStart = -1
 	tx.responseStart = -1
 	tx.respBodySpan = types.Span{}
 	tx.respBodyLen = 0
@@ -499,6 +506,12 @@ func (tx *Transaction) checkSchema(name, value string) bool {
 // instead. That is slower and less precise but never less safe, and a parse
 // failure is surfaced at the phase boundary rather than silently ignored.
 func (tx *Transaction) SetRequestBody(b []byte) {
+	// Everything recorded from here on is body data. The mark is taken before
+	// any parsing so it holds whichever path the body takes -- parsed fields,
+	// extracted text runs, or the whole document when nothing could parse it.
+	if tx.bodyStart < 0 {
+		tx.bodyStart = len(tx.values)
+	}
 	tx.bodyLen = len(b)
 	if len(b) > tx.waf.cfg.limits.MaxBodySize {
 		return
@@ -1154,10 +1167,21 @@ func (tx *Transaction) runPhase(phase types.Phase) Decision {
 	tx.refreshValues()
 
 	values := tx.values
-	if phase >= types.PhaseResponseHeaders && tx.responseStart >= 0 {
+	switch {
+	case phase >= types.PhaseResponseHeaders && tx.responseStart >= 0:
 		// Response rules target response collections, so request values could
 		// never match them — walking those again would be pure cost.
 		values = tx.values[tx.responseStart:]
+
+	case phase == types.PhaseRequestBody && tx.bodyStart > 0 &&
+		tx.rs.MirrorsOnly(phase):
+		// Every rule in this phase is a generated counterpart evaluating
+		// exactly as its original did, so a value the header phase already saw
+		// cannot produce a new finding. Skipping those is most of the work on a
+		// request with a body: the request line, every header, and every query
+		// argument were otherwise transformed and scanned a second time to
+		// reach the same verdict.
+		values = tx.values[tx.bodyStart:]
 	}
 
 	tx.result.Reset()

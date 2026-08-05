@@ -217,12 +217,25 @@ and the framework adapters belong.
        merging, and JSON as well as YAML. `Report` names everything the
        document declared that gwaf could not use — a schema that quietly
        constrains less than the operator believes is worse than none.
-3. [ ] **Compile-time per-route plan pruning** — the other half of §6, and now
-       the measured route to the one unmet SLO. Benign POST with a 1 KiB JSON
-       body sits at ~17µs against a 15µs target; transform-prefix reuse took
-       ~11% off it and the remainder is the evaluation loop itself (Eval is
-       ~80% of the profile). Making each rule cheaper has run out of room —
-       what is left is evaluating fewer of them.
+3. [x] **Compile-time plan pruning** — shipped, and it closed the last unmet
+       SLO. Two prunings, both provably exact rather than heuristic:
+
+       *Target pruning.* A chain group records which target kinds its rules
+       read, and a value whose kind no rule in the group names is skipped
+       before the transform and the automaton scan. A JSON body emits every
+       object key as its own ARGS_NAMES value and only the NoSQL rules read
+       that target, so each key had been transformed and scanned by every group
+       in the phase to reach a verdict three of them could never have reached.
+
+       *Phase pruning.* When every rule in the body phase is a generated
+       counterpart evaluating identically to its original — checked at compile
+       time via `Rule.DerivedFrom`, same operator and same chain — a value the
+       header phase already saw cannot produce a new finding, so the body phase
+       walks only the values that arrived with the body.
+
+       Measured: benign POST with a 1 KiB JSON body **16.4µs → 13.0µs**, benign
+       GET **1.5µs → 0.74µs**, ruleset scaling 354ns → 240ns and still flat from
+       10 to 10,000 rules. Detection identical, allocations still zero.
 4. [ ] **Context-aware confidence from schema** (§9)
 4. [ ] GraphQL depth/complexity/introspection; gRPC frame + protobuf
 5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation

@@ -77,6 +77,27 @@ type ChainGroup struct {
 
 	// Unconditional lists indices into Rules that must run regardless.
 	Unconditional []int
+
+	// targets is the set of target kinds any rule in this group reads, as a
+	// bitmask over types.TargetKind.
+	//
+	// A rule selects a value only when its target list names that value's kind
+	// explicitly — an empty list matches nothing — so a group whose rules never
+	// name a kind cannot possibly produce a hit for it. Checking that before
+	// the chain is applied skips the transform *and* the automaton scan rather
+	// than skipping one operator call at the end.
+	//
+	// It matters most for the values there are most of. A JSON body emits every
+	// object key as its own ARGS_NAMES value, and only the NoSQL rules read
+	// that target: without this, each key was transformed and scanned by every
+	// chain group in the phase to reach a verdict three of them could never
+	// have reached.
+	targets uint64
+}
+
+// Reads reports whether any rule in this group inspects the given target kind.
+func (g *ChainGroup) Reads(k types.TargetKind) bool {
+	return k < 64 && g.targets&(1<<uint(k)) != 0
 }
 
 // sortGroupsByChain orders a phase's groups so that chains sharing a prefix are
@@ -109,6 +130,59 @@ type phasePlan struct {
 	// maxChainLen sizes the evaluator's per-depth staging buffers, which is
 	// what lets one group resume where the previous one left off.
 	maxChainLen int
+
+	// mirrorsOnly reports that every rule in this phase is a generated
+	// counterpart of a rule in an earlier phase, with the same operator and the
+	// same transform chain.
+	//
+	// When it holds, a value the earlier phase already saw cannot produce a new
+	// finding here: the same operator would run over the same transformed bytes
+	// and reach the same verdict. The engine may then evaluate only the values
+	// that *arrived* in this phase, which on a request with a body is most of
+	// the work — the request line, the headers, and every query argument were
+	// otherwise walked twice.
+	//
+	// Computed rather than assumed, because it stops holding the moment an
+	// embedder authors a body-phase rule of their own, and the whole point of
+	// Rule.DerivedFrom is that the relationship is recorded rather than guessed.
+	mirrorsOnly bool
+}
+
+// allMirrors reports whether every rule in a phase is a generated counterpart
+// of a rule in an earlier phase, evaluating identically.
+//
+// "Identically" is checked, not trusted: same operator instance and same
+// transform chain. A counterpart that had been given a different operator would
+// see the same value differently, and skipping it would be a silent hole.
+func allMirrors(rules []*CompiledRule, byID map[types.RuleID]*CompiledRule, phase types.Phase) bool {
+	if len(rules) == 0 {
+		return false
+	}
+	for _, cr := range rules {
+		origin, ok := byID[cr.Rule.DerivedFrom]
+		if cr.Rule.DerivedFrom == 0 || !ok {
+			return false
+		}
+		if origin.Rule.Phase >= phase {
+			return false
+		}
+		if origin.Rule.Op != cr.Rule.Op {
+			return false
+		}
+		if chainKey(origin.Rule.Transforms) != chainKey(cr.Rule.Transforms) {
+			return false
+		}
+	}
+	return true
+}
+
+// MirrorsOnly reports whether a phase contains only generated counterparts, so
+// the caller may restrict it to values that arrived in this phase.
+func (rs *Ruleset) MirrorsOnly(p types.Phase) bool {
+	if int(p) >= len(rs.phases) {
+		return false
+	}
+	return rs.phases[p].mirrorsOnly
 }
 
 // maxChainLen returns the longest transform chain among the groups.
@@ -258,6 +332,11 @@ func Compile(set Set, opts Options) (*Ruleset, error) {
 			})
 		}
 
+		for _, t := range r.Targets {
+			if t.Kind < 64 {
+				g.targets |= 1 << uint(t.Kind)
+			}
+		}
 		g.Rules = append(g.Rules, cr)
 		plan.rules = append(plan.rules, cr)
 		plan.maxGroupRules = max(plan.maxGroupRules, len(g.Rules))
@@ -277,6 +356,7 @@ func Compile(set Set, opts Options) (*Ruleset, error) {
 		sortGroupsByChain(rs.phases[p].groups)
 		rs.report.ChainGroups += len(rs.phases[p].groups)
 		rs.phases[p].maxChainLen = maxChainLen(rs.phases[p].groups)
+		rs.phases[p].mirrorsOnly = allMirrors(rs.phases[p].rules, rs.byID, types.Phase(p))
 	}
 	return rs, nil
 }

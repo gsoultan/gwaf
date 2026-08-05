@@ -685,3 +685,49 @@ particular would have blocked roughly one in five requests of any faceted search
 on the internet, and gateon never triggered it because gateon uses
 page/pageSize/q as parameter names. **A detector can only be shown safe against
 traffic shapes it has actually met.**
+
+## SHIPPED: plan pruning — the 15us SLO is met, after never having been
+Benign POST with a 1 KiB JSON body: **16.4us -> 13.0us**, target 15us. Benign
+GET 1.5us -> 0.74us. Ruleset scaling 354ns -> 240ns, still flat 10 -> 10,000.
+Detection identical, allocations still zero. **Every SLO in CLAUDE.md §2 now
+passes.**
+
+It had never passed. bench/baseline.txt recorded 30.3us at one point without
+flagging it.
+
+**I was wrong about the route.** I had said per-route plan pruning would close
+it — but the SLO benchmark calls `gwaf.New()` with no schema, so route pruning
+cannot touch it. Profiling first is what caught that. What closed it was
+pruning the plan by *what the value is*, not by what route it arrived on.
+
+### Target pruning (largest, ~20%)
+`ChainGroup.targets` is a bitmask of the target kinds its rules read. A value
+whose kind no rule in the group names is skipped **before** the transform and
+the automaton scan, rather than after the operator call.
+
+Exact, not heuristic: `targetMatches` requires an explicit kind match and an
+empty target list matches nothing, so a group that never names a kind cannot
+produce a hit for it.
+
+It matters most where the values are most numerous. A JSON body emits every
+object key as its own ARGS_NAMES value, and only the two NoSQL rules read that
+target — so every key was being transformed and scanned by all four chain groups
+to reach a verdict three of them could never have reached.
+
+### Phase pruning (~7%)
+When every rule in the body phase is a generated counterpart evaluating
+identically to its original, a value the header phase already saw cannot produce
+a new finding. `Rule.DerivedFrom` plus an equality check on operator and chain
+proves it at compile time; the engine then walks only values that arrived with
+the body. Without it the request line, every header, and every query argument
+were transformed and scanned a second time to reach the same verdict.
+
+Checked rather than assumed: it stops holding the moment an embedder authors a
+body-phase rule of their own, which is why `allMirrors` verifies the operator
+and chain rather than trusting the ID relationship.
+
+## Benchmark methodology, again
+The first A/B of prefix reuse reported nonsense (+136% for a change that
+strictly removes work) because the machine went busy mid-run. Interleaving A/B
+and taking minima is the method that works here. Recorded because I have now
+been caught by it twice.

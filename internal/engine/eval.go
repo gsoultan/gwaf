@@ -230,6 +230,13 @@ func (e *Evaluator) Eval(
 			e.stages.reset(reading.Bytes)
 
 			for _, g := range groups {
+				// A group whose rules never read this target cannot produce a
+				// hit for it, and finding that out before the chain is applied
+				// skips the transform and the automaton scan together.
+				if !g.Reads(v.Target.Kind) {
+					continue
+				}
+
 				// The chain is applied once per reading and shared by every
 				// rule in the group — the common-subexpression elimination
 				// from docs/CONCEPT.md §1.3 — and now also shared *across*
