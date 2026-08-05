@@ -127,6 +127,27 @@ attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
 | [GATEON-MIGRATION.md](docs/GATEON-MIGRATION.md) | First adopter: replacing Coraza |
 | [CLAUDE.md](CLAUDE.md) | Project guidelines, structure, standards |
 
+## Performance
+
+| | p50 | p99 | allocations |
+|---|---|---|---|
+| Benign GET, no body | 875 ns | 1.0 µs | 0 |
+| Benign POST, 1 KiB JSON | 13.2 µs | 15.8 µs | 0 |
+| Blocked SQL injection | 709 ns | 875 ns | 0 |
+
+Ruleset scaling is flat from 10 to 10,000 rules (245 → 239 ns), because the
+prefilter decides what to evaluate before any rule runs. Detection is 132/132 on
+the evasion corpus with 0/124 false positives, measured on the same build.
+
+Percentiles rather than means, because a mean hides the request that took forty
+times longer — and that request is the one an attacker is trying to produce.
+Methodology, hardware, re-run instructions, and what these numbers **do not**
+show: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). One command reproduces them:
+
+```
+make bench-publish
+```
+
 ## Framework integration
 
 ```go

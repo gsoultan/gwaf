@@ -90,6 +90,29 @@ cover:
 bench:
 	$(GO) test -run=XXX -bench=. -benchmem ./...
 
+## bench-publish: everything docs/BENCHMARKS.md reports, with provenance.
+##
+## Prints the hardware and toolchain first, because a benchmark without them is
+## a number nobody can disagree with -- and a number nobody can disagree with is
+## not evidence.
+.PHONY: bench-publish
+bench-publish:
+	@echo "# gwaf benchmarks"
+	@echo "# commit:  $$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+	@echo "# go:      $$($(GO) version)"
+	@echo "# host:    $$(uname -srm)"
+	@echo "# cpu:     $$(sysctl -n machdep.cpu.brand_string 2>/dev/null || \
+	                    grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- || echo unknown)"
+	@echo
+	@GWAF_BENCH_REPORT=1 $(GO) test -run='TestLatencyDistribution|TestSLO' -v . \
+		| grep -E 'workload|ns|µs|ms|heap growth|--- (PASS|FAIL)' || true
+	@echo
+	@$(GO) test -run=XXX -bench=. -benchmem -count=5 . | grep -E '^(Benchmark|ok|PASS)'
+	@echo
+	@$(GO) test -run='TestEvasionCorpus$$|TestBenignCorpus$$' -v . \
+		| grep -E 'detection:|false positives:' || true
+	@$(GO) run ./cmd/gwaf calibrate 2>&1 | grep -E 'corpus:|power:|every rule' || true
+
 ## bench-save: record a baseline for regression comparison.
 .PHONY: bench-save
 bench-save:

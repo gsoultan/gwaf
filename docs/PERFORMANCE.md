@@ -170,7 +170,8 @@ Benchmarks are only credible if the workload is. `bench/` covers:
 | Adversarial: pathological regex bait | Proves RE2 linearity. |
 | Ruleset scaling: 10 / 100 / 1k / 10k rules | **Must be sub-linear.** If it's linear, the prefilter is broken. |
 
-Reported every run: p50, p99, p99.9, allocs/op, bytes/op, and **rules-evaluated/request** — that
+Reported every run by `latency_test.go`: p50, p90, p99, p99.9, max, allocs/op,
+bytes/op, and **rules-evaluated/request** — that
 last one is the leading indicator. If it drifts up, latency is about to follow.
 
 CI gates a >5% regression on any of them. Published benchmarks ship with hardware, methodology, and

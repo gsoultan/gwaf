@@ -930,3 +930,46 @@ in the callback and assert after it returns.
 
 The residual 0/sec readings are fuzzer bookkeeping plus machine contention —
 the same noise that produced a nonsense +136% benchmark earlier in this session.
+
+## FINDING: the SLO table was written in percentiles and nothing measured one
+CLAUDE.md §2 states p50 and p99 targets. docs/PERFORMANCE.md claimed "reported
+every run: p50, p99, p99.9". **Neither was true.** `go test -bench` reports a
+*mean*, so three SLOs were unverified as written and **p99 < 100µs was
+unverified entirely**.
+
+Same class of gap as claiming a confidence tier the corpus cannot measure: the
+document asserted a measurement that did not exist.
+
+`latency_test.go` measures 200,000 samples per workload and reports
+p50/p90/p99/p99.9/max, asserting the CLAUDE.md bounds. First real numbers:
+
+    benign GET            p50 875ns   p99 1.0us
+    benign GET + query    p50 2.96us  p99 3.38us
+    benign POST 1KiB JSON p50 13.2us  p99 15.8us   (target 15us p50, 100us p99)
+    blocked SQLi          p50 709ns   p99 875ns
+
+**Blocking is faster than allowing** — a blocked request stops at the first
+terminal rule and never reaches the body phase.
+
+Maxima are 19-208us and move wildly between runs while p50 moves <1%: that is
+GC, not gwaf, which allocates nothing on these paths. Reported rather than
+trimmed, because a benchmark that subtracts GC measures a program nobody runs.
+
+Per-transaction footprint also had no measurement. Now: **2.3 B/tx allocated,
+heap growth −37 KB over 20,000 transactions** (it shrinks).
+
+### The gate caught the mistake in the fix
+`TestLatencyDistribution` failed under `make check` because `-race` slows the
+request path by an order of magnitude. A latency bound measured under race
+instrumentation describes a build nobody deploys. The repo already had
+`raceEnabled` for exactly this reason (the zero-allocation SLO); reused it.
+
+## SHIPPED: docs/BENCHMARKS.md + `make bench-publish`
+Prints commit, Go version, host, and CPU before any number, because a benchmark
+without provenance is a number nobody can disagree with — and a number nobody
+can disagree with is not evidence.
+
+§5 is "What these numbers do not show" and is the part that matters: one machine
+and one architecture, a synthetic corpus, **no comparison against another WAF**,
+sampling overhead included, no multi-hour run. A comparison where only one side
+was tuned is worse than none, so none is published.

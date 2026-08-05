@@ -297,7 +297,12 @@ The most important milestone. A WAF library with no adopter is a benchmark, not 
 ## M5 — Hardening → v1.0 (weeks 30–40)
 
 1. [ ] Third-party security review (budget for it; this is security infrastructure)
-2. [ ] **Published reproducible benchmarks** — methodology, hardware, re-run instructions
+2. [~] **Published reproducible benchmarks** — `docs/BENCHMARKS.md` and
+       `make bench-publish`, with methodology, hardware, provenance, and an
+       explicit section on what the numbers do not show. Latency is now measured
+       as p50/p90/p99/p99.9/max rather than as a mean, which is what the SLO
+       table always claimed and nothing had ever measured. Remaining: a
+       `linux/amd64` run, and a like-for-like comparison against another WAF.
 3. [ ] SLSA-3 provenance, SBOM, signed releases, documented CVE process
 4. [ ] Public API + four extension interfaces frozen under semver
 
