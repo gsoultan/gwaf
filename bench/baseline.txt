@@ -9,97 +9,165 @@ BenchmarkAttack-15               	   10000	      1973 ns/op	      17 B/op	      
 BenchmarkManyArgs-15             	   10000	    125291 ns/op	      14 B/op	       0 allocs/op
 BenchmarkRulesetScaling/rules=10-15         	   10000	       455.6 ns/op	       1 B/op	       0 allocs/op
 BenchmarkRulesetScaling/rules=100-15        	   10000	       460.6 ns/op	       1 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	   10000	       456.6 ns/op	       1 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	   10000	       510.3 ns/op	       1 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	   10000	      1053 ns/op	       1 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	   10000	       128.0 ns/op	      18 B/op	       0 allocs/op
-BenchmarkSchemaSpecialized/with_schema-15   	   10000	      2232 ns/op	       1 B/op	       0 allocs/op
-BenchmarkSchemaSpecialized/without_schema-15         	   10000	      3296 ns/op	       1 B/op	       0 allocs/op
+Benchmar   20000	  10574631 ns/op	  99.16 MB/s	 2105964 B/op	       2 allocs/op
+BenchmarkBenignLargeBody-15      	   20000	  10317983 ns/op	 101.62 MB/s	 2105967 B/op	       2 allocs/op
+BenchmarkAttack-15               	   20000	      1463 ns/op	      16 B/op	       3 allocs/op
+BenchmarkAttack-15               	   20000	      1428 ns/op	      16 B/op	       3 allocs/op
+BenchmarkAttack-15               	   20000	      1435 ns/op	      16 B/op	       3 allocs/op
+BenchmarkManyArgs-15             	   20000	     88869 ns/op	       7 B/op	       0 allocs/op
+BenchmarkManyArgs-15             	   20000	     87408 ns/op	       7 B/op	       0 allocs/op
+BenchmarkManyArgs-15             	   20000	     86889 ns/op	       7 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	   20000	       327.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	   20000	       337.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	   20000	       330.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	   20000	       332.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	   20000	       318.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	   20000	       325.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	   20000	       318.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	   20000	       338.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	   20000	       333.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	   20000	       329.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	   20000	       325.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	   20000	       337.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	   20000	       679.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	   20000	       618.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	   20000	       681.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	   20000	       104.0 ns/op	       9 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	   20000	        94.12 ns/op	       8 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	   20000	        94.08 ns/op	       8 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	   20000	      1450 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	   20000	      1412 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	   20000	      1444 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	   20000	      2141 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	   20000	      2125 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	   20000	      2124 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf	129.293s
+ok  	github.com/gsoultan/gwaf	668.479s
 PASS
-ok  	github.com/gsoultan/gwaf/calibrate	0.413s
+ok  	github.com/gsoultan/gwaf/calibrate	1.033s
 ?   	github.com/gsoultan/gwaf/cmd/gwaf	[no test files]
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/detect/sqli
 cpu: Apple M5 Pro
-BenchmarkAnalyzeBenign-15    	   10000	       603.6 ns/op	  96.10 MB/s	       0 B/op	       0 allocs/op
-BenchmarkAnalyzeAttack-15    	   10000	       715.4 ns/op	  74.08 MB/s	       0 B/op	       0 allocs/op
-BenchmarkAnalyzeJSON-15      	   10000	       817.7 ns/op	  72.15 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	   20000	       920.2 ns/op	  63.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	   20000	       743.4 ns/op	  78.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	   20000	       611.8 ns/op	  94.81 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	   20000	       704.6 ns/op	  75.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	   20000	       644.0 ns/op	  82.30 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	   20000	       624.9 ns/op	  84.81 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	   20000	       651.0 ns/op	  90.63 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	   20000	       641.8 ns/op	  91.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	   20000	       624.7 ns/op	  94.44 MB/s	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/detect/sqli	0.528s
+ok  	github.com/gsoultan/gwaf/detect/sqli	0.689s
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/detect/xss
 cpu: Apple M5 Pro
-BenchmarkAnalyzeBenign-15    	   10000	       379.1 ns/op	 152.98 MB/s	       0 B/op	       0 allocs/op
-BenchmarkAnalyzeMarkup-15    	   10000	       501.2 ns/op	 127.68 MB/s	       0 B/op	       0 allocs/op
-BenchmarkAnalyzeAttack-15    	   10000	       303.2 ns/op	 145.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	   20000	       643.5 ns/op	  90.13 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	   20000	       517.3 ns/op	 112.11 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	   20000	       445.7 ns/op	 130.12 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	   20000	       538.2 ns/op	 118.91 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	   20000	       487.7 ns/op	 131.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	   20000	       472.3 ns/op	 135.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	   20000	       276.2 ns/op	 159.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	   20000	       255.5 ns/op	 172.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	   20000	       241.0 ns/op	 182.55 MB/s	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/detect/xss	0.521s
+ok  	github.com/gsoultan/gwaf/detect/xss	0.650s
 ?   	github.com/gsoultan/gwaf/examples/basic	[no test files]
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/internal/bitset
 cpu: Apple M5 Pro
-BenchmarkResetSparse-15    	   10000	         3.788 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	   20000	         3.910 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	   20000	         9.637 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	   20000	        10.18 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/internal/bitset	0.519s
+ok  	github.com/gsoultan/gwaf/internal/bitset	0.582s
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/internal/body
 cpu: Apple M5 Pro
-BenchmarkParseJSON-15           	   10000	       189.4 ns/op	 723.16 MB/s	       0 B/op	       0 allocs/op
-BenchmarkParseJSONEscaped-15    	   10000	        45.83 ns/op	 982.00 MB/s	       0 B/op	       0 allocs/op
-BenchmarkParseForm-15           	   10000	       105.6 ns/op	 662.75 MB/s	       0 B/op	       0 allocs/op
-BenchmarkParseMultipart-15      	   10000	       294.0 ns/op	3626.31 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	   20000	       364.1 ns/op	 376.30 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	   20000	       290.7 ns/op	 471.35 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	   20000	       277.5 ns/op	 493.67 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	   20000	        74.36 ns/op	 605.13 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	   20000	        64.22 ns/op	 700.75 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	   20000	        61.89 ns/op	 727.05 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	   20000	       139.8 ns/op	 500.73 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	   20000	       136.8 ns/op	 511.73 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	   20000	       129.5 ns/op	 540.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	   20000	       352.7 ns/op	3022.08 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	   20000	       333.9 ns/op	3192.75 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	   20000	       316.2 ns/op	3370.80 MB/s	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/internal/body	1.025s
+ok  	github.com/gsoultan/gwaf/internal/body	0.660s
 PASS
-ok  	github.com/gsoultan/gwaf/internal/budget	0.617s
+ok  	github.com/gsoultan/gwaf/internal/budget	0.612s
 ?   	github.com/gsoultan/gwaf/internal/engine	[no test files]
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/internal/interpret
 cpu: Apple M5 Pro
-BenchmarkDetectClean-15       	   10000	        17.89 ns/op	3185.85 MB/s	       0 B/op	       0 allocs/op
-BenchmarkBuildClean-15        	   10000	         2.029 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBuildAmbiguous-15    	   10000	       210.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	   20000	        33.13 ns/op	1720.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	   20000	        33.88 ns/op	1682.45 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	   20000	        33.02 ns/op	1726.07 MB/s	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	   20000	         3.971 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	   20000	         3.927 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	   20000	         3.856 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	   20000	       296.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	   20000	       311.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	   20000	       289.3 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/internal/interpret	0.548s
+ok  	github.com/gsoultan/gwaf/internal/interpret	0.637s
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/internal/memz
 cpu: Apple M5 Pro
-BenchmarkAppendReset-15    	   10000	        68.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	   20000	       116.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	   20000	       105.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	   20000	        97.27 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/internal/memz	0.486s
+ok  	github.com/gsoultan/gwaf/internal/memz	0.583s
 PASS
-ok  	github.com/gsoultan/gwaf/internal/prefilter	0.503s
+ok  	github.com/gsoultan/gwaf/internal/prefilter	0.589s
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/middleware
 cpu: Apple M5 Pro
-BenchmarkMiddlewareBenign-15     	   10000	      4014 ns/op	     209 B/op	       4 allocs/op
-BenchmarkMiddlewareBlocked-15    	   10000	      1577 ns/op	    1058 B/op	      12 allocs/op
+BenchmarkMiddlewareBenign-15     	   20000	      4363 ns/op	     208 B/op	       4 allocs/op
+BenchmarkMiddlewareBenign-15     	   20000	      3243 ns/op	     208 B/op	       4 allocs/op
+BenchmarkMiddlewareBenign-15     	   20000	      3256 ns/op	     208 B/op	       4 allocs/op
+BenchmarkMiddlewareBlocked-15    	   20000	      1230 ns/op	    1057 B/op	      12 allocs/op
+BenchmarkMiddlewareBlocked-15    	   20000	      1221 ns/op	    1057 B/op	      12 allocs/op
+BenchmarkMiddlewareBlocked-15    	   20000	      1192 ns/op	    1057 B/op	      12 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/middleware	0.332s
+ok  	github.com/gsoultan/gwaf/middleware	0.909s
 PASS
-ok  	github.com/gsoultan/gwaf/rules	0.487s
+ok  	github.com/gsoultan/gwaf/rules	0.621s
 PASS
-ok  	github.com/gsoultan/gwaf/rules/op	0.724s
+ok  	github.com/gsoultan/gwaf/rules/op	0.508s
 PASS
-ok  	github.com/gsoultan/gwaf/rules/transform	1.009s
+ok  	github.com/gsoultan/gwaf/rules/transform	0.597s
 ?   	github.com/gsoultan/gwaf/ruleset/core	[no test files]
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/schema
 cpu: Apple M5 Pro
-BenchmarkValidateInteger-15    	   10000	         5.842 ns/op	       0 B/op	       0 allocs/op
-BenchmarkValidateUUID-15       	   10000	        32.62 ns/op	       0 B/op	       0 allocs/op
-BenchmarkLookupLiteral-15      	   10000	        17.63 ns/op	       0 B/op	       0 allocs/op
-BenchmarkLookupTemplated-15    	   10000	        71.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	   20000	         9.819 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	   20000	        10.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	   20000	         9.956 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	   20000	        59.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	   20000	        57.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	   20000	        56.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	   20000	        34.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	   20000	        31.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	   20000	        26.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	   20000	       121.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	   20000	       108.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	   20000	       103.1 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/schema	0.507s
+ok  	github.com/gsoultan/gwaf/schema	0.602s
 ?   	github.com/gsoultan/gwaf/types	[no test files]

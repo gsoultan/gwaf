@@ -306,3 +306,33 @@ and 8 KiB of JPEG is 8 KiB of chances. Same fix covers it.
 
 Corpus now 1,435 requests including preflight and gRPC framing, so this is
 measured every run rather than remembered.
+
+## WebSocket/SSE tokens and base64 uploads (adopter question, three findings)
+Asked how gwaf handles WebSocket/SSE with long tokens in **query parameters**
+(browsers cannot set headers on those APIs, so it is the only option) and
+base64 file content in JSON/protobuf fields. Probed rather than reasoned.
+
+**1. A real bypass.** Values over `MaxValueLen` were **silently truncated**. Pad
+64 KiB, append payload, gwaf reported `no_match` — "analysed and clean" — while
+the origin read the whole value. docs/PERFORMANCE.md §4 forbids exactly this
+("half-inspection is indistinguishable from a bypass") and the code was doing
+it. Now: oversize is a **decision** under FailMode, never truncation. Default
+raised 64 KiB → 2 MiB so real base64 uploads fit, since base64 expands 4/3 and
+the ceiling has to exceed `MaxBodySize`, not sit under it.
+
+**2. Base64 cost 913× more than it should.** A 700 KiB base64 field burned
+**20M fuel** (62% of the default budget) and 20ms, because detectors were
+tokenizing encoded binary as prose. Base64 is encoded binary that happens to be
+printable. Skipping it is a coverage hole — the origin decodes it, and a
+base64-encoded web shell is a real technique — so it is **decoded** and the
+decoded content inspected. 20,026,548 → 21,926 fuel. Same principle as
+everything else: inspect what the origin will act on.
+
+**3. A missing rule.** A base64-encoded PHP web shell was the 1 of 6 payloads
+missed — gwaf had no rule for PHP code in a request. Added 4004 at **High**, not
+Certain: a code-sharing site or CMS template editor legitimately carries PHP
+source, and those should scope an exception rather than lower the tier globally.
+
+WebSocket upgrade, SSE, and long tokens (up to 87 KiB, both base64 alphabets)
+all pass. 0/1500 false positives on base64 JSON bodies, 0/1500 on base64 query
+tokens.

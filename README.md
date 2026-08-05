@@ -36,11 +36,16 @@ Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
 | Benign `POST`, 1 KiB JSON | **18.5 µs** | **0** |
 | Attack (blocked at header phase) | **1.47 µs** | 3 |
 
-JSON, form, and **multipart** bodies are parsed into fields, so detectors run
-over leaf values rather than whole documents. That also closes two decoding
-gaps: a `\u003cscript\u003e` escape is inert on the wire and `<script>` to the
-origin's parser, and **every multipart part is inspected** — checking only the
-final part is precisely CVE-2026-21876.
+**Detectors only ever see text.** JSON, form, and multipart bodies are parsed
+into fields; binary content has its printable runs extracted; base64 is decoded
+first, because the origin decodes it too.
+
+That is a performance decision and a correctness one. Reading encoded binary as
+prose cost 20 M fuel for one 700 KiB upload and found nothing. And inspecting
+raw bytes misses what the application actually receives: a
+`\u003cscript\u003e` escape is inert on the wire and `<script>` after JSON
+parsing, and **every multipart part is inspected** — checking only the final one
+is precisely CVE-2026-21876.
 
 **Detection, on a corpus of real bypass techniques:**
 
