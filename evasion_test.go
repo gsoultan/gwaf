@@ -27,6 +27,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -341,7 +342,28 @@ var evasions = []evasion{
 	{name: "grpc/web-text gzip", technique: "grpc-framing",
 		header: [2]string{"Grpc-Encoding", "gzip"},
 		body:   grpcAttack(true, true)},
+
+	// ---- GraphQL abuse -----------------------------------------------------
+	//
+	// No payload: the document is valid, the field names are real, and the cost
+	// is in its shape. Introspection is deliberately absent -- it is how every
+	// GraphQL development tool works, so it ships as an opt-in rule rather than
+	// in the core ruleset, and a corpus entry here would assert the opposite.
+	{name: "graphql/depth bomb", technique: "graphql-shape", body: gqlBody(depthBomb(200))},
+	{name: "graphql/depth bomb deep", technique: "graphql-shape", body: gqlBody(depthBomb(40))},
+	{name: "graphql/alias amplification", technique: "graphql-shape", body: gqlBody(aliasBomb(2000))},
+	{name: "graphql/alias amplification small", technique: "graphql-shape", body: gqlBody(aliasBomb(200))},
+	{name: "graphql/fragment cycle", technique: "graphql-shape",
+		body: gqlBody(`{...A} fragment A on Q{...A}`)},
+	{name: "graphql/fragment cycle indirect", technique: "graphql-shape",
+		body: gqlBody(`{...A} fragment A on Q{...B} fragment B on Q{...A}`)},
+	{name: "graphql/depth over GET", technique: "urlencode",
+		target: "/graphql?query=" + urlEncodeQ(depthBomb(200))},
 }
+
+// urlEncodeQ percent-encodes a GraphQL document for the GET form the
+// GraphQL-over-HTTP specification defines.
+func urlEncodeQ(s string) string { return url.QueryEscape(s) }
 
 // grpcField encodes a protobuf length-delimited string in field 3, which is
 // where an attacker-controlled value lives.
@@ -658,6 +680,7 @@ var declaredClasses = map[string]int{
 	"scanner":   1,
 	"ldapi":     8,
 	"grpc":      4,
+	"graphql":   6,
 }
 
 // classOf returns the attack class a case belongs to, taken from its name.

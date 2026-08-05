@@ -56,6 +56,11 @@ semver, and the four extension interfaces are frozen hard.
   the embedder — and that boundary only works if the results of the embedder's
   work have a way back in. Until now they did not.
 
+- **`detect/graphql`** — depth, complexity, alias amplification, and fragment
+  cycles, all computed from one document in isolation. Abuse with no payload:
+  the document is valid, the field names are real, and the cost is in its shape.
+  `graphql.IntrospectionRule` is exported rather than shipped in core, because
+  introspection is how every GraphQL development tool discovers a schema.
 - **`schema/grpc`** — compiles a protobuf FileDescriptorSet into a gwaf schema
   (separate module). Every RPC becomes a route, and declared int32/bool/enum
   fields are provably inert, so the engine skips them. `bytes` is deliberately

@@ -16,6 +16,7 @@
 package core
 
 import (
+	"github.com/gsoultan/gwaf/detect/graphql"
 	"github.com/gsoultan/gwaf/detect/ldapi"
 	"github.com/gsoultan/gwaf/detect/nosqli"
 	"github.com/gsoultan/gwaf/detect/shelli"
@@ -39,6 +40,7 @@ import (
 //	7,000–7,999  NoSQL injection
 //	8,000–8,999  server-side template injection
 //	9,000–9,999  LDAP injection
+//	10,000–10,999 GraphQL abuse
 //
 // An authored ID must end below 100 within its band, because the generated
 // body-phase counterpart is the ID plus 900 (see bodyPhaseOffset) and has to
@@ -114,6 +116,21 @@ const (
 
 	// 9,000-9,999: LDAP injection.
 	IDLDAPiFilter types.RuleID = 9001
+
+	// 10,000-10,999: GraphQL abuse. Not injection -- the document is valid and
+	// the damage is done by its shape.
+	IDGraphQLStructure types.RuleID = 10001
+
+	// 10002 is graphql.IntrospectionRule and is deliberately NOT here.
+	//
+	// Introspection is how every GraphQL development tool works. Disabling it in
+	// production is a defensible posture and blocking it by default would break
+	// GraphiQL, Apollo Studio, and code generation on the day somebody adopted
+	// gwaf -- which is the "gets switched off within a week" failure this
+	// ruleset exists to avoid. A rule that needs tuning belongs in an optional
+	// bundle (CLAUDE.md §1), so an embedder opts in:
+	//
+	//	gwaf.New(gwaf.WithRuleset(rules.Set{graphql.IntrospectionRule(10002)}))
 )
 
 // argTargets are the request values an injection rule inspects. Header values
@@ -145,6 +162,19 @@ var shellTargets = []types.Target{
 	{Kind: types.TargetArgs},
 	{Kind: types.TargetArgNames},
 	{Kind: types.TargetRequestHeaders},
+}
+
+// graphqlTargets are the arguments that carry a GraphQL document.
+//
+// Scoped by name rather than left to a literal, because the only byte every
+// abusive document must contain is "{" -- which is in every JSON body ever
+// sent. The target check runs before the operator, so a rule scoped this way
+// costs nothing on traffic that is not GraphQL.
+//
+// "query" is the field name in the GraphQL-over-HTTP specification, for both
+// the POST body and the GET query string, so one name covers both.
+var graphqlTargets = []types.Target{
+	{Kind: types.TargetArgs, Name: "query"},
 }
 
 // nameTargets are parameter *names* alone.
@@ -358,6 +388,37 @@ func requestRules() rules.Set {
 			Tags:       []string{"nosqli", "owasp-a03", "semantic"},
 		},
 
+		// ---- GraphQL abuse ---------------------------------------------------
+		//
+		// A different shape of attack from everything else here: the document is
+		// valid, the field names are real, and the cost is in its structure. All
+		// of it is computed from one request in isolation, which is why it sits
+		// inside the scope line rather than outside it with rate limiting.
+		{
+			ID:      IDGraphQLStructure,
+			Phase:   types.PhaseRequestBody,
+			Targets: graphqlTargets,
+			// Percent-decoding only. The GraphQL-over-HTTP specification defines
+			// a GET form where the whole document rides in the query string, so
+			// without this an encoded "%7B__schema%7D" is read as one long
+			// identifier and every structural count comes back zero -- measured.
+			//
+			// Nothing else: folding case or stripping whitespace would destroy
+			// the grammar the detector counts, which is the opposite problem.
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op: graphql.Operator(graphql.Limits{},
+				graphql.SignalExcessiveDepth|graphql.SignalExcessiveComplexity|
+					graphql.SignalAliasAmplification|graphql.SignalFragmentCycle),
+			Actions:  []rules.Action{rules.Block},
+			Severity: types.SeverityCritical,
+			// High rather than Certain: the limits are policy. A content model
+			// that is genuinely fifteen levels deep exists, and the operator who
+			// has one should raise the limit knowingly rather than discover it
+			// as an outage.
+			Confidence: types.High,
+			Msg:        "GraphQL document exceeds its structural limits",
+			Tags:       []string{"graphql", "dos", "owasp-a04"},
+		},
 		// ---- LDAP injection --------------------------------------------------
 		{
 			ID:      IDLDAPiFilter,

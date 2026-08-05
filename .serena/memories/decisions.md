@@ -973,3 +973,47 @@ can disagree with is not evidence.
 and one architecture, a synthetic corpus, **no comparison against another WAF**,
 sampling overhead included, no multi-hour run. A comparison where only one side
 was tuned is worse than none, so none is published.
+
+## SHIPPED: detect/graphql — abuse with no payload
+Verified before building: a 200-deep query, a 2,000-alias amplification, full
+introspection, and a circular fragment **all passed gwaf untouched**. There is
+nothing in any of them a string matcher could object to — the document is valid,
+the field names are real, and the cost is in its *shape*.
+
+In scope despite looking like rate limiting: every property is computed from one
+document in isolation, no memory and no identity, which is exactly the scope
+line. "How many requests has this client sent" is the embedder's; "how much work
+does this one request demand" is not.
+
+The scanner respects strings and comments rather than counting braces — one
+argument value `"{{{{{{"` would otherwise register as six levels — and skips
+argument lists, so `first: 10` is not a selection.
+
+## The decision that mattered: introspection is opt-in
+My first version put an introspection rule in the **core** ruleset. An existing
+test caught it immediately: the benign corpus contains introspection queries,
+because that is how GraphiQL, Apollo Studio, and every code generator discover a
+schema.
+
+Blocking it by default would break them on the day somebody adopted gwaf — the
+"gets switched off within a week" failure the core ruleset exists to avoid.
+CLAUDE.md §1: *rules that need tuning belong in an optional bundle, not here.*
+
+So `graphql.IntrospectionRule(id)` is exported and an embedder opts in with one
+line. The structural limits stay in core, because a document past its depth
+limit is abusive whoever sent it. Introspection is deliberately **not** in the
+evasion corpus either — an entry there would assert the opposite.
+
+## A silent edit that the probe caught
+Adding `Transforms: []rules.Transform{transform.URLDecode}` to the introspection
+rule **did not apply**: gofmt had realigned the struct fields, so my search
+string no longer matched and the replace was a no-op. Nothing failed — the rule
+simply had an empty chain.
+
+It only showed as a *GET* failure, because a POST body arrives already decoded
+and the GET form carries the whole document percent-encoded in the query string.
+Without a chain the detector reads `%7B__schema%7D` as one long identifier and
+every structural count comes back zero.
+
+**Lesson: a scripted edit that does not match is a silent no-op.** Verify by
+reading the file back, not by the absence of an error.

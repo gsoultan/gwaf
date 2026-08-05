@@ -246,8 +246,12 @@ and the framework adapters belong.
        **`schema/grpc` shipped**: a FileDescriptorSet compiles to
        `schema.Operation`, one per RPC, with fields named by number path so they
        match what the wire parser emits. Declared int32/bool/enum fields are
-       provably inert and skipped. Still open: GraphQL depth, complexity, and
-       introspection control.
+       provably inert and skipped.
+
+       **GraphQL shipped** (`detect/graphql`): depth, complexity, alias
+       amplification, and fragment cycles in the core ruleset; introspection as
+       an opt-in rule, because it is how every GraphQL development tool works
+       and blocking it by default is the "switched off in week one" failure.
 5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation
 6. [~] Framework adapters shipped as separate modules: `adapters/gin`,
        `adapters/echo`, `adapters/fiber`. `Explain()` shipped.
