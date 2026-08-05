@@ -3,6 +3,8 @@
 package gwaf
 
 import (
+	"fmt"
+
 	"github.com/gsoultan/gwaf/internal/body"
 	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/internal/engine"
@@ -67,6 +69,14 @@ type Transaction struct {
 	// matches is the reusable buffer behind Matches.
 	matches []Match
 
+	// decodeBuf backs base64 decoding, reused across values.
+	decodeBuf []byte
+
+	// oversizeKey and oversizeLen record the first value that exceeded the
+	// per-value ceiling and was therefore not inspected at all.
+	oversizeKey string
+	oversizeLen int
+
 	// violation records the first schema violation seen, so the request is
 	// rejected with the reason rather than merely failing to match a rule.
 	violation  schema.Violation
@@ -99,6 +109,8 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.bodyErr = nil
 	tx.bodyParseFailed = ""
 	tx.contentType = ""
+	tx.oversizeKey = ""
+	tx.oversizeLen = 0
 }
 
 // Close returns the transaction to its pool. It is safe to call more than once.
@@ -373,7 +385,7 @@ func (tx *Transaction) parseStructuredBody(b []byte, isJSON bool) bool {
 		}
 
 		inert := tx.checkBodySchema(name, value)
-		tx.recordFieldBytes(types.TargetArgs, name, value, inert)
+		tx.recordValueBytes(types.TargetArgs, name, value, inert)
 		return true
 	}
 
@@ -414,7 +426,7 @@ func (tx *Transaction) recordBody(b []byte) {
 		MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
 	})
 	tx.bodyParser.ExtractText([]byte("body"), b, func(name, value []byte, _ body.Kind) bool {
-		tx.recordFieldBytes(types.TargetRequestBody, name, value, false)
+		tx.recordValueBytes(types.TargetRequestBody, name, value, false)
 		return true
 	})
 }
@@ -507,6 +519,9 @@ func (tx *Transaction) ProcessRequestHeaders() Decision {
 	if tx.headerCount > tx.waf.cfg.limits.MaxHeaders {
 		return tx.limitExceeded("header count")
 	}
+	if tx.oversizeKey != "" {
+		return tx.oversizeExceeded()
+	}
 	if d, rejected := tx.schemaViolation(); rejected {
 		return d
 	}
@@ -559,6 +574,9 @@ func (tx *Transaction) ProcessRequestBody() Decision {
 	if tx.argCount > tx.waf.cfg.limits.MaxArgs {
 		return tx.limitExceeded("argument count")
 	}
+	if tx.oversizeKey != "" {
+		return tx.oversizeExceeded()
+	}
 	// A structured body that failed to parse was inspected whole as a fallback,
 	// which is safe but imprecise: schema validation cannot apply to fields that
 	// were never extracted. The reason travels with the decision so an operator
@@ -593,7 +611,8 @@ func (tx *Transaction) addValueBytes(target types.Target, key string, value []by
 // representation it already has.
 func (tx *Transaction) recordString(target types.Target, key, value string, inert bool) {
 	if len(value) > tx.waf.cfg.limits.MaxValueLen {
-		value = value[:tx.waf.cfg.limits.MaxValueLen]
+		tx.noteOversize(key, len(value))
+		return
 	}
 	keySpan, ok := tx.arena.AppendString(key)
 	if !ok {
@@ -608,7 +627,8 @@ func (tx *Transaction) recordString(target types.Target, key, value string, iner
 
 func (tx *Transaction) recordBytes(target types.Target, key string, value []byte, inert bool) {
 	if len(value) > tx.waf.cfg.limits.MaxValueLen {
-		value = value[:tx.waf.cfg.limits.MaxValueLen]
+		tx.noteOversize(key, len(value))
+		return
 	}
 	keySpan, ok := tx.arena.AppendString(key)
 	if !ok {
@@ -629,7 +649,8 @@ func (tx *Transaction) recordBytes(target types.Target, key string, value []byte
 // converting every field name to a string.
 func (tx *Transaction) recordFieldBytes(kind types.TargetKind, key, value []byte, inert bool) {
 	if len(value) > tx.waf.cfg.limits.MaxValueLen {
-		value = value[:tx.waf.cfg.limits.MaxValueLen]
+		tx.noteOversize(string(key), len(value))
+		return
 	}
 	keySpan, ok := tx.arena.Append(key)
 	if !ok {
@@ -640,6 +661,58 @@ func (tx *Transaction) recordFieldBytes(kind types.TargetKind, key, value []byte
 		return
 	}
 	tx.appendValue(types.Target{Kind: kind}, keySpan, dataSpan, inert)
+}
+
+// recordValueBytes records a value, decoding it first when it is base64.
+//
+// Base64 is encoded binary that happens to be printable, so a text detector run
+// over it costs real time and finds nothing: a 700 KiB base64 field burned 20
+// million fuel and 20ms, 62% of the default budget for one upload. Skipping it
+// would be a coverage hole, because the origin decodes it and a base64-encoded
+// web shell is a real technique.
+//
+// So it is decoded and the decoded content is inspected — as text if it is
+// text, as printable runs if it is binary. The application acts on the decoded
+// form, so that is the form worth inspecting.
+func (tx *Transaction) recordValueBytes(kind types.TargetKind, key, value []byte, inert bool) {
+	if !body.IsBase64(value) {
+		tx.recordFieldBytes(kind, key, value, inert)
+		return
+	}
+
+	decoded, ok := body.DecodeBase64(tx.decodeBuf[:0], value)
+	if !ok {
+		tx.recordFieldBytes(kind, key, value, inert)
+		return
+	}
+	tx.decodeBuf = decoded
+
+	if body.IsBinary(decoded) {
+		tx.bodyParser.ExtractText(key, decoded, func(n, v []byte, _ body.Kind) bool {
+			tx.recordFieldBytes(kind, n, v, false)
+			return true
+		})
+		return
+	}
+	tx.recordFieldBytes(kind, key, decoded, false)
+}
+
+// noteOversize records that a value exceeded the per-value ceiling.
+//
+// It is deliberately *not* a truncation. Inspecting the first 64 KiB of a value
+// and reporting the request as clean is a bypass with a padding step: an
+// attacker prepends filler, puts the payload past the cut, and the firewall
+// says no_match while the origin reads the whole thing. That is precisely what
+// docs/PERFORMANCE.md §4 forbids, and it was doing it.
+//
+// The value is dropped and the breach is raised at the next phase boundary, so
+// the deployment's fail mode decides rather than the outcome being silently
+// "clean".
+func (tx *Transaction) noteOversize(key string, size int) {
+	if tx.oversizeKey == "" {
+		tx.oversizeKey = key
+		tx.oversizeLen = size
+	}
 }
 
 // appendValue registers a recorded key/value pair.
@@ -798,6 +871,29 @@ func (tx *Transaction) undecidable(reason string) Decision {
 		score:          tx.score,
 		status:         tx.waf.cfg.blockCode,
 		detail:         reason,
+		rulesEvaluated: tx.evaluated,
+	}
+	if tx.waf.cfg.failMode == FailClosed && tx.waf.cfg.mode == Blocking {
+		d.verdict = VerdictBlock
+	}
+	return tx.finish(d)
+}
+
+// oversizeExceeded rejects a request carrying a value too large to inspect.
+//
+// A deployment that legitimately receives values this large -- a base64 file in
+// a JSON field, a long bearer token in a query parameter, since browsers cannot
+// set headers on WebSocket or EventSource -- should raise MaxValueLen rather
+// than accept an uninspected value. Fuel remains the bound on total work, so a
+// larger ceiling costs latency on large requests, not unbounded latency.
+func (tx *Transaction) oversizeExceeded() Decision {
+	d := Decision{
+		reason: ReasonLimit,
+		score:  tx.score,
+		status: tx.waf.cfg.blockCode,
+		detail: fmt.Sprintf("value %q is %d bytes, over the %d-byte inspection limit; "+
+			"it was not inspected", tx.oversizeKey, tx.oversizeLen,
+			tx.waf.cfg.limits.MaxValueLen),
 		rulesEvaluated: tx.evaluated,
 	}
 	if tx.waf.cfg.failMode == FailClosed && tx.waf.cfg.mode == Blocking {

@@ -63,6 +63,7 @@ const (
 	IDRCEShellMetachars types.RuleID = 4001
 	IDRCECommonBinaries types.RuleID = 4002
 	IDLFIPHPWrapper     types.RuleID = 4003
+	IDPHPCodeUpload     types.RuleID = 4004
 	IDSQLiSemantic      types.RuleID = 2010
 	IDXSSSemantic       types.RuleID = 3010
 	IDScannerUserAgent  types.RuleID = 5001
@@ -297,6 +298,28 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "PHP stream wrapper in input",
 			Tags:       []string{"lfi", "rce", "owasp-a03"},
+		},
+		{
+			ID:         IDPHPCodeUpload,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// A PHP open tag in a request value is code being delivered, not
+			// data. This is the web-shell upload: the file is base64-encoded
+			// inside a JSON field, decoded by the origin, written to disk, and
+			// then requested.
+			//
+			// The tag alone is High rather than Certain because a narrow class
+			// of applications legitimately carries PHP source in a request: a
+			// code-sharing site, a CMS template editor, a paste bin. Those
+			// deployments should scope an exception to the field that carries
+			// it rather than lower the tier globally.
+			Op:         op.ContainsAny("<?php", "<?=$", "<%php"),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "PHP code in request value",
+			Tags:       []string{"rce", "upload", "owasp-a03"},
 		},
 
 		// ---- Hostile clients -------------------------------------------------

