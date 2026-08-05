@@ -42,7 +42,6 @@
 package ldapi
 
 import (
-	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -274,4 +273,4 @@ func (o *operator) Literals() ([]string, bool) {
 }
 
 // Cost prices one analysis: a single pass with one-byte lookahead.
-func (o *operator) Cost() budget.Fuel { return budget.CostLiteralMatch * 2 }
+func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 2 }

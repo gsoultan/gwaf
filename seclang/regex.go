@@ -7,7 +7,6 @@ import (
 	"regexp/syntax"
 	"strings"
 
-	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -86,7 +85,7 @@ func (o *regexOperator) Literals() ([]string, bool) {
 
 // Cost prices one match. RE2 is linear in the input, and the constant is
 // well above a literal comparison.
-func (o *regexOperator) Cost() budget.Fuel { return budget.CostLiteralMatch * 20 }
+func (o *regexOperator) Cost() types.Fuel { return types.CostLiteralMatch * 20 }
 
 // extractLiterals finds strings that must appear for the pattern to match.
 //

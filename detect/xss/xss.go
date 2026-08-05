@@ -40,7 +40,6 @@
 package xss
 
 import (
-	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -657,4 +656,4 @@ func (o *operator) Literals() ([]string, bool) {
 }
 
 // Cost prices one analysis: a single pass with local lookahead.
-func (o *operator) Cost() budget.Fuel { return budget.CostLiteralMatch * 4 }
+func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 4 }

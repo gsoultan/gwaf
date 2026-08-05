@@ -780,3 +780,52 @@ unavailable and the only option was re-reading the diff.
 
 18.7M fuzz executions against `UnframeGRPC` with forged lengths, no panic.
 Detection 132/132, false positives 0/124, all SLOs still met.
+
+## FIXED: a public extension point that was impossible to implement
+`Operator.Cost()` returned `budget.Fuel` from `internal/budget`. Go's
+internal-package rule is keyed on **import path**, so every first-party detector
+satisfied the interface and a vendor at their own module path could not:
+
+    myOp does not implement rules.Operator (missing method Cost)
+    use of internal package .../internal/budget not allowed
+
+`Operator` is one of the five interfaces CLAUDE.md §4 calls "the most expensive
+API surface in the project -- third parties implement them, so post-v1.0 they
+are frozen hard." It had never been implementable, and **no test in the tree
+could have seen that**, because everything in the tree is on the permitted side
+of the rule. My own seclang regex operator compiled for exactly that reason.
+
+`Fuel`, the cost constants, and the default ceiling moved to `types/` — which is
+where public value types belong and is frozen under semver alongside the root
+package. `internal/budget` keeps `Meter` (a third party needs to *declare* a
+cost, never run the accounting) and aliases `Fuel = types.Fuel`, so the two
+names denote one type and in-tree code kept compiling.
+
+Cost constants are exported too, deliberately: an operator returning a number
+picked out of the air would make the DoS-bound arithmetic wrong in a way nothing
+would catch.
+
+### The enforcement matters more than the fix
+`test/extension` is a module declaring itself **`example.com/gwafvendor`**. It
+implements Operator, Transform, and Action from a foreign path with
+compile-time assertions. If any of the three grows a method returning an
+unexported type, it stops compiling.
+
+That is the general lesson: **a broken extension point that every in-tree
+implementation satisfies is invisible to any test living in the tree.** The
+module path *is* the test.
+
+Its tests also check two things a vendor would otherwise discover in production:
+a vendor operator declaring literals is prefiltered like any other (zero rules
+evaluated on benign traffic), and its declared cost is charged against the fuel
+budget.
+
+### Scope note
+Only **three** of the five documented extension points exist as interfaces today.
+`Detector` and `Resolver` are named in CLAUDE.md §3 and docs/RULES.md §4 but are
+not defined in code. Worth either defining them or correcting the count before
+v1.0 — claiming five and shipping three is the same class of gap as claiming a
+tier the corpus cannot measure.
+
+Also created CHANGELOG.md, which CLAUDE.md §4 required for breaking changes and
+which did not exist.

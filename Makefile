@@ -9,7 +9,8 @@ FUZZTIME ?= 30s
 # the split silently stops being checked -- which is worse than not splitting,
 # because the invariant then only appears to hold.
 MODULES ?= . ./middleware ./examples ./schema/openapi ./seclang \
-           ./adapters/gin ./adapters/echo ./adapters/fiber
+           ./adapters/gin ./adapters/echo ./adapters/fiber \
+           ./test/extension
 
 .DEFAULT_GOAL := check
 

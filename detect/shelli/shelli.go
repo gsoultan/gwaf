@@ -68,7 +68,6 @@
 package shelli
 
 import (
-	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -699,4 +698,4 @@ func (o *operator) Literals() ([]string, bool) {
 }
 
 // Cost prices one analysis: three passes with local lookahead.
-func (o *operator) Cost() budget.Fuel { return budget.CostLiteralMatch * 6 }
+func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 6 }

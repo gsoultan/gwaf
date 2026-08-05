@@ -3,7 +3,6 @@
 package rules
 
 import (
-	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -72,5 +71,5 @@ type Operator interface {
 
 	// Cost returns the fuel charged per evaluation, excluding any per-byte
 	// component the engine adds. It must not depend on the input.
-	Cost() budget.Fuel
+	Cost() types.Fuel
 }

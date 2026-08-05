@@ -240,7 +240,7 @@ func (tx *Transaction) Score() int { return tx.score }
 func (tx *Transaction) RulesEvaluated() int { return tx.evaluated }
 
 // FuelSpent returns the work consumed so far.
-func (tx *Transaction) FuelSpent() budget.Fuel { return tx.meter.Spent() }
+func (tx *Transaction) FuelSpent() types.Fuel { return tx.meter.Spent() }
 
 // Decision returns the decision reached so far. Before any phase has produced a
 // terminal outcome it reports an allowing decision.

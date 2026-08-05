@@ -51,7 +51,6 @@ package nosqli
 import (
 	"slices"
 
-	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -364,4 +363,4 @@ func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) 
 func (o *operator) Literals() ([]string, bool) { return o.literals, true }
 
 // Cost prices one analysis: a single pass over a short name.
-func (o *operator) Cost() budget.Fuel { return budget.CostLiteralMatch * 2 }
+func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 2 }

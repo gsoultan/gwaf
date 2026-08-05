@@ -18,64 +18,31 @@
 // See docs/CONCEPT.md §2.
 package budget
 
-// Fuel is an abstract unit of work. Costs are calibrated so that one unit is
-// roughly one byte scanned by the prefilter; see the Cost constants.
-type Fuel int64
+import "github.com/gsoultan/gwaf/types"
 
-// Operation costs. These are calibrated against the benchmark suite rather than
-// guessed: bench/ asserts that measured wall-clock stays correlated with fuel
-// spent, so a drift between the two fails CI rather than silently making the
-// budget meaningless.
+// Fuel, the cost constants, and the default ceiling live in types, because
+// Operator.Cost is part of a public extension point and an interface method
+// returning an unexported type cannot be implemented from outside the module.
+// See types/fuel.go.
+//
+// Aliased rather than re-declared so that a third party's types.Fuel and the
+// engine's budget.Fuel are the same type, not two that need converting.
+type Fuel = types.Fuel
+
+// Operation costs, re-exported so engine code reads in one vocabulary.
 const (
-	// CostPerByteScanned is charged for each input byte the prefilter reads.
-	CostPerByteScanned Fuel = 1
-
-	// CostPerByteTransformed is charged per byte of materialised transform
-	// output. Transforms allocate and copy, so they cost more than a scan.
-	CostPerByteTransformed Fuel = 2
-
-	// CostRuleDispatch is the fixed overhead of evaluating one candidate rule,
-	// before its operator runs.
-	CostRuleDispatch Fuel = 8
-
-	// CostTargetResolve is the fixed overhead of resolving one target
-	// collection for a transaction.
-	CostTargetResolve Fuel = 16
-
-	// CostLiteralMatch is a literal comparison against an already-scanned value.
-	CostLiteralMatch Fuel = 4
-
-	// CostRegexPerByte is charged per input byte for a regex evaluation. Regex
-	// is the fallback tier and is priced to reflect that.
-	CostRegexPerByte Fuel = 10
-
-	// CostCustomOperator is the floor charged for a third-party operator, which
-	// the engine cannot cost statically. Custom operators may charge more via
-	// Meter.Spend.
-	CostCustomOperator Fuel = 64
+	CostPerByteScanned     = types.CostPerByteScanned
+	CostPerByteTransformed = types.CostPerByteTransformed
+	CostRuleDispatch       = types.CostRuleDispatch
+	CostTargetResolve      = types.CostTargetResolve
+	CostLiteralMatch       = types.CostLiteralMatch
+	CostRegexPerByte       = types.CostRegexPerByte
+	CostCustomOperator     = types.CostCustomOperator
 )
 
-// DefaultLimit is the per-transaction fuel ceiling applied when an embedder
-// does not choose one.
-//
-// It is derived from the default input limits rather than picked, because the
-// two have to be coherent: a request that the input limits admit must not then
-// be rejected for running out of fuel, or the deployment would reject traffic
-// it was configured to accept.
-//
-// The derivation, with the defaults in gwaf.DefaultLimits:
-//
-//	inspected bytes   ≈ MaxBodySize (1 MiB) + arguments + headers ≈ 1.5 MiB
-//	transform chains  ≈ 6 distinct chains across a realistic ruleset
-//	cost per byte     = 1 (scan) + 2 (transform) = 3
-//
-//	1.5 MiB × 6 × 3 ≈ 28 M
-//
-// 32,000,000 leaves headroom above that while still bounding the work an
-// attacker can induce to a fixed multiple of a legitimate maximum-size request.
-// Deployments with tighter input limits should lower this in proportion; the
-// bound is only as useful as it is tight.
-const DefaultLimit Fuel = 32_000_000
+// DefaultLimit is the per-transaction ceiling applied when an embedder does not
+// choose one. See types.DefaultFuelLimit for the derivation.
+const DefaultLimit = types.DefaultFuelLimit
 
 // Meter tracks fuel consumption for one transaction.
 //

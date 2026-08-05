@@ -52,7 +52,6 @@
 package ssti
 
 import (
-	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -542,4 +541,4 @@ func (o *operator) Literals() ([]string, bool) {
 }
 
 // Cost prices one analysis: a scan with per-expression substring checks.
-func (o *operator) Cost() budget.Fuel { return budget.CostLiteralMatch * 6 }
+func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 6 }

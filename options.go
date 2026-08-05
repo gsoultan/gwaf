@@ -114,7 +114,7 @@ type config struct {
 	mode      Mode
 	failMode  FailMode
 	limits    Limits
-	fuelLimit budget.Fuel
+	fuelLimit types.Fuel
 	threshold int
 	minConf   types.Confidence
 	logger    *slog.Logger
@@ -190,7 +190,7 @@ func WithLimits(l Limits) Option {
 // WithFuelLimit sets the per-transaction work ceiling. A non-positive value
 // disables metering, which is intended for offline tooling — calibration,
 // corpus replay — and must not be used for serving traffic.
-func WithFuelLimit(f budget.Fuel) Option {
+func WithFuelLimit(f types.Fuel) Option {
 	return func(c *config) { c.fuelLimit = f }
 }
 
