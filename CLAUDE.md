@@ -1,0 +1,410 @@
+# gwaf — Project Guidelines
+
+`gwaf` is an embeddable, Go-native Web Application Firewall **library**. Not a product, not a
+proxy appliance. The proxy binary is a thin consumer of the library, never the other way around.
+
+**Toolchain: Go 1.26.5. Zero CGO. Ever.**
+
+---
+
+## 1. Positioning (read this before proposing a feature)
+
+The market gap gwaf fills:
+
+| Axis | Coraza | SafeLine / Fastly | Cloud WAFs | **gwaf** |
+|---|---|---|---|---|
+| Embeddable Go library | yes | no | no | **yes** |
+| Semantic (intent) detection | no | yes | partial | **yes** |
+| Typed, compile-checked config | no | no | no | **yes** |
+| OpenAPI/GraphQL/gRPC positive security | no | partial | paid tier | **yes** |
+| Per-request latency budget | no | n/a | n/a | **yes** |
+| CGO-free static binary | needs shims | n/a | n/a | **yes** |
+| CRS/SecLang ecosystem | native | no | no | **adapter module** |
+
+Two facts drive every design decision:
+
+1. **Regex-signature WAFs are structurally losing.** CVE-2026-21876 (CVSS 9.3) broke CRS 3.3.x and
+   4.0.0–4.21.0 across ModSecurity v2, v3, *and* Coraza — a canonicalization mismatch in chained
+   multipart rules. That bug class is endemic to SecLang. We do not inherit it.
+2. **Intent-parsing is the winning technique and nobody ships it as a library.** SafeLine's semantic
+   engine and Fastly's SmartParse both prove it; both are closed products.
+
+**A feature proposal must state which axis it strengthens.** If it strengthens none, it does not ship.
+
+### The scope line: stateless per-request
+
+> **gwaf analyzes one request in isolation, with no memory.**
+> Anything requiring state, identity, time, or infrastructure belongs to the embedder.
+
+"Is *this* request an attack?" is gwaf. "Who is this client, what have they done before, and what do
+we do about it?" is not. This single line decides every scope question:
+
+| In scope (per-request) | Out of scope (cross-request / infra) |
+|---|---|
+| Injection detection, schema validation | Rate limiting, IP reputation, bot scoring |
+| Body/encoding analysis, entropy | Behavioral anomaly, ML over traffic history |
+| Prompt-injection detection | Challenge/response (JS, PoW, Turnstile) |
+| Per-request decisions + `Explain()` | eBPF/XDP, TLS fingerprint capture, SIEM |
+
+Out-of-scope signals arrive as `Resolver` inputs (RULES.md §4) — gwaf *consumes* a reputation score,
+it never *maintains* one. This is why gwaf Phase 6 was cut down to AI/LLM detection only:
+[docs/GATEON-MIGRATION.md](docs/GATEON-MIGRATION.md) §3 walks a real adopter through the line.
+
+### Explicit non-goals
+
+- **Any UI, dashboard, or admin server.** gwaf is a library. See §2b.
+- Managed rule subscriptions or a global edge network.
+- Global paranoia levels as an engine concept. Confidence tiers + per-route policies are strictly
+  more expressive; PL survives as a CRS-compat preset (docs/RULES.md §8).
+- ML-only / signature-free detection. Every block must be explainable to a human with a rule ID and
+  a matched span. open-appsec's opacity is a documented liability; do not reproduce it.
+- Being a drop-in ModSecurity replacement. SecLang is a *bridge for migration*, not the core.
+
+### What gwaf ships: three tiers, one rule each
+
+gwaf is **an embeddable library**. It is imported, not deployed. The repo does contain binaries, and
+without a rule they are exactly how a library rots into a product — so:
+
+| Tier | What | Rule |
+|---|---|---|
+| **1. Library** (`gwaf`, `rules/`, `detect/`, `schema/`, `middleware/`) | The product. Imported into someone else's binary. | This is where **100%** of runtime logic lives. Anything in the request path is here or it doesn't exist. |
+| **2. Toolchain** (`cmd/gwaf`: `build`, `lint`, `test`, `explain`) | Build-time developer tools. | **Never in the request path.** Compile-time only, like `go vet`. May not contain detection logic — it calls the library. |
+| **3. Reference integration** (`proxy/`) | Standalone reverse proxy. | **Pure glue, capped at ~500 LOC, zero detection or policy logic.** If it needs a feature, the feature goes in tier 1. Separate module. |
+
+The compiler thesis makes this natural rather than arbitrary: a compiler is a **library plus a
+driver**. `go build` is a driver over `go/*` packages; `cmd/gwaf` is a driver over `gwaf`. A CLI
+toolchain isn't application drift — it's the standard shape of a compiler.
+
+**The tripwire:** if `proxy/` ever grows a config format, a plugin system, a metrics endpoint, or a
+line of detection logic, tier 1 is missing an API. Fix tier 1; don't grow tier 3. Reviewers should
+treat a PR that adds non-glue code to `proxy/` as a design bug report against the library.
+
+Two clarifications on things that read as application-shaped but aren't:
+
+- **"Ruleset shared across processes"** (CONCEPT.md §7) means N processes `mmap` the same file and
+  the OS page cache does the sharing. No daemon, no coordination, no IPC.
+- **Hot reload** is `waf.SwapRuleset(rs)` — an API the embedder calls. The library never watches
+  files, polls, or discovers config on its own. Who reloads and when is the embedder's decision.
+
+---
+
+## 2. Architecture
+
+> **The governing idea: every other WAF is an interpreter; gwaf is a compiler.**
+> Rules, schemas, and policies are inputs to an optimizer that emits a specialized execution plan.
+> Read **[docs/CONCEPT.md](docs/CONCEPT.md)** first — it is the thesis the rest of this file serves.
+> If a design decision doesn't move work from runtime to compile time, question it.
+
+### Detection tiers (evaluated in order, each can short-circuit)
+
+```
+L0  prefilter   Aho-Corasick over literals extracted from every rule.
+                Most benign requests exit here having touched zero regexes.
+L1  semantic    Tokenize + parse: SQL, HTML/JS, shell, path, template, NoSQL, LDAP.
+                Score grammatical intent, not string similarity.
+L2  regex       RE2 only. Linear time, ReDoS-impossible. Fallback tier, not the engine.
+L3  schema      Positive security: OpenAPI 3.1, GraphQL, gRPC/protobuf.
+L4  behavioral  Rate limits, JA4 fingerprints, bot scoring, reputation.
+```
+
+### Non-negotiable invariants
+
+1. **Canonicalization is multi-interpretation.** Never decode to a single "the" form and match once —
+   that is exactly how CVE-2026-21876 worked. Evaluate against *every* plausible backend decoding
+   (charset variants, double-encoding, parameter-pollution orderings, multipart part permutations).
+   Every canonicalization function needs an adversarial test asserting all interpretations were
+   considered.
+2. **Bounded everything.** Every buffer, recursion depth, parse tree, and loop has an explicit
+   ceiling from config. No unbounded reads from a request. Ever.
+3. **The WAF must never be the outage.** Work is metered in **deterministic fuel**, not wall-clock —
+   every plan node has a static cost, the transaction carries a counter, and exhaustion triggers the
+   configured `FailMode` (open or closed) plus a metric. Wall-clock is a coarse backstop only.
+   Fuel makes the DoS bound *provable* and budget violations *reproducible in a unit test*
+   (CONCEPT.md §2). This is a contract, not best-effort.
+4. **RE2 only.** No backtracking engine enters this codebase, directly or transitively.
+5. **Every decision is explainable.** A `Decision` carries rule ID, matched variable, byte span, and
+   the transformation chain that produced the match. No unexplainable blocks.
+6. **Custom rules cannot silently cost latency.** Every `Operator` declares its required literals;
+   rules that can't be prefiltered are reported at compile time and gated by `gwaf lint`. Third-party
+   predicates run behind a recovering, budgeted boundary and are quarantined on repeat violation.
+   See [docs/RULES.md](docs/RULES.md) §5–6 — this is the reconciliation between "users write rules"
+   and the SLOs below.
+
+### Performance SLOs (enforced by CI benchmark gates, not aspirational)
+
+| Metric | Target |
+|---|---|
+| Benign GET, no body | p50 < 2 µs, **0 allocations** |
+| Benign POST, 1 KB JSON, core ruleset | p50 < 15 µs, < 4 KB |
+| p99, any workload | < 100 µs |
+| Rules evaluated / benign request | **0** |
+| Resident ruleset, 10k rules | < 16 MB, shared, off-heap |
+| Per in-flight transaction | < 8 KB p50, < 64 KB p99 |
+| Heap growth under sustained load | 0 |
+| Ruleset scaling, 10 → 10k rules | **sub-linear** |
+| CGO dependencies | 0 |
+
+A PR that regresses any SLO by >5% fails CI. Fix it or justify it in the PR body.
+
+**How these numbers are reached is [docs/PERFORMANCE.md](docs/PERFORMANCE.md).** Read it before
+optimizing anything — the order-of-magnitude wins are architectural (single-pass prefilter,
+target-grouped plan, transform interning) and micro-optimizing before those exist is wasted work.
+
+---
+
+## 2b. Developer-experience contract
+
+gwaf is a library that other teams build *their* WAF on. The API is the product; if integration is
+hard, detection quality is irrelevant because nobody gets that far.
+
+**No UI. Ever.** No dashboard, no admin server, no embedded HTTP endpoints, no config file the
+library discovers on its own. gwaf emits structured events and metrics; consumers build UIs. The
+moment we ship a UI we start optimizing for it instead of for embedders.
+
+**The corollary is binding: every datum a UI would need must be reachable as a library API.**
+"No UI" is not a licence to withhold data. `waf.Explain(txID)` returns matched spans, transform
+chains, and `NarrowestException()` as structs — not just as CLI output. If a consumer building a
+control plane can't get something programmatically, that's a **tier-1 API gap to fix**, never a
+reason to grow a UI. See [docs/INTEGRATION.md](docs/INTEGRATION.md) Profile C.
+
+There are three integration profiles and the API owes all of them: **A** drop-in middleware,
+**B** platform embedding (transaction API, overlays, multi-tenancy), **C** vendors building a WAF
+product on gwaf (compiler API, extension interfaces, event stream). A change that serves A while
+closing a door for C is a regression.
+
+Binding rules:
+
+1. **Working WAF in one line.** `waf, err := gwaf.New()` must return a safe, useful WAF with the
+   conservative core ruleset loaded. No required config, no mandatory ruleset files on disk.
+2. **Integration in ≤3 lines per framework.** If protecting a handler takes more, the API is wrong.
+3. **No global state.** No package-level registries, no `init()` side effects, no
+   import-for-side-effect packages, no process-wide config. Two `WAF` instances in one binary with
+   different rulesets must work perfectly. This is non-negotiable for a library.
+4. **Errors name the rule and the fix.** `rule 1000340: op.Func has no literal hint and cannot be
+   prefiltered; add .WithLiterals(...) or accept ~1.9µs/req` — not `invalid rule`.
+5. **Nothing is stringly-typed.** Phases, severities, targets, confidences are typed constants.
+   A typo is a compile error, not a silent no-op at 3 a.m.
+6. **Every exported symbol has a godoc runnable example.** Concurrency safety is documented on every
+   exported type — `WAF` is concurrent-safe, `Transaction` is single-goroutine-owned, and that
+   distinction is the most common misuse in every WAF library.
+7. **The escape hatch is always present and always visible.** `op.Func`, custom `Operator`,
+   `Detector`. Users hit cases we didn't predict; the answer is never "fork it." The cost of each
+   escape hatch is documented at the point of use (docs/RULES.md §5).
+8. **Blocking by default is safe by construction.** The core ruleset ships `Certain`/`High`
+   confidence rules only, so `gwaf.New()` blocks without a tuning phase. Detection-only is one
+   option away and documented as the rollout path — but we do not ship a WAF that silently protects
+   nothing.
+
+The DX owner (profile #6) has veto on the public API. That veto is real.
+
+---
+
+## 3. Folder structure
+
+Multi-module by design: **the core module has no third-party dependencies.** Integrations,
+SecLang, and the proxy live in their own modules so a user embedding gwaf inherits nothing.
+
+```
+gwaf/
+├── go.mod                    # module github.com/gsoultan/gwaf — stdlib + golang.org/x only
+├── waf.go                    # public: New, WAF, Options
+├── transaction.go            # public: transaction lifecycle
+├── decision.go               # public: Decision, Action, Verdict
+├── options.go                # functional options
+├── errors.go                 # sentinel errors + typed error values
+├── doc.go                    # package doc — the first thing users read
+│
+├── types/                    # public value types. No logic, no deps, no imports of siblings.
+│   ├── phase.go
+│   ├── severity.go
+│   ├── variable.go
+│   └── matchdata.go
+│
+├── rules/                    # public: typed rule authoring API + IR. See docs/RULES.md.
+│   ├── rule.go               # rules.Rule struct — the canonical authoring form
+│   ├── ir.go                 # the IR every frontend compiles down to
+│   ├── compile.go            # validate, extract literals, cost, build plan
+│   ├── op/                   # Operator implementations + the Operator interface
+│   ├── transform/            # Transform implementations
+│   ├── action/               # Action implementations
+│   ├── except.go             # scoped exceptions / FP tuning
+│   └── testing.go            # rules.Test, rules.Fuzz harness
+│
+├── ruleset/                  # curated first-party rulesets, go:embed'd
+│   ├── core/
+│   ├── crs/                  # CRS bridge metadata (target: CRS 4.25 LTS)
+│   └── embed.go
+│
+├── detect/                   # public Detector interface + semantic detectors
+│   ├── detector.go
+│   ├── sqli/  xss/  shelli/  pathtrav/  ssti/  nosqli/  ldapi/
+│
+├── schema/                   # positive security
+│   ├── openapi/  graphql/  grpc/
+│
+├── audit/                    # audit sinks: otel, json, syslog, object storage
+├── telemetry/                # metrics + tracing wiring
+│
+├── internal/                 # engine guts — free to change without semver impact
+│   ├── engine/               # evaluation core, phase machine
+│   ├── prefilter/            # Aho-Corasick + literal extraction from regexes
+│   ├── regexp/               # RE2 wrapper, budget-enforced
+│   ├── canon/                # canonicalization / multi-interpretation decoding
+│   ├── body/                 # streaming parsers: form, multipart, json, xml, proto
+│   ├── corpus/               # variable collections
+│   ├── memz/                 # pools, arenas, bounded buffers
+│   ├── budget/               # per-request time + allocation budgets
+│   └── testutil/
+│
+├── seclang/                  # SEPARATE MODULE — SecLang parser + CRS adapter
+├── middleware/               # SEPARATE MODULE — net/http, chi, echo, gin, fiber, connect
+├── proxy/                    # SEPARATE MODULE — standalone reverse proxy
+│
+├── cmd/
+│   ├── gwaf/                 # CLI: lint, test, bench, explain rules
+│   └── gwaf-proxy/
+│
+├── test/
+│   ├── conformance/          # go-ftw compatible suite
+│   ├── evasion/              # bypass corpus — attack AND benign payloads
+│   └── fuzz/
+├── bench/                    # benchmark harness + regression baselines
+├── docs/
+├── examples/
+└── .github/workflows/
+```
+
+### Layout rules
+
+- **No `pkg/`.** It is noise in a library whose root package *is* the API. Coraza doesn't use it;
+  neither do we.
+- **The root package is the entire API surface a typical user touches.** `gwaf.New(...)` and go.
+  If a user needs to import four packages to block a request, the API is wrong.
+- **`internal/` is the default.** A package is promoted out of `internal/` only when a real
+  external consumer needs it, and promoting it is a semver commitment. Start restrictive.
+- **`types/` imports nothing from the repo.** It is the leaf. This is what prevents import cycles as
+  the engine grows.
+- **Integrations are separate modules.** Adding gin support must never add gin to a user's
+  dependency graph.
+
+---
+
+## 4. Code standards
+
+### Go 1.26 specifics
+
+- `go fix` modernizers are part of CI — run them, don't fight them.
+- Green Tea GC is default. Allocation *locality* now matters as much as allocation count; prefer
+  contiguous arena-style buffers over pointer-chasing structures on the hot path.
+- Use `testing.B.Loop` in benchmarks, not the manual `for range b.N` pattern.
+- `testing/synctest` for anything time- or concurrency-dependent. No `time.Sleep` in tests.
+- Iterators (`iter.Seq`) for collection traversal; they avoid materializing intermediate slices.
+
+### Hot path (`internal/engine`, `internal/prefilter`, `internal/canon`, `detect/*`)
+
+- **No `string`/`[]byte` conversions.** Work on `[]byte` views into the original buffer.
+- **No `fmt.*` and no `defer` in the per-request path.** Both are measurable here.
+- **No allocation without a pool.** `internal/memz` owns all pooling; don't hand-roll `sync.Pool`.
+- **No `interface{}`/`any` in inner loops.** Boxing costs more than the check you're avoiding.
+- Every hot-path function needs a benchmark before it is considered done.
+
+### Everywhere else
+
+- Errors: wrap with `%w` and enough context to locate the failure without a debugger. Sentinel
+  errors in `errors.go`. Never `panic` in library code — return an error, always.
+- Logging: `log/slog` only. The library **accepts** a logger, never constructs a global one.
+- Context: `context.Context` is the first parameter on anything that can block or be cancelled.
+- Concurrency: a `WAF` is safe for concurrent use; a `Transaction` is owned by exactly one
+  goroutine. Document this on every exported type — it is the single most common misuse.
+- Comments explain *why*, especially for anti-evasion logic. When code exists because of a specific
+  bypass, cite the CVE or technique by name.
+
+### Public extension interfaces
+
+`Operator`, `Transform`, `Action`, `Resolver`, and `Detector` are the five extension points
+(docs/RULES.md §4). They are the **most expensive API surface in the project** — third parties
+implement them, so post-v1.0 they are frozen hard. Treat any change to their signatures as a major
+design review, not a refactor. Registration is per-WAF-instance and explicit: no global registries,
+no `init()` side effects, no import-for-side-effect packages.
+
+### Testing
+
+| Kind | Requirement |
+|---|---|
+| Unit | Table-driven. Every detector: true positives, true negatives, **and** known-bypass corpus. |
+| Fuzz | Every parser and every canonicalization function. Non-negotiable — these take attacker input. |
+| Conformance | `go-ftw` compatible; runs against the CRS suite via the SecLang adapter. |
+| Evasion | Tracks detection rate **and false-positive rate**. FP regression fails the build. |
+| Benchmark | Gated against `bench/` baselines. >5% regression fails. |
+
+**Recall alone is never a passing metric.** A detector that catches everything by blocking
+everything is a broken detector. Always report the FP rate alongside it.
+
+### Security & supply chain
+
+- `govulncheck` in CI, blocking.
+- Dependencies are adversarially reviewed. The core module's dependency count is a KPI: target zero
+  beyond `golang.org/x`. Every addition needs justification in the PR.
+- Releases ship SLOs, SBOM, and SLSA provenance.
+- Documented CVE/embargo process before v1.0. We are security infrastructure; act like it.
+
+### API compatibility
+
+- Pre-v1.0: breaking changes allowed, must be in CHANGELOG.
+- Post-v1.0: root package and `types/` are frozen under semver. `internal/` never is.
+- Functional options for all constructors — no positional-config structs that can't grow.
+
+---
+
+## 5. Developer profiles
+
+Roles, not headcount — one person may hold several early on.
+
+**1. Application-security engineer (WAF domain)** — *the most important hire.*
+Owns: detection semantics, evasion corpus, rule design, CVE response.
+Needs: hands-on WAF bypass experience (encoding, HPP, request smuggling, charset confusion, score
+splitting), OWASP CRS/paranoia-level fluency, offensive background.
+Reads pentest reports for fun. **Without this role gwaf becomes another regex bag.**
+
+**2. Go systems / performance engineer**
+Owns: engine core, prefilter, memory model, the latency SLOs.
+Needs: pprof and escape-analysis fluency, allocation-free Go, lock-free/pooling patterns, benchmark
+methodology that survives scrutiny.
+Judged on: p99 latency and allocations per request.
+
+**3. Parser / language engineer**
+Owns: `detect/*` tokenizers, `internal/canon`, `internal/body`, the rule IR + compiler.
+Needs: real lexer/parser experience (not regex-with-extra-steps), grammar and automata theory,
+Aho-Corasick and RE2 internals, fuzzing discipline.
+This role is what makes the semantic tier work.
+
+**4. API / protocol engineer**
+Owns: `schema/*`, `middleware/*`, `proxy/`.
+Needs: OpenAPI 3.1, GraphQL execution semantics, gRPC/protobuf wire format, HTTP/2 and HTTP/3,
+deep `net/http` knowledge.
+
+**5. Platform / release engineer**
+Owns: CI, benchmark gates, multi-module release, SBOM/SLSA, distro and container packaging.
+Needs: reproducible builds, supply-chain security, cross-platform Go, OTel.
+
+**6. Developer-experience owner**
+Owns: root-package API design, docs, examples, migration tooling from Coraza/ModSecurity.
+Needs: Go API taste, technical writing.
+Holds veto power on public API changes — *the API is the product.*
+
+### Shared expectations
+
+Everyone: writes benchmarks for hot-path code, writes fuzz targets for parsing code, and can
+explain the threat model of the code they touch. Security-relevant PRs get two reviewers, one of
+whom is profile #1.
+
+---
+
+## 6. Working agreements
+
+- Ship the evasion corpus and benchmark harness **before** the detectors they measure. Metrics
+  first, or you optimize the wrong thing.
+- Prefer deleting a rule over adding an exception to it.
+- When a bypass is found: failing test first, then fix, then a note in the code citing the technique.
+- Publish reproducible benchmarks. Coraza's benchmark page has been "under renovation" since
+  April 2026 — that vacuum is ours to fill, and only if our numbers are honest and re-runnable.
