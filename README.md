@@ -33,14 +33,13 @@ Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
 
 | Workload | Latency | Allocations |
 |---|---|---|
-| Benign `GET` | **2.00 µs** | **0** |
-| Benign `POST`, 1 KiB JSON | 22.2 µs | **0** |
-| Attack (blocked at header phase) | **1.40 µs** | 1 |
+| Benign `GET` | **1.70 µs** | **0** |
+| Benign `POST`, 1 KiB JSON | **15.3 µs** | **0** |
+| Attack (blocked at header phase) | **1.47 µs** | 3 |
 
-The JSON figure is the honest cost of inspecting a whole 1 KiB body with two
-structural parsers. gwaf does not yet parse JSON into fields, so the entire body
-is analysed as one value; field-level parsing is the next optimization and will
-cut it substantially. It is still well inside the p99 < 100 µs budget.
+JSON and form bodies are parsed into fields, so detectors run over leaf values
+rather than the whole document — and so a `\u003cscript\u003e` escape, which is
+inert on the wire and `<script>` to the origin's parser, is actually seen.
 
 **Detection, on a corpus of real bypass techniques:**
 
@@ -72,7 +71,7 @@ false-positive rate beside it.
 
 | | With schema | Without |
 |---|---|---|
-| Latency | **1.36 µs** | 2.05 µs |
+| Latency | **1.45 µs** | 2.15 µs |
 | Work performed (fuel) | **314** | 710 |
 
 29% faster, 56% less work, *and* stricter — every out-of-spec request rejected
@@ -84,10 +83,10 @@ heuristically. **Specifying your API makes gwaf both faster and safer.**
 
 | Rules | Latency | Rules evaluated |
 |---|---|---|
-| 10 | 287 ns | 0 |
-| 100 | 293 ns | 0 |
-| 1,000 | 291 ns | 0 |
-| 10,000 | **290 ns** | **0** |
+| 10 | 344 ns | 0 |
+| 100 | 342 ns | 0 |
+| 1,000 | 337 ns | 0 |
+| 10,000 | **333 ns** | **0** |
 
 A thousand-fold larger ruleset costs the same. Rules evaluated per request is
 a small constant independent of ruleset size — zero for values containing no

@@ -31,8 +31,12 @@ import (
 // engine does not retain it.
 type Value struct {
 	Target types.Target
-	Key    string
-	Data   []byte
+
+	// Key is the name within a keyed collection, as bytes. It is not a string
+	// so that body fields, which arrive from the parser as bytes, never need a
+	// per-field conversion on the request path.
+	Key  []byte
+	Data []byte
 
 	// Inert marks a value that passed schema validation for a type whose
 	// character set cannot express an injection payload — an integer, a UUID, a
@@ -308,7 +312,9 @@ func (e *Evaluator) evalRule(
 	}
 
 	e.ctx.Target = v.Target
-	e.ctx.Key = v.Key
+	// The key is materialised as a string only for the operator's context,
+	// which is reached solely for candidate rules -- rare on real traffic.
+	e.ctx.Key = string(v.Key)
 
 	out.RulesEvaluated++
 	m, hit := r.Op.Eval(&e.ctx, data)
@@ -322,7 +328,7 @@ func (e *Evaluator) evalRule(
 			Rule:        cr,
 			Outcome:     outcome,
 			Target:      v.Target,
-			Key:         v.Key,
+			Key:         string(v.Key),
 			Match:       m,
 			Transformed: transformed,
 			Reading:     reading,
@@ -400,7 +406,7 @@ func targetMatches(targets []types.Target, v *Value) bool {
 		if t.Kind != v.Target.Kind {
 			continue
 		}
-		if t.Matches(v.Key) {
+		if t.MatchesBytes(v.Key) {
 			return true
 		}
 	}

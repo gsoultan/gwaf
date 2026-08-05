@@ -117,3 +117,31 @@ Two test payloads of mine were wrong, not the code: `<img/src=x/onerror=...>`
 does not execute (an unquoted attribute value runs to whitespace, so the handler
 is part of the value), and the doubled-quote SQL case is correct escaping.
 Verify which side is wrong before "fixing".
+
+## SHIPPED: body field parsing (`internal/body`)
+Streaming JSON and form parsers. No tree is built (encoding/json would allocate
+a map per object); the document is scanned once with an explicit stack and
+leaves are emitted as found. Zero allocation, 855 MB/s.
+
+**Not just an optimization.** A JSON string is not its bytes:
+`{"c":"\u003cscript\u003e"}` has no angle bracket on the wire and the origin's
+parser hands the application `<script>`. Same disagreement class as
+internal/interpret, through a different door — the escape is not a reading to
+guess at, it is a decoding the origin will certainly perform.
+
+Object **keys** are emitted too, and `TargetArgNames` was added to the core
+rule target lists. Before that, nothing inspected argument names at all — a
+payload in a JSON key was invisible.
+
+The grammar is **strict on purpose**: leading zeros, bare fractions, and raw
+control characters in strings are rejected because JSON rejects them. A parser
+looser than the origin's inspects documents that will never be processed, and
+gives an attacker a shape the two sides read differently. The fuzz harness
+checks acceptance against `encoding/json` (27M execs) precisely for this.
+
+**Allocation trap worth remembering.** Wiring the parser in cost 120 allocs/op
+from `string(name)` per field and `[]byte(key)` conversions. Fixed by: keys
+stored in the arena as spans, `engine.Value.Key` becoming `[]byte`,
+`Target.MatchesBytes`, and separate string/bytes record paths. Also discovered
+`Value.Target.Name` was dead — rule matching compares the *rule's* target name
+against the value's key, so the per-value name was never read.

@@ -72,6 +72,11 @@ const (
 // only inspected arguments would miss it.
 var argTargets = []types.Target{
 	{Kind: types.TargetArgs},
+	// Parameter *names* are as attacker-controlled as their values, and a
+	// payload placed in one would otherwise be invisible: nothing else inspects
+	// them. This matters most for JSON object keys, which the body parser emits
+	// here.
+	{Kind: types.TargetArgNames},
 	{Kind: types.TargetRequestURI},
 	{Kind: types.TargetRequestHeaders},
 }
@@ -79,6 +84,7 @@ var argTargets = []types.Target{
 // bodyTargets extend argTargets to the parsed body, for phase-2 rules.
 var bodyTargets = []types.Target{
 	{Kind: types.TargetArgs},
+	{Kind: types.TargetArgNames},
 	{Kind: types.TargetRequestBody},
 }
 

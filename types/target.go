@@ -147,6 +147,43 @@ func (t Target) Matches(key string) bool {
 	return t.Name == key
 }
 
+// MatchesBytes is Matches over a byte slice.
+//
+// It exists so the evaluation path never converts a key to a string. Body
+// fields arrive as bytes from the parser, and converting each one would
+// allocate per field per request — which is exactly the cost the arena and the
+// zero-allocation SLO exist to remove.
+func (t Target) MatchesBytes(key []byte) bool {
+	if t.Name == "" {
+		return true
+	}
+	if t.Kind.caseInsensitiveKeys() {
+		return equalFoldBytes(t.Name, key)
+	}
+	return len(t.Name) == len(key) && t.Name == string(key)
+}
+
+// equalFoldBytes compares a string and a byte slice ignoring ASCII case,
+// without allocating.
+func equalFoldBytes(a string, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		x, y := a[i], b[i]
+		if x >= 'A' && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if y >= 'A' && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
 // caseInsensitiveKeys reports whether the wire format of this collection treats
 // keys case-insensitively. Argument names are case-sensitive; header and cookie
 // names are not.

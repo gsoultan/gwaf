@@ -3,6 +3,7 @@
 package gwaf
 
 import (
+	"github.com/gsoultan/gwaf/internal/body"
 	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/internal/engine"
 	"github.com/gsoultan/gwaf/internal/memz"
@@ -27,6 +28,11 @@ type Transaction struct {
 	arena memz.Arena
 
 	values []engine.Value
+
+	// spans records where each value's key and data live in the arena, so both
+	// can be re-cut after a growth reallocates the backing array. Slices are
+	// not stable across arena growth; offsets are.
+	spans  []valueSpan
 	result engine.Result
 
 	score     int
@@ -42,16 +48,30 @@ type Transaction struct {
 	headerCount int
 	argCount    int
 	bodyLen     int
+	contentType string
 
 	// op is the schema operation matched for this request, or nil when no
 	// schema is configured or the route is not described.
 	op *schema.Operation
+
+	// bodyParser extracts fields from structured bodies. It owns reusable
+	// buffers and is reset per body.
+	bodyParser body.Parser
+
+	// bodyErr records why a structured body could not be fully parsed.
+	bodyErr error
+
+	// bodyParseFailed carries that reason into the decision.
+	bodyParseFailed string
 
 	// violation records the first schema violation seen, so the request is
 	// rejected with the reason rather than merely failing to match a rule.
 	violation  schema.Violation
 	violatedAt string
 }
+
+// valueSpan locates one recorded value inside the transaction arena.
+type valueSpan struct{ key, data types.Span }
 
 // reset prepares tx for reuse against a ruleset.
 func (tx *Transaction) reset(rs *rules.Ruleset) {
@@ -60,6 +80,7 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.arena.SetLimit(tx.waf.cfg.limits.MaxArenaSize)
 	tx.arena.Reset()
 	tx.values = tx.values[:0]
+	tx.spans = tx.spans[:0]
 	tx.result.Reset()
 	tx.score = 0
 	tx.evaluated = 0
@@ -72,6 +93,9 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.op = nil
 	tx.violation = schema.ViolationNone
 	tx.violatedAt = ""
+	tx.bodyErr = nil
+	tx.bodyParseFailed = ""
+	tx.contentType = ""
 }
 
 // Close returns the transaction to its pool. It is safe to call more than once.
@@ -82,6 +106,7 @@ func (tx *Transaction) Close() {
 	w := tx.waf
 	tx.rs = nil
 	tx.values = tx.values[:0]
+	tx.spans = tx.spans[:0]
 	tx.arena.Reset()
 	w.txPool.Put(tx)
 }
@@ -141,8 +166,29 @@ func (tx *Transaction) AddRequestHeader(name, value string) {
 	if tx.headerCount > tx.waf.cfg.limits.MaxHeaders {
 		return
 	}
+	if len(tx.contentType) == 0 && equalFoldASCII(name, "content-type") {
+		tx.contentType = value
+	}
 	tx.addValue(types.Target{Kind: types.TargetRequestHeaders, Name: name}, name, value)
 	tx.addValue(types.Target{Kind: types.TargetRequestHeaderNames}, name, name)
+}
+
+// equalFoldASCII compares two ASCII strings case-insensitively without
+// importing strings into the hot path for a single header-name check.
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		c := a[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // AddArgument records one request argument.
@@ -195,12 +241,105 @@ func (tx *Transaction) checkSchema(name, value string) bool {
 }
 
 // SetRequestBody records the request body.
-func (tx *Transaction) SetRequestBody(body []byte) {
-	tx.bodyLen = len(body)
-	if len(body) > tx.waf.cfg.limits.MaxBodySize {
+//
+// A body whose Content-Type gwaf can structure is parsed into fields, and each
+// field is recorded separately. That is both faster and more accurate than
+// inspecting the document whole:
+//
+//   - Faster, because detectors run over leaf values rather than the entire
+//     document, and because a field the schema constrains can be skipped.
+//   - More accurate, because a JSON string is not its bytes.
+//     `{"c":"\u003cscript\u003e"}` contains no angle bracket on the wire and
+//     the origin's parser hands the application `<script>`.
+//
+// A body gwaf cannot structure — or one that fails to parse — is recorded whole
+// instead. That is slower and less precise but never less safe, and a parse
+// failure is surfaced at the phase boundary rather than silently ignored.
+func (tx *Transaction) SetRequestBody(b []byte) {
+	tx.bodyLen = len(b)
+	if len(b) > tx.waf.cfg.limits.MaxBodySize {
 		return
 	}
-	tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", body)
+
+	switch body.DetectContent(tx.contentType) {
+	case body.ContentJSON:
+		if tx.parseStructuredBody(b, true) {
+			return
+		}
+	case body.ContentForm:
+		if tx.parseStructuredBody(b, false) {
+			return
+		}
+	}
+
+	tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", b)
+}
+
+// parseStructuredBody extracts fields, reporting whether parsing succeeded.
+//
+// On failure the caller falls back to recording the raw body: a document gwaf
+// could not read is not a document it may ignore, and inspecting it whole is
+// the safe direction.
+func (tx *Transaction) parseStructuredBody(b []byte, isJSON bool) bool {
+	limits := body.Limits{
+		MaxFields:    tx.waf.cfg.limits.MaxArgs,
+		MaxValueLen:  tx.waf.cfg.limits.MaxValueLen,
+		MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
+	}
+	tx.bodyParser.Reset(limits)
+
+	// Fields are copied into the arena as they arrive, because the parser's
+	// buffers are only valid for the duration of the callback.
+	emit := func(name, value []byte, kind body.Kind) bool {
+		if kind == body.KindKey {
+			// A member name is attacker-controlled and is inspected in its own
+			// right; a payload placed there would otherwise be invisible.
+			tx.recordFieldBytes(types.TargetArgNames, name, value, false)
+			return true
+		}
+
+		inert := tx.checkBodySchema(name, value)
+		tx.recordFieldBytes(types.TargetArgs, name, value, inert)
+		return true
+	}
+
+	var err error
+	if isJSON {
+		err = tx.bodyParser.ParseJSON(b, emit)
+	} else {
+		err = tx.bodyParser.ParseForm(b, emit)
+	}
+	if err != nil {
+		tx.bodyErr = err
+		return false
+	}
+	return true
+}
+
+// checkBodySchema validates one body field, mirroring checkSchema for query
+// arguments.
+func (tx *Transaction) checkBodySchema(name, value []byte) bool {
+	if tx.op == nil || len(tx.op.Body) == 0 {
+		return false
+	}
+	// The lookup takes a string, but Go compiles a map/slice lookup keyed by
+	// string(bytes) without a copy when the result does not escape.
+	f, ok := schema.FieldFor(tx.op.Body, string(name))
+	if !ok {
+		if tx.op.Strict && tx.violation == schema.ViolationNone {
+			tx.violation = schema.ViolationUndeclared
+			tx.violatedAt = string(name)
+		}
+		return false
+	}
+	if v := schema.Validate(f, value); v != schema.ViolationNone {
+		if tx.violation == schema.ViolationNone {
+			tx.violation = v
+			tx.violatedAt = string(name)
+		}
+		return false
+	}
+	return f.Inert()
 }
 
 // ProcessRequestHeaders evaluates the request-headers phase.
@@ -260,47 +399,97 @@ func (tx *Transaction) ProcessRequestBody() Decision {
 	if tx.argCount > tx.waf.cfg.limits.MaxArgs {
 		return tx.limitExceeded("argument count")
 	}
+	// A structured body that failed to parse was inspected whole as a fallback,
+	// which is safe but imprecise: schema validation cannot apply to fields that
+	// were never extracted. The reason travels with the decision so an operator
+	// can distinguish "analysed and clean" from "could not be structured",
+	// rather than the difference being invisible.
+	if tx.bodyErr != nil {
+		tx.bodyParseFailed = tx.bodyErr.Error()
+	}
 	return tx.runPhase(types.PhaseRequestBody)
 }
 
-// addValueInert records a value, marking whether it is schema-inert.
+// addValueInert records a string value, marking whether it is schema-inert.
 func (tx *Transaction) addValueInert(target types.Target, key, value string, inert bool) {
-	before := len(tx.values)
-	tx.addValue(target, key, value)
-	if inert && len(tx.values) > before {
-		tx.values[len(tx.values)-1].Inert = true
-	}
+	tx.recordString(target, key, value, inert)
 }
 
 // addValue records a string value for evaluation.
 func (tx *Transaction) addValue(target types.Target, key, value string) {
-	if len(value) > tx.waf.cfg.limits.MaxValueLen {
-		value = value[:tx.waf.cfg.limits.MaxValueLen]
-	}
-	span, ok := tx.arena.AppendString(value)
-	if !ok {
-		return
-	}
-	tx.values = append(tx.values, engine.Value{
-		Target: target,
-		Key:    key,
-		Data:   tx.arena.Resolve(span),
-	})
+	tx.recordString(target, key, value, false)
 }
 
 // addValueBytes records a byte value for evaluation.
 func (tx *Transaction) addValueBytes(target types.Target, key string, value []byte) {
+	tx.recordBytes(target, key, value, false)
+}
+
+// recordString and recordBytes copy a key and value into the arena.
+//
+// They are separate rather than one function taking []byte because converting a
+// string to a byte slice allocates, and doing that per field per request is
+// precisely the cost the arena exists to remove. Each path appends in the
+// representation it already has.
+func (tx *Transaction) recordString(target types.Target, key, value string, inert bool) {
 	if len(value) > tx.waf.cfg.limits.MaxValueLen {
 		value = value[:tx.waf.cfg.limits.MaxValueLen]
 	}
-	span, ok := tx.arena.Append(value)
+	keySpan, ok := tx.arena.AppendString(key)
 	if !ok {
 		return
 	}
+	dataSpan, ok := tx.arena.AppendString(value)
+	if !ok {
+		return
+	}
+	tx.appendValue(target, keySpan, dataSpan, inert)
+}
+
+func (tx *Transaction) recordBytes(target types.Target, key string, value []byte, inert bool) {
+	if len(value) > tx.waf.cfg.limits.MaxValueLen {
+		value = value[:tx.waf.cfg.limits.MaxValueLen]
+	}
+	keySpan, ok := tx.arena.AppendString(key)
+	if !ok {
+		return
+	}
+	dataSpan, ok := tx.arena.Append(value)
+	if !ok {
+		return
+	}
+	tx.appendValue(target, keySpan, dataSpan, inert)
+}
+
+// recordFieldBytes records a value whose key is also bytes, which is how the
+// body parser supplies fields.
+//
+// The target carries no Name: rule matching compares the *rule's* target name
+// against the value's key, so a per-value name is never read. Omitting it avoids
+// converting every field name to a string.
+func (tx *Transaction) recordFieldBytes(kind types.TargetKind, key, value []byte, inert bool) {
+	if len(value) > tx.waf.cfg.limits.MaxValueLen {
+		value = value[:tx.waf.cfg.limits.MaxValueLen]
+	}
+	keySpan, ok := tx.arena.Append(key)
+	if !ok {
+		return
+	}
+	dataSpan, ok := tx.arena.Append(value)
+	if !ok {
+		return
+	}
+	tx.appendValue(types.Target{Kind: kind}, keySpan, dataSpan, inert)
+}
+
+// appendValue registers a recorded key/value pair.
+func (tx *Transaction) appendValue(target types.Target, keySpan, dataSpan types.Span, inert bool) {
+	tx.spans = append(tx.spans, valueSpan{key: keySpan, data: dataSpan})
 	tx.values = append(tx.values, engine.Value{
 		Target: target,
-		Key:    key,
-		Data:   tx.arena.Resolve(span),
+		Key:    tx.arena.Resolve(keySpan),
+		Data:   tx.arena.Resolve(dataSpan),
+		Inert:  inert,
 	})
 }
 
@@ -351,17 +540,17 @@ func (tx *Transaction) runPhase(phase types.Phase) Decision {
 	return allow(ReasonNoMatch, tx.score, tx.evaluated)
 }
 
-// refreshValues re-cuts every recorded value from the current arena buffer.
+// refreshValues re-cuts every recorded key and value from the current arena.
+//
+// Appending may have reallocated the backing array since a value was recorded,
+// which invalidates any slice cut from the old one. The spans are offsets and
+// stay correct across growth, which is the reason they are kept.
 func (tx *Transaction) refreshValues() {
 	buf := tx.arena.Bytes()
-	off := 0
 	for i := range tx.values {
-		n := len(tx.values[i].Data)
-		if off+n > len(buf) {
-			break
-		}
-		tx.values[i].Data = buf[off : off+n]
-		off += n
+		sp := tx.spans[i]
+		tx.values[i].Key = sp.key.Bytes(buf)
+		tx.values[i].Data = sp.data.Bytes(buf)
 	}
 }
 
@@ -403,11 +592,22 @@ func (tx *Transaction) blockDecision(reason Reason, status int, rule *rules.Comp
 			}
 		}
 	}
+	if d.detail == "" && tx.bodyParseFailed != "" {
+		d.detail = "body not structured: " + tx.bodyParseFailed
+	}
 	if tx.waf.cfg.mode == DetectionOnly {
 		d.verdict = VerdictAllow
 	}
 	return d
 }
+
+// BodyParseError returns why a structured body could not be parsed, or empty.
+//
+// A body that fell back to whole-document inspection is still analysed, but
+// less precisely — schema validation cannot apply to fields that were never
+// extracted. Surfacing it lets an operator notice a client sending malformed
+// JSON rather than discovering it as a coverage gap later.
+func (tx *Transaction) BodyParseError() string { return tx.bodyParseFailed }
 
 // budgetExhausted applies the configured fail mode.
 //

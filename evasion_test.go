@@ -699,3 +699,130 @@ func TestProseWithSQLKeywordsStillPasses(t *testing.T) {
 		})
 	}
 }
+
+// TestJSONEscapedPayloadsAreDetected covers the correctness half of body
+// parsing.
+//
+// `{"c":"<script>"}` contains no angle bracket anywhere on the wire.
+// A firewall reading raw bytes sees inert text; the origin's JSON parser hands
+// the application `<script>`. This is the same disagreement class as the
+// encoding ambiguities in internal/interpret, arriving through a different
+// door — the escape is not a reading to guess at, it is a decoding the origin
+// will certainly perform.
+func TestJSONEscapedPayloadsAreDetected(t *testing.T) {
+	w := newWAF(t)
+
+	payloads := []struct{ name, body string }{
+		{"unicode escaped script", `{"c":"<script>alert(1)</script>"}`},
+		{"unicode escaped img", `{"c":"<img src=x onerror=alert(1)>"}`},
+		{"partially escaped", `{"c":"<img src=x onerror=alert(1)>"}`},
+		{"escaped quote sqli", `{"q":"1' OR 1=1--"}`},
+		{"escaped in key", `{"<script>":"x"}`},
+		{"escaped in array", `{"items":["<script>alert(1)</script>"]}`},
+		{"escaped nested", `{"a":{"b":{"c":"<script>x</script>"}}}`},
+		{"sqli union in field", `{"query":"1 UNION SELECT password FROM users"}`},
+		{"sqli tautology in field", `{"id":"1' OR 1=1--"}`},
+	}
+
+	for _, p := range payloads {
+		t.Run(p.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/api/v1/orders", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", "application/json")
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				return
+			}
+			tx.SetRequestBody([]byte(p.body))
+
+			if d := tx.ProcessRequestBody(); !d.Blocked() {
+				t.Errorf("escaped payload not detected: %s", p.body)
+			}
+		})
+	}
+}
+
+// TestJSONBodyFieldsAreInspectedIndividually verifies the structural half: a
+// parsed body reports the field a payload was found in, not merely "the body".
+func TestJSONBodyFieldsAreInspectedIndividually(t *testing.T) {
+	w := newWAF(t)
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("POST", "/api/v1/orders", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "application/json")
+	tx.ProcessRequestHeaders()
+	tx.SetRequestBody([]byte(`{"user":{"name":"Alice"},"note":"<script>alert(1)</script>"}`))
+
+	d := tx.ProcessRequestBody()
+	if !d.Blocked() {
+		t.Fatal("payload in a body field not detected")
+	}
+	if d.Key() != "note" {
+		t.Errorf("Key() = %q, want %q — the decision should name the field",
+			d.Key(), "note")
+	}
+}
+
+// TestBenignJSONBodiesPass is the counterweight for body parsing.
+func TestBenignJSONBodiesPass(t *testing.T) {
+	w := newWAF(t)
+
+	bodies := []string{
+		`{"name":"Alice","qty":3,"note":"please deliver before 5pm"}`,
+		`{"user":{"id":1,"prefs":{"theme":"dark","lang":"en"}}}`,
+		`{"ids":[1,2,3,4,5],"action":"archive"}`,
+		`{"callback":"https://example.com/hook?id=42&t=1"}`,
+		`{"name":"José García","city":"München"}`,
+		`{"comment":"use the <b>bold</b> tag for emphasis"}`,
+		`{"snippet":"if (a < b) { return a; }"}`,
+		`{"md":"# Title\n\nSome *emphasis* and a [link](/x)."}`,
+		`{"c":"it's urgent, don't delete it"}`,
+		`{"sql_help":"we should select a new union representative"}`,
+		`{"quote":"he said \"that's the one\""}`,
+		`{"path":"/var/log/app/2026-08-05.log"}`,
+		`{"empty":"","zero":0,"nil":null,"flag":false}`,
+	}
+
+	for _, b := range bodies {
+		t.Run(b, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/api/v1/orders", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", "application/json")
+			tx.ProcessRequestHeaders()
+			tx.SetRequestBody([]byte(b))
+
+			if d := tx.ProcessRequestBody(); d.Blocked() {
+				t.Errorf("false positive: rule=%d msg=%q key=%q",
+					d.RuleID(), d.Message(), d.Key())
+			}
+		})
+	}
+}
+
+// TestMalformedBodyFallsBackToWholeInspection checks the safe direction: a body
+// gwaf cannot structure is still inspected, just less precisely, and the
+// failure is reported rather than hidden.
+func TestMalformedBodyFallsBackToWholeInspection(t *testing.T) {
+	w := newWAF(t)
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("POST", "/api/v1/orders", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "application/json")
+	tx.ProcessRequestHeaders()
+	// Truncated JSON containing a payload.
+	tx.SetRequestBody([]byte(`{"c":"<script>alert(1)</script>`))
+
+	if d := tx.ProcessRequestBody(); !d.Blocked() {
+		t.Error("payload in a malformed body was not inspected")
+	}
+	if tx.BodyParseError() == "" {
+		t.Error("body parse failure was not reported")
+	}
+}

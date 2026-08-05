@@ -103,7 +103,14 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        Together they **replaced seven literal rules**, two of which were active
        false positives ("the union selected a new representative", "the onerror
        callback fires"). Next: shell, path traversal, SSTI, NoSQL, LDAP.
-5. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
+5. [x] **Body field parsing** (`internal/body`). Streaming JSON and form
+       parsers, no tree built, zero allocation. Both a performance fix — benign
+       POST with a 1 KiB JSON body went 22.2µs to 15.3µs — and a correctness
+       one: JSON string escapes are a decoding the origin *will* perform, so
+       `{"c":"\u003cscript\u003e"}` is inert on the wire and `<script>` to the
+       application. Object keys are inspected too. A body that fails to parse
+       falls back to whole-document inspection and the failure is reported.
+6. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
 6. [ ] **SecLang parser** (pulled forward — gateon's DB requires it)
 7. [ ] Core ruleset with **calibrated** confidence
 
