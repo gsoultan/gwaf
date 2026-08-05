@@ -33,9 +33,14 @@ Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
 
 | Workload | Latency | Allocations |
 |---|---|---|
-| Benign `GET` | **1.22 µs** | **0** |
-| Benign `POST`, 1 KiB JSON | **6.48 µs** | **0** |
-| Attack (blocked at header phase) | **0.83 µs** | 1 |
+| Benign `GET` | **1.67 µs** | **0** |
+| Benign `POST`, 1 KiB JSON | 17.6 µs | **0** |
+| Attack (blocked at header phase) | **1.40 µs** | 1 |
+
+The JSON figure is the honest cost of inspecting a whole 1 KiB body with a
+structural SQL parser. gwaf does not yet parse JSON into fields, so the body is
+tokenized as one value; field-level parsing will cut it substantially. It is
+still well inside the p99 < 100 µs budget.
 
 **Detection, on a corpus of real bypass techniques:**
 
@@ -43,6 +48,13 @@ Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
 |---|---|
 | Evasion corpus | **76/76 blocked (100%)** |
 | Benign corpus | **0/72 false positives (0.00%)** |
+
+SQL injection is detected **structurally**: the value is tokenized and scored on
+grammar, so `1'/*!50000OR*/1=1--`, `1' XOR 1=1--`, and `1'OR'1'='1` are all
+caught without a rule being written for any of them — while "the union selected
+a new representative" is not, because the keywords are not adjacent in the
+grammar. That prose was a *false positive* under the literal rules this
+replaced.
 
 The evasion corpus covers case variation, whitespace splitting, single and
 double percent-encoding, overlong UTF-8, NUL truncation, backslash separators,
@@ -54,7 +66,7 @@ false-positive rate beside it.
 
 | | With schema | Without |
 |---|---|---|
-| Latency | **1.14 µs** | 1.59 µs |
+| Latency | **1.36 µs** | 2.05 µs |
 | Work performed (fuel) | **314** | 710 |
 
 29% faster, 56% less work, *and* stricter — every out-of-spec request rejected
@@ -66,21 +78,22 @@ heuristically. **Specifying your API makes gwaf both faster and safer.**
 
 | Rules | Latency | Rules evaluated |
 |---|---|---|
-| 10 | 277 ns | 0 |
-| 100 | 277 ns | 0 |
-| 1,000 | 275 ns | 0 |
-| 10,000 | **276 ns** | **0** |
+| 10 | 287 ns | 0 |
+| 100 | 293 ns | 0 |
+| 1,000 | 291 ns | 0 |
+| 10,000 | **290 ns** | **0** |
 
-A thousand-fold larger ruleset costs the same, because on benign traffic the
-prefilter yields no candidates and no operator runs. These are enforced as
-tests (`TestSLO*`), not just observed in benchmarks.
+A thousand-fold larger ruleset costs the same. Rules evaluated per request is
+a small constant independent of ruleset size — zero for values containing no
+attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
+(`TestSLO*`), not merely observed in benchmarks.
 
 ## What makes it different
 
 | | |
 |---|---|
 | **Fast** | 0 rules evaluated and 0 allocations on benign traffic; flat in ruleset size |
-| **Accurate** | Semantic detection over signatures; confidence **measured on a corpus**, CI-gated |
+| **Accurate** | **Structural** SQL detection — grammar, not signatures. One implementation covers the variant family a signature list enumerates one payload at a time. |
 | **Secure** | Ambiguous input is evaluated *every* plausible way, not guessed at; provable DoS bound via fuel metering |
 | **Embeddable** | Zero CGO, **zero dependencies**, zero global state, no daemon, no UI |
 | **Compounding** | Specifying your API schema makes gwaf both *faster* and *more precise* |

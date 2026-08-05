@@ -16,6 +16,7 @@
 package core
 
 import (
+	"github.com/gsoultan/gwaf/detect/sqli"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
 	"github.com/gsoultan/gwaf/rules/transform"
@@ -34,16 +35,27 @@ const (
 	IDTraversalRaw      types.RuleID = 1002
 	IDSensitiveFile     types.RuleID = 1003
 	IDTraversalRepeated types.RuleID = 1004
-	IDSQLiTautology     types.RuleID = 2001
-	IDSQLiUnionSelect   types.RuleID = 2002
-	IDSQLiComment       types.RuleID = 2003
-	IDSQLiStacked       types.RuleID = 2004
+	// 2001-2004 were literal SQL injection rules: tautology, UNION SELECT,
+	// comment sequences, and stacked statements. All four are superseded by
+	// IDSQLiSemantic, which recognises the same constructs by grammar and
+	// therefore also covers the variants a literal list has to enumerate.
+	//
+	// They were removed rather than kept alongside it because 2002 was an
+	// active false positive: "the union selected a new representative"
+	// collapses to "unionselected" once whitespace is stripped, which contains
+	// "unionselect". The structural detector does not match it, because the
+	// two keywords are not adjacent in the grammar.
+	//
+	// The IDs are retired, not reused. They appear in audit logs and any
+	// exception someone already wrote, and silently rebinding them to different
+	// behaviour would invalidate both.
 	IDXSSScriptTag      types.RuleID = 3001
 	IDXSSEventHandler   types.RuleID = 3002
 	IDXSSJavaScriptURI  types.RuleID = 3003
 	IDRCEShellMetachars types.RuleID = 4001
 	IDRCECommonBinaries types.RuleID = 4002
 	IDLFIPHPWrapper     types.RuleID = 4003
+	IDSQLiSemantic      types.RuleID = 2010
 	IDScannerUserAgent  types.RuleID = 5001
 )
 
@@ -157,57 +169,24 @@ func requestRules() rules.Set {
 
 		// ---- SQL injection --------------------------------------------------
 		{
-			ID:         IDSQLiTautology,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			// Whitespace is stripped by the chain, so "1=1" also covers
-			// "1 = 1" and "1/**/=/**/1" style padding.
-			Op:         op.ContainsAny("'or1=1", "\"or1=1", "or1=1--", "'or'1'='1", "or1=1#"),
+			ID:      IDSQLiSemantic,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// Only percent-decoding and case folding: the tokenizer needs the
+			// original whitespace and punctuation, because that structure is
+			// exactly what it reads. Stripping whitespace here would destroy
+			// the grammar the detector exists to see.
+			Transforms: []rules.Transform{transform.URLDecode},
+			// Structural detection rather than string matching. One rule covers
+			// the whole variant family -- comment splitting, case alternation,
+			// alternative operators, quote-context breaking -- that a signature
+			// list has to enumerate one payload at a time. See detect/sqli.
+			Op:         sqli.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
-			Msg:        "SQL injection tautology",
-			Tags:       []string{"sqli", "owasp-a03"},
-		},
-		{
-			ID:         IDSQLiUnionSelect,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny("unionselect", "unionallselect"),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "SQL injection UNION SELECT",
-			Tags:       []string{"sqli", "owasp-a03"},
-		},
-		{
-			ID:         IDSQLiComment,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			// Scored rather than blocking: these sequences occur in legitimate
-			// content often enough that blocking on one alone would produce
-			// false positives. They are strong corroboration when combined.
-			Op:         op.ContainsAny("';--", "\";--", "'#", "/*!"),
-			Actions:    []rules.Action{rules.Score},
-			Severity:   types.SeverityError,
-			Confidence: types.High,
-			Msg:        "SQL comment sequence in input",
-			Tags:       []string{"sqli", "owasp-a03"},
-		},
-		{
-			ID:         IDSQLiStacked,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny(";drop table", ";droptable", ";truncatetable", ";deletefrom"),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "Stacked SQL statement",
-			Tags:       []string{"sqli", "owasp-a03"},
+			Msg:        "SQL injection (structural)",
+			Tags:       []string{"sqli", "owasp-a03", "semantic"},
 		},
 
 		// ---- Cross-site scripting ------------------------------------------

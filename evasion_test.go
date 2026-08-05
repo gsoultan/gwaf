@@ -525,18 +525,22 @@ func TestVerbatimMatchReportsNoInterpretation(t *testing.T) {
 	}
 }
 
-// TestBenignTrafficStillEvaluatesNoRules guards the cost of multi-interpretation.
-// Enumerating readings must be free on traffic that has no ambiguity, or the
-// security win was paid for with the performance thesis.
-func TestBenignTrafficStillEvaluatesNoRules(t *testing.T) {
+// TestBenignTrafficBoundsRuleEvaluation guards the security features against
+// the performance thesis.
+//
+// The bound is a small constant rather than zero. The structural SQL detector
+// declares broad literals — a quote, an equals sign — because payloads are
+// built from them, so prose containing those characters is legitimately a
+// prefilter candidate. What must stay true is that the count does not grow
+// with the ruleset, and that every rule which runs rejects.
+func TestBenignTrafficBoundsRuleEvaluation(t *testing.T) {
 	w := newWAF(t)
 
+	// Well above what any single benign value should trigger, and far below
+	// the 26-rule ruleset — so a prefilter regression still fails this.
+	const maxEvaluated = 4
+
 	for _, b := range benignTraffic {
-		// Values containing encoding markers legitimately produce extra
-		// readings; the claim is about traffic with no ambiguity at all.
-		if strings.ContainsAny(b.arg+b.body+b.target, "%\\&+") {
-			continue
-		}
 		t.Run(b.name, func(t *testing.T) {
 			tx := w.NewTransaction()
 			defer tx.Close()
@@ -545,17 +549,29 @@ func TestBenignTrafficStillEvaluatesNoRules(t *testing.T) {
 			if target == "" {
 				target = "/search"
 			}
-			tx.SetRequestLine("GET", target, "HTTP/1.1")
+			method := "GET"
+			if b.body != "" {
+				method = "POST"
+			}
+			tx.SetRequestLine(method, target, "HTTP/1.1")
 			if b.header[0] != "" {
 				tx.AddRequestHeader(b.header[0], b.header[1])
 			}
 			if b.arg != "" {
 				tx.AddArgument("q", b.arg)
 			}
-			tx.ProcessRequestHeaders()
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Fatalf("false positive at header phase: rule=%d", d.RuleID())
+			}
+			if b.body != "" {
+				tx.SetRequestBody([]byte(b.body))
+			}
+			if d := tx.ProcessRequestBody(); d.Blocked() {
+				t.Fatalf("false positive at body phase: rule=%d", d.RuleID())
+			}
 
-			if got := tx.RulesEvaluated(); got != 0 {
-				t.Errorf("RulesEvaluated() = %d, want 0", got)
+			if got := tx.RulesEvaluated(); got > maxEvaluated {
+				t.Errorf("RulesEvaluated() = %d, want <= %d", got, maxEvaluated)
 			}
 		})
 	}
@@ -582,4 +598,77 @@ func TestEvasionCorpusUnderDetectionOnly(t *testing.T) {
 		t.Fatal("detection-only mode detected nothing at all")
 	}
 	t.Logf("detected %d/%d in detection-only mode", detected, len(evasions))
+}
+
+// TestSemanticDetectionCoversUnlistedVariants is the argument for structural
+// detection, stated as a test.
+//
+// None of these payloads appear in the evasion corpus and no literal in the core
+// ruleset matches them. A signature engine would need a separate rule for each,
+// and would still be one variant behind. The structural detector covers the
+// family because it reads grammar rather than bytes.
+func TestSemanticDetectionCoversUnlistedVariants(t *testing.T) {
+	w := newWAF(t)
+
+	variants := []struct{ name, payload string }{
+		{"versioned comment", "1'/*!50000OR*/1=1--"},
+		{"comment split OR", "1'/**/OR/**/1=1--"},
+		{"union split by comments", "1/**/UNION/**/ALL/**/SELECT/**/pw"},
+		{"pipe operator", "1' || '1'='1"},
+		{"xor connector", "1' XOR 1=1--"},
+		{"greater-than tautology", "1' OR 2>1--"},
+		{"not-equal tautology", "1' OR 1<>2--"},
+		{"like tautology", "1' OR 'a' LIKE 'a'--"},
+		{"null comparison", "1' OR NULL=NULL--"},
+		{"backtick context", "1` OR 1=1--"},
+		{"no whitespace", "1'OR'1'='1"},
+		{"newline separated", "1' OR\n1=1--"},
+		{"hash terminator", "1' OR 1=1#"},
+		{"extractvalue exfil", "1' AND extractvalue(1,concat(0x7e,version()))--"},
+		{"updatexml exfil", "1' AND updatexml(1,concat(0x7e,user()),1)--"},
+		{"pg_sleep timing", "1'; SELECT pg_sleep(10)--"},
+		{"waitfor timing", "1'; WAITFOR DELAY '0:0:5'--"},
+		{"stacked truncate", "x'; TRUNCATE TABLE logs--"},
+		{"stacked update", "1; UPDATE users SET admin=1"},
+		{"union distinct", "1 UNION DISTINCT SELECT 1"},
+	}
+
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			d := runEvasion(t, w, evasion{arg: v.payload})
+			if !d.Blocked() {
+				t.Errorf("unlisted variant not blocked: %q (score=%d)",
+					v.payload, d.Score())
+			}
+		})
+	}
+}
+
+// TestProseWithSQLKeywordsStillPasses is the counterweight, and it covers the
+// concrete false positive the literal rules had: "the union selected a leader"
+// collapses to "unionselected" once whitespace is stripped, which contains
+// "unionselect". The structural detector does not care, because the words are
+// not adjacent in the grammar.
+func TestProseWithSQLKeywordsStillPasses(t *testing.T) {
+	w := newWAF(t)
+
+	prose := []string{
+		"the union selected a new representative",
+		"our credit union selects officers annually",
+		"please select a delivery option from the list",
+		"drop off the table at the warehouse",
+		"we order by phone and update the group weekly",
+		"it's urgent, don't delete my account",
+		"the total = 42 dollars, price < 100 or rating > 4",
+		"see note -- it explains the change",
+		"insert the card, then select your language",
+	}
+
+	for _, p := range prose {
+		t.Run(p, func(t *testing.T) {
+			if d := runEvasion(t, w, evasion{arg: p}); d.Blocked() {
+				t.Errorf("prose blocked: %q rule=%d msg=%q", p, d.RuleID(), d.Message())
+			}
+		})
+	}
 }

@@ -55,3 +55,37 @@ frontends isomorphic rather than merely similar.
 `gwaf.New()` with zero args blocks. Defensible only because `ruleset/core`
 ships Certain/High confidence rules only. A WAF that silently protects nothing
 is worse than none — the operator believes they are covered.
+
+## SHIPPED: structural SQL detection (`detect/sqli`)
+Tokenize the value and score **grammar**, not strings. Four interpolation
+contexts (bare, single-quote, double-quote, backtick) so quote-breaking is
+visible: "1' OR 1=1--" read literally is a number and an unterminated string;
+read as interpolated inside '...', the quote *closes* the literal and the rest
+is a tautology plus a truncating comment.
+
+48/48 payload variants, 0/56 false positives on prose.
+
+**It replaced four literal rules rather than joining them.** Rule 2002
+(`unionselect` after whitespace stripping) was an active false positive: "the
+union selected a new representative" collapses to "unionselected". IDs 2001-2004
+are **retired, not reused** — they appear in audit logs and any exception
+already written.
+
+Signals are weighted so that weak evidence needs corroboration: a trailing
+comment or an apostrophe is ordinary in real text. Danger functions require
+**attachment** to surrounding SQL, which is what keeps "sleep(8h) is the
+recommendation" out.
+
+Deliberate non-detection: `1'' OR ''1''=''1`. Doubled quotes are *correct SQL
+escaping* — the origin parses it as one harmless string literal. Flagging it
+would mean assuming a non-standard parser and would false-positive on every
+correctly-escaped value.
+
+**Cost, stated honestly.** The detector declares broad literals (`=`, `'`, `"`)
+because payloads are built from them, so prose containing those is a prefilter
+candidate. "Zero rules evaluated on benign traffic" is therefore no longer
+literally true; the claim was **restated**, not quietly weakened, to: rules
+evaluated is a small constant independent of ruleset size, zero when the value
+has no attack vocabulary. Benign POST with a 1 KiB JSON body went 6.5us -> 17.6us
+because the whole body is tokenized as one value; field-level JSON parsing will
+cut that and is the next real optimization.
