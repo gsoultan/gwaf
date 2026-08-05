@@ -311,6 +311,32 @@ p99 improved. Anything less and you're guessing.
 
 Cost: ~2× WAF CPU during shadow. Gate it behind a tier or a sampled percentage of routes.
 
+### Protocol conformance: what gwaf does *not* do
+
+gateon currently works around Coraza breaking two protocol classes. gwaf needs
+neither workaround, and both are covered by tests so they cannot regress.
+
+**CORS preflight.** gateon has no workaround for this today and preflight is
+blocked. The CRS rules responsible are protocol-conformance checks — a narrowed
+method allowlist, 920300 "missing Accept header", 920180 "POST without
+Content-Length" — and gwaf has none of them. A blocked preflight is the worst
+failure to diagnose in production: the browser reports an opaque CORS error that
+never mentions a firewall.
+
+**gRPC.** gateon carries `grpcCompatDirective` (rules 99007–99010) removing
+920420, 920180, 920350, and 920300, plus it disables request-body access for
+gRPC entirely — giving up body coverage to avoid false positives on binary
+protobuf.
+
+gwaf needs none of those directives, and does *not* give up body coverage:
+binary content has its printable runs extracted and inspected, so a payload in a
+protobuf string field is still caught while the framing bytes are not read as
+text. Measured at 0.00% false positives on 3,000 random protobuf bodies, with
+6/6 payloads inside string fields still detected.
+
+That means the `GRPCMode` config flag, and the whole compat directive block, can
+be deleted rather than ported.
+
 ### Phase D — Config migration (parallel with C)
 
 The ~21 generated SecLang directives become typed gwaf config. This is the real work.
@@ -320,8 +346,8 @@ The ~21 generated SecLang directives become typed gwaf config. This is the real 
 | `setvar:tx.paranoia_level=%d` | `crs.ParanoiaLevel(n)` preset → confidence policy (RULES.md §8) |
 | `setvar:tx.inbound_anomaly_score_threshold=%d` | `gwaf.Policy{Threshold: n}` |
 | `SecRule TX:ANOMALY_SCORE "@ge ..." deny` (99491/99492) | Built into the policy engine — delete |
-| gRPC compat: remove 920180/920350/920300, extend content types (99007–99010) | `gwaf.Except(920180).On(gwaf.ContentTypePrefix("application/grpc"))` — typed, reviewable |
-| `setvar:tx.allowed_methods=...` | `gwaf.WithAllowedMethods(...)` |
+| gRPC compat: remove 920180/920350/920300, extend content types (99007–99010) | **Delete.** gwaf has no protocol-conformance rules to except, and binary bodies are handled by text-run extraction rather than by disabling inspection. |
+| `setvar:tx.allowed_methods=...` | Nothing — gwaf has no method allowlist. Add one as a rule only if a deployment needs it; a default one is what breaks preflight. |
 | `setvar:tx.allowed_admin_ips=%s` (99005) | Policy `Match` predicate |
 | `initcol:ip=%{REMOTE_ADDR}` DOS counters (99002) | gateon's own rate limiter / eBPF — **drop from WAF entirely** |
 | `X-Gateon-Ip-Reputation-Block` header round-trip (99201) | `Resolver` — pass reputation in-process, stop laundering it through a header |

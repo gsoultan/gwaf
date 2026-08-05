@@ -316,6 +316,61 @@ func main() {
 		emit(request{Name: in.name, Target: in.target, Headers: h})
 	}
 
+	// CORS preflight. A blocked preflight breaks every cross-origin request and
+	// surfaces only as an opaque browser error, so it belongs in the corpus
+	// rather than being assumed safe.
+	origins := []string{
+		"https://app.example.com", "https://admin.example.internal",
+		"http://localhost:5173", "https://dashboard.example.com", "null",
+	}
+	acrHeaders := []string{
+		"content-type", "authorization,content-type",
+		"authorization,content-type,x-request-id",
+		"connect-protocol-version,content-type",
+		"authorization,content-type,x-trace-id,x-request-id,connect-timeout-ms",
+	}
+	for i, p := range listPaths {
+		for j, o := range origins {
+			for k, m := range []string{"GET", "POST", "PUT", "DELETE", "PATCH"} {
+				emit(request{
+					Name:   fmt.Sprintf("preflight %s %s", p, m),
+					Method: "OPTIONS",
+					Target: p,
+					Headers: map[string]string{
+						"Origin":                         o,
+						"Access-Control-Request-Method":  m,
+						"Access-Control-Request-Headers": acrHeaders[(i+j+k)%len(acrHeaders)],
+						"User-Agent":                     userAgents[(i+j)%len(userAgents)],
+						"Host":                           hostNames[i%len(hostNames)],
+					},
+				})
+			}
+		}
+	}
+
+	// gRPC and Connect framing. Binary bodies read as text produce matches by
+	// chance; this is the traffic that measures whether they still do.
+	for i, m := range connectMethods {
+		for j, ct := range []string{
+			"application/grpc", "application/grpc+proto",
+			"application/grpc-web+proto", "application/connect+proto",
+		} {
+			emit(request{
+				Name:   fmt.Sprintf("grpc %s %s", m, ct),
+				Method: "POST",
+				Target: "/gateon.v1.ApiService/" + m,
+				Headers: map[string]string{
+					"Content-Type": ct,
+					"TE":           "trailers",
+					"grpc-timeout": []string{"10S", "30S", "1M"}[(i+j)%3],
+					"user-agent":   []string{"grpc-go/1.60.0", "grpc-java/1.61.0", "@connectrpc/connect-web/1.4.0"}[(i+j)%3],
+					"Host":         hostNames[i%len(hostNames)],
+				},
+				Body: grpcBody(i, j),
+			})
+		}
+	}
+
 	// Auth flows.
 	emit(request{
 		Name: "login", Method: "POST", Target: "/v1/login",
@@ -342,6 +397,32 @@ func main() {
 	})
 
 	fmt.Fprintf(os.Stderr, "generated %d distinct benign requests\n", n)
+}
+
+// grpcBody builds a gRPC length-prefixed frame around a plausible protobuf
+// message: a couple of varint fields and a string field.
+//
+// The framing bytes are what a text detector must not read as a sentence, and
+// the string field is what it must still inspect.
+func grpcBody(i, j int) string {
+	names := []string{"api-route", "orders-svc", "gateway-01", "tls-modern"}
+	name := names[(i+j)%len(names)]
+
+	var pb []byte
+	pb = append(pb, 0x08, byte(1+i%120))   // field 1 varint
+	pb = append(pb, 0x10, byte(1+j%50))    // field 2 varint
+	pb = append(pb, 0x1a, byte(len(name))) // field 3 length-delimited
+	pb = append(pb, name...)
+	pb = append(pb, 0x20, 0x01) // field 4 varint (bool)
+
+	frame := make([]byte, 5+len(pb))
+	frame[0] = 0
+	frame[1] = byte(len(pb) >> 24)
+	frame[2] = byte(len(pb) >> 16)
+	frame[3] = byte(len(pb) >> 8)
+	frame[4] = byte(len(pb))
+	copy(frame[5:], pb)
+	return string(frame)
 }
 
 // urlEncode percent-encodes a query value.

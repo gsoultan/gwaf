@@ -346,7 +346,7 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 		}
 	}
 
-	tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", b)
+	tx.recordBody(b)
 }
 
 // parseStructuredBody extracts fields, reporting whether parsing succeeded.
@@ -390,6 +390,35 @@ func (tx *Transaction) parseStructuredBody(b []byte, isJSON bool) bool {
 	return true
 }
 
+// recordBody records an unstructured body for inspection.
+//
+// Binary content is not handed to text detectors as one value. Doing so
+// produces matches by chance: the shell rule's "$(" is two bytes, and in a few
+// hundred random bytes it turns up about one time in a hundred. Measured
+// against random protobuf payloads that was 1.2% of gRPC requests blocked with
+// no attacker involved.
+//
+// Instead the printable runs are extracted and inspected individually — a
+// protobuf string field, a filename inside an archive, a comment in an image —
+// while the framing bytes between them are never presented as if they were
+// text. See internal/body/binary.go.
+func (tx *Transaction) recordBody(b []byte) {
+	if !body.IsBinary(b) {
+		tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", b)
+		return
+	}
+
+	tx.bodyParser.Reset(body.Limits{
+		MaxFields:    tx.waf.cfg.limits.MaxArgs,
+		MaxValueLen:  tx.waf.cfg.limits.MaxValueLen,
+		MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
+	})
+	tx.bodyParser.ExtractText([]byte("body"), b, func(name, value []byte, _ body.Kind) bool {
+		tx.recordFieldBytes(types.TargetRequestBody, name, value, false)
+		return true
+	})
+}
+
 // parseMultipartBody extracts every part of a multipart body.
 //
 // Every part is emitted, not merely the first or the last. That is the whole
@@ -425,6 +454,16 @@ func (tx *Transaction) parseMultipartBody(b, boundary []byte) bool {
 			tx.recordFieldBytes(types.TargetArgNames, name, value, false)
 			return true
 		}
+		// An uploaded file is binary for the same reason a protobuf frame is,
+		// and 8 KiB of JPEG is 8 KiB of chances for a short literal to appear.
+		if body.IsBinary(value) {
+			tx.bodyParser.ExtractText(name, value, func(n, v []byte, _ body.Kind) bool {
+				tx.recordFieldBytes(types.TargetArgs, n, v, false)
+				return true
+			})
+			return true
+		}
+
 		inert := tx.checkBodySchema(name, value)
 		tx.recordFieldBytes(types.TargetArgs, name, value, inert)
 		return true

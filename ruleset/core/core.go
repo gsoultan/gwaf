@@ -252,7 +252,22 @@ func requestRules() rules.Set {
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
 			Transforms: decodeChain,
-			Op:         op.ContainsAny("$(", "`;", ";cat/", "|cat/", "&&cat/", ";wget", ";curl", "|nc-"),
+			// Every literal here names a *command*, not merely a metacharacter.
+			//
+			// "$(" alone was here and was wrong at Certain confidence. Two bytes
+			// is not evidence: it is jQuery, it is a Makefile, it is a shell
+			// snippet someone pasted into a bug report -- and in binary content
+			// it appears by chance about once per hundred requests, which
+			// calibration measured as a 1.2% false-positive rate on gRPC
+			// traffic. Command substitution is dangerous when it substitutes a
+			// command, so the literal must include one.
+			Op: op.ContainsAny(
+				";cat/", "|cat/", "&&cat/", ";wget", ";curl", "|nc-",
+				";rm-rf", "&&rm-rf", ";chmod", "|sh-", ";bash-",
+				"$(cat", "$(curl", "$(wget", "$(id", "$(whoami", "$(uname",
+				"$(nc", "$(sh", "$(bash", "$(python", "$(perl",
+				"`cat", "`curl", "`wget", "`id`", "`whoami", "`uname",
+			),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,

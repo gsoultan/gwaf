@@ -270,3 +270,39 @@ it produces them there first — and it did.
 **Power is still bounded.** 1,330 requests validate `High` (1 in 1,000) but not
 `Certain` (1 in 10,000). Only production traffic closes that, and `gwaf
 calibrate` says so on every run.
+
+## Protocol traffic: preflight and gRPC (asked by the adopter, not predicted)
+gateon reported that **Coraza blocks CORS preflight**. Probed gwaf empirically
+rather than reasoning about it.
+
+**Preflight passes, by construction.** The CRS rules that break it — a narrowed
+method allowlist, "missing Accept header" (920300), "POST without
+Content-Length" (920180) — are protocol-conformance rules gwaf never had. There
+is now a test so none arrive by accident. A blocked preflight is the worst
+failure to diagnose: the browser reports only an opaque CORS error with no
+mention of a firewall.
+
+**gRPC exposed a real bug: 1.2% of random protobuf bodies were blocked.** One
+request in eighty-three, no attacker involved. Two causes:
+- Rule 4901's `$(` is **two bytes**; in a few hundred random bytes it appears
+  about 1 in 130.
+- The SQL tokenizer finds tautologies in random bytes.
+
+**Root cause: binary data was being inspected as text.** Fixed by extracting
+**printable runs** (≥8 bytes) from binary content and inspecting those, so
+framing bytes are never presented as a sentence. `IsBinary` sniffs content
+rather than trusting the declared Content-Type, which is attacker-controlled.
+
+Also fixed the underlying precision bug: **`$(` alone is not evidence** at
+Certain confidence — it is jQuery, a Makefile, a pasted shell snippet. Command
+substitution is dangerous when it substitutes a *command*, so the literals now
+name one (`$(cat`, `$(curl`, `` `whoami ``...).
+
+Result: **1.2% → 0.00%** on 3,000 random bodies, detection unchanged at 76/76,
+and payloads inside protobuf string fields (6/6) and JPEG polyglots still caught.
+
+**This also affected uploads** — every multipart file part has 8 KiB inspected,
+and 8 KiB of JPEG is 8 KiB of chances. Same fix covers it.
+
+Corpus now 1,435 requests including preflight and gRPC framing, so this is
+measured every run rather than remembered.

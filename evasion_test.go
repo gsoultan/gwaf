@@ -1018,3 +1018,218 @@ func TestMultipartWithoutBoundaryIsReported(t *testing.T) {
 		t.Error("missing boundary was not reported")
 	}
 }
+
+// ---- protocol traffic: preflight, gRPC, Connect -----------------------------
+
+// grpcFrame wraps a payload in the gRPC length-prefixed framing.
+func grpcFrame(payload []byte) []byte {
+	b := make([]byte, 5+len(payload))
+	b[0] = 0 // uncompressed
+	b[1] = byte(len(payload) >> 24)
+	b[2] = byte(len(payload) >> 16)
+	b[3] = byte(len(payload) >> 8)
+	b[4] = byte(len(payload))
+	copy(b[5:], payload)
+	return b
+}
+
+// TestCORSPreflightIsNotBlocked covers the failure that is hardest to diagnose
+// in production.
+//
+// A blocked preflight surfaces in the browser as an opaque CORS error with no
+// mention of the firewall, so the whole cross-origin API stops working and
+// nobody can see why. CRS breaks these through rules gwaf deliberately never
+// had: a narrowed method allowlist, "missing Accept header", and "POST without
+// Content-Length". This test exists so none of them arrive by accident.
+func TestCORSPreflightIsNotBlocked(t *testing.T) {
+	w := newWAF(t)
+
+	cases := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"simple", map[string]string{
+			"Origin":                         "https://app.example.com",
+			"Access-Control-Request-Method":  "POST",
+			"Access-Control-Request-Headers": "content-type",
+		}},
+		{"many headers", map[string]string{
+			"Origin":                         "https://admin.example.com",
+			"Access-Control-Request-Method":  "PUT",
+			"Access-Control-Request-Headers": "authorization,content-type,x-request-id,connect-protocol-version",
+		}},
+		{"no accept header", map[string]string{
+			"Origin":                        "https://app.example.com",
+			"Access-Control-Request-Method": "DELETE",
+		}},
+		{"null origin", map[string]string{
+			"Origin":                        "null",
+			"Access-Control-Request-Method": "GET",
+		}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("OPTIONS", "/v1/routes", "HTTP/2.0")
+			for k, v := range tt.headers {
+				tx.AddRequestHeader(k, v)
+			}
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Errorf("preflight blocked: rule=%d msg=%q — this breaks every "+
+					"cross-origin request and surfaces only as an opaque CORS error",
+					d.RuleID(), d.Message())
+			}
+		})
+	}
+}
+
+// TestGRPCTrafficIsNotBlocked covers the other protocol that WAFs routinely
+// break: binary framing read as text produces matches by chance.
+func TestGRPCTrafficIsNotBlocked(t *testing.T) {
+	w := newWAF(t)
+
+	// A plausible protobuf message: field 1 string, field 2 varint.
+	pb := append([]byte{0x0a, 0x09}, []byte("api-route")...)
+	pb = append(pb, 0x10, 0x64)
+
+	cases := []struct {
+		name, contentType string
+		body              []byte
+	}{
+		{"grpc", "application/grpc", grpcFrame(pb)},
+		{"grpc+proto", "application/grpc+proto", grpcFrame(pb)},
+		{"grpc-web", "application/grpc-web+proto", grpcFrame(pb)},
+		{"connect proto", "application/connect+proto", grpcFrame(pb)},
+		{"connect json", "application/connect+json", []byte(`{"page":1,"page_size":50}`)},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/gateon.v1.ApiService/ListRoutes", "HTTP/2.0")
+			tx.AddRequestHeader("Content-Type", tt.contentType)
+			tx.AddRequestHeader("TE", "trailers")
+			tx.AddRequestHeader("grpc-timeout", "10S")
+			tx.AddRequestHeader("user-agent", "grpc-go/1.60.0")
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Fatalf("gRPC headers blocked: rule=%d", d.RuleID())
+			}
+			tx.SetRequestBody(tt.body)
+			if d := tx.ProcessRequestBody(); d.Blocked() {
+				t.Errorf("gRPC body blocked: rule=%d msg=%q", d.RuleID(), d.Message())
+			}
+		})
+	}
+}
+
+// TestBinaryBodiesDoNotProduceChanceMatches is the regression test for a
+// measured false-positive rate.
+//
+// Before printable-run extraction, 1.2% of random protobuf payloads were
+// blocked — one request in eighty-three, with no attacker involved. The shell
+// rule's "$(" is two bytes, and two bytes turn up in a few hundred random ones
+// about one time in a hundred and thirty.
+func TestBinaryBodiesDoNotProduceChanceMatches(t *testing.T) {
+	w := newWAF(t)
+
+	// A deterministic pseudo-random sequence: this must not depend on a seed
+	// that happens to be lucky.
+	const iterations = 2000
+	state := uint64(0x9E3779B97F4A7C15)
+	next := func() byte {
+		state ^= state << 13
+		state ^= state >> 7
+		state ^= state << 17
+		return byte(state >> 24)
+	}
+
+	blocked := 0
+	for range iterations {
+		payload := make([]byte, 256)
+		for i := range payload {
+			payload[i] = next()
+		}
+
+		tx := w.NewTransaction()
+		tx.SetRequestLine("POST", "/gateon.v1.ApiService/ListRoutes", "HTTP/2.0")
+		tx.AddRequestHeader("Content-Type", "application/grpc")
+		tx.ProcessRequestHeaders()
+		tx.SetRequestBody(grpcFrame(payload))
+		if d := tx.ProcessRequestBody(); d.Blocked() {
+			blocked++
+			if blocked <= 3 {
+				t.Logf("chance match: rule=%d msg=%q", d.RuleID(), d.Message())
+			}
+		}
+		tx.Close()
+	}
+
+	if blocked > 0 {
+		t.Errorf("%d/%d random binary bodies blocked (%.2f%%) — a text detector "+
+			"is reading binary framing as text",
+			blocked, iterations, 100*float64(blocked)/float64(iterations))
+	}
+}
+
+// TestPayloadsInsideBinaryAreStillCaught is the coverage counterweight. Framing
+// bytes are not inspected; attacker-controlled strings inside them still are.
+func TestPayloadsInsideBinaryAreStillCaught(t *testing.T) {
+	w := newWAF(t)
+
+	pbString := func(s string) []byte {
+		return append([]byte{0x0a, byte(len(s))}, s...)
+	}
+
+	for _, p := range []string{
+		"1 UNION SELECT password FROM users",
+		"1' OR 1=1-- with more text",
+		"<script>alert(1)</script> padding",
+		"../../etc/passwd and more text",
+		"x; cat /etc/passwd extra text",
+	} {
+		t.Run(p, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/gateon.v1.ApiService/UpdateRoute", "HTTP/2.0")
+			tx.AddRequestHeader("Content-Type", "application/grpc")
+			tx.ProcessRequestHeaders()
+
+			body := grpcFrame(append([]byte{0x08, 0x96, 0x01}, pbString(p)...))
+			tx.SetRequestBody(body)
+
+			if d := tx.ProcessRequestBody(); !d.Blocked() {
+				t.Errorf("payload inside a protobuf string field was not caught: %q", p)
+			}
+		})
+	}
+}
+
+// TestUploadPolyglotIsCaught covers the same property for file uploads: binary
+// framing is skipped, embedded script is not.
+func TestUploadPolyglotIsCaught(t *testing.T) {
+	w := newWAF(t)
+
+	jpeg := append([]byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10},
+		[]byte("JFIF\x00\x01\x02")...)
+	content := append(jpeg, []byte("<script>alert(document.cookie)</script>")...)
+	body := "--B\r\nContent-Disposition: form-data; name=\"up\"; filename=\"x.jpg\"\r\n" +
+		"Content-Type: image/jpeg\r\n\r\n" + string(content) + "\r\n--B--\r\n"
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("POST", "/upload", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "multipart/form-data; boundary=B")
+	tx.ProcessRequestHeaders()
+	tx.SetRequestBody([]byte(body))
+
+	if d := tx.ProcessRequestBody(); !d.Blocked() {
+		t.Error("script embedded in an uploaded image was not detected")
+	}
+}
