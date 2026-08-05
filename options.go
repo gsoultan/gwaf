@@ -122,7 +122,14 @@ type config struct {
 	blockCode int
 	onDecide  func(Decision)
 
-	schema *schema.Schema
+	schema     *schema.Schema
+	exceptions rules.Exceptions
+
+	// err carries a validation failure from an option that can fail, so New
+	// reports it. Options are void functions -- the signature is frozen for
+	// third parties -- so the error travels in the config rather than the
+	// return.
+	err error
 
 	// coreDisabled drops the first-party ruleset. Opting out is deliberately
 	// explicit so that shipping an inert WAF is a choice someone made, not a
@@ -255,4 +262,36 @@ func WithBlockStatus(code int) Option {
 // on the request path, so it must not block.
 func OnDecision(fn func(Decision)) Option {
 	return func(c *config) { c.onDecide = fn }
+}
+
+// WithException suppresses one rule in one place.
+//
+// Exceptions are conjunctive and the narrow form is the short one: every field
+// set must match, every field left zero matches anything. Decision.Explain()
+// computes the tightest exception that would have allowed a request it blocked,
+// so the correct fix is the one an operator can copy rather than derive.
+//
+//	waf, err := gwaf.New(gwaf.WithException(rules.Exception{
+//	    RuleID: 7002,
+//	    Path:   "/api/v1/query",
+//	    Key:    "filter[$gt]",
+//	    Note:   "this endpoint publishes Mongo operators as its filter DSL",
+//	}))
+//
+// An exception with nothing set is refused rather than honoured: it would
+// disable every rule everywhere, and a configuration that does that by accident
+// should not be expressible.
+//
+// CLAUDE.md §6 prefers deleting a rule over excepting it. A rule needing
+// exceptions on many routes is a rule that is wrong, not one that needs tuning.
+func WithException(x rules.Exception) Option {
+	return func(c *config) {
+		if err := x.Validate(); err != nil {
+			if c.err == nil {
+				c.err = err
+			}
+			return
+		}
+		c.exceptions = append(c.exceptions, x)
+	}
 }

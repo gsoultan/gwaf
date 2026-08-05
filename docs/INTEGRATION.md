@@ -234,16 +234,46 @@ the "no UI, ever" rule: we don't build the dashboard, we make yours possible.
 ```go
 gwaf.WithEventSink(mySink)     // structured decisions, matched spans, transform chains
 
-exp := waf.Explain(txID)       // same data `gwaf explain` prints — as a struct
+exp := d.Explain()             // same data `gwaf explain` prints — as a struct
 exp.RuleID()                   // what fired
 exp.MatchedSpan()              // the exact bytes, with offsets
+exp.MatchedBytes()             // a copy, so it outlives the transaction
 exp.TransformChain()           // how the input was normalized to get there
+exp.Interpretation()           // which decoding revealed it, if any
 exp.NarrowestException()       // the FP fix, computed for you
 ```
+
+It hangs off the `Decision` you already hold, not off the `WAF`. An earlier
+draft of this document specified `waf.Explain(txID)`, and that API cannot exist:
+looking a transaction up by ID means the WAF remembers transactions, which is
+cross-request state and the first of the five ownership tests. gwaf keeps
+nothing between requests, so the explanation travels with the decision.
+
+`MatchedBytes()` is a copy rather than a view into the transaction arena. The
+arena is recycled on `Close`, and an explanation that dangles into a reused
+buffer would report a different request's bytes with total confidence — worse
+than no explanation at all.
 
 `exp.NarrowestException()` returns the tightest exception that would have allowed the request —
 serialize it straight into a "suppress this finding" button. FP triage becomes a click instead of
 archaeology, and you didn't write the analysis.
+
+Feed it straight back:
+
+```go
+x, _ := d.Explain().NarrowestException()
+waf, err := gwaf.New(gwaf.WithException(x))
+```
+
+The exception is scoped by rule, route, collection, and key, so it silences that
+one finding and nothing else — not the same rule on another route, not another
+argument on the same route. It also covers the rule's *generated counterparts*:
+a body-phase mirror carries a different ID so audit logs stay unambiguous, and
+an exception that did not follow the derivation would leave an operator blocked
+one phase later by an ID they had never seen.
+
+An exception with no field set is refused rather than honoured. It would disable
+every rule everywhere, and that should not be expressible by accident.
 
 If your product needs something the control plane can't get programmatically, that's a **library
 API gap** — file it against tier 1 (CLAUDE.md §1). It is never a reason for gwaf to grow a UI.

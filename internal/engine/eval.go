@@ -68,6 +68,15 @@ type Hit struct {
 	// the payload was only visible under an alternative decoding, which is the
 	// single most useful fact in the audit record for that request.
 	Reading interpret.Class
+
+	// Matched is a copy of the bytes Match points at.
+	//
+	// Copied rather than sliced, because the transformed buffer is recycled
+	// with the transaction and an explanation that dangles into a reused buffer
+	// reports a *different* request's bytes with total confidence. The cost is
+	// one small allocation per hit, and a hit means an attack was found -- the
+	// path where an allocation is affordable, unlike the benign one.
+	Matched []byte
 }
 
 // Result is the outcome of evaluating one phase.
@@ -140,6 +149,10 @@ type Evaluator struct {
 	readings interpret.Set
 
 	ctx rules.EvalContext
+
+	// stages applies transform chains, reusing the prefix shared with the
+	// previous group's chain. See stages.go.
+	stages stages
 }
 
 // NewEvaluator returns an Evaluator sized for a ruleset.
@@ -208,20 +221,27 @@ func (e *Evaluator) Eval(
 			return
 		}
 
-		for _, g := range groups {
-			// Every reading is evaluated. Detection is the union over readings,
-			// which is the safe direction: an extra reading can cost work but
-			// can never cost coverage. Picking one reading and hoping the
-			// origin agrees is the CVE-2026-21876 failure mode.
-			for r := range e.readings.Len() {
-				reading := e.readings.At(r)
+		// Readings outside, groups inside. Both orders evaluate exactly the same
+		// (rule, reading) pairs — detection is the union over readings either
+		// way — but this one lets a group resume from the previous group's
+		// intermediate result, because reuse is only valid within a single
+		// reading's bytes.
+		//
+		// Every reading is evaluated. An extra reading can cost work but can
+		// never cost coverage; picking one and hoping the origin agrees is the
+		// CVE-2026-21876 failure mode.
+		for r := range e.readings.Len() {
+			reading := e.readings.At(r)
+			e.stages.reset(reading.Bytes)
 
+			for _, g := range groups {
 				// The chain is applied once per reading and shared by every
 				// rule in the group — the common-subexpression elimination
-				// from docs/CONCEPT.md §1.3. A chain that changes nothing
-				// returns the input slice, so already-normal traffic performs
-				// no copy at all.
-				data, transformed, ok := e.applyChain(g.Transforms, reading.Bytes, meter)
+				// from docs/CONCEPT.md §1.3 — and now also shared *across*
+				// groups whose chains share a prefix. A chain that changes
+				// nothing returns the input slice, so already-normal traffic
+				// still performs no copy at all.
+				data, transformed, ok := e.stages.apply(g.Transforms, meter)
 				if !ok {
 					out.Exhausted = true
 					return
@@ -332,6 +352,7 @@ func (e *Evaluator) evalRule(
 			Match:       m,
 			Transformed: transformed,
 			Reading:     reading,
+			Matched:     matchedBytes(data, m),
 		})
 
 		if outcome.Kind == rules.ActionScore {
@@ -411,4 +432,20 @@ func targetMatches(targets []types.Target, v *Value) bool {
 		}
 	}
 	return false
+}
+
+// matchedBytes copies the span a match points at, bounded so a malformed span
+// cannot read past the value.
+func matchedBytes(data []byte, m rules.Match) []byte {
+	if m.Span.Len == 0 {
+		return nil
+	}
+	off, end := int(m.Span.Off), int(m.Span.Off)+int(m.Span.Len)
+	if off < 0 || off > len(data) {
+		return nil
+	}
+	if end > len(data) {
+		end = len(data)
+	}
+	return append([]byte(nil), data[off:end]...)
 }

@@ -303,6 +303,21 @@ var evasions = []evasion{
 	{name: "shelli/encoded semicolon", technique: "single-encode",
 		arg: "x%3B%20cat%20%2Fetc%2Fpasswd"},
 	{name: "shelli/body", technique: "none", body: `{"host":"1.1.1.1; cat /etc/passwd"}`},
+
+	// ---- LDAP injection ----------------------------------------------------
+	//
+	// A search filter is a fully parenthesised prefix expression, so the payload
+	// closes the clause it was substituted into and opens one that is already
+	// satisfied. What identifies it is unbalanced structure, not any keyword.
+	{name: "ldapi/or bypass", technique: "none", arg: "*)(uid=*))(|(uid=*"},
+	{name: "ldapi/and close", technique: "none", arg: "admin)(&))"},
+	{name: "ldapi/objectclass", technique: "none", arg: "*)(|(objectClass=*"},
+	{name: "ldapi/password blind", technique: "none", arg: "admin)(|(userPassword=*"},
+	{name: "ldapi/not clause", technique: "none", arg: "x)(!(uid=admin"},
+	{name: "ldapi/nested and", technique: "none", arg: "a)(&(uid=admin)(cn=*"},
+	{name: "ldapi/nul truncate", technique: "null-truncate", arg: `admin\00`},
+	{name: "ldapi/encoded clause", technique: "single-encode", arg: "%2a%29%28uid%3d%2a"},
+	{name: "ldapi/body", technique: "none", body: `{"user":"*)(uid=*))(|(uid=*"}`},
 }
 
 // ---- the benign corpus -----------------------------------------------------
@@ -444,6 +459,21 @@ var benignTraffic = []benignCase{
 	{name: "sprintf format", arg: "Total: %d items (%s)"},
 	{name: "json body with template", body: `{"subject":"Welcome {{first_name}}!"}`},
 
+	// ---- parentheses and filter vocabulary that is ordinary ----------------
+	//
+	// The LDAP counterweight. Parentheses, ampersands, pipes, and asterisks are
+	// all common; only their combination in filter position is evidence.
+	{name: "company with parens", arg: "Smith & Sons (Ltd)"},
+	{name: "prose with parens", arg: "see (note 4) for details"},
+	{name: "phone with parens", arg: "(0800) 555-0100"},
+	{name: "irish surname", arg: "O'Brien (Sales)"},
+	{name: "distinguished name", arg: "cn=Alice Smith,ou=People,dc=example,dc=com"},
+	{name: "well formed filter", arg: "(&(objectClass=person)(uid=alice))"},
+	{name: "bare wildcard", arg: "*"},
+	{name: "prefix wildcard", arg: "search*"},
+	{name: "pipe alternatives", arg: "a|b|c"},
+	{name: "smiley", arg: "thanks :)"},
+
 	// ---- $-prefixed keys that are ordinary ---------------------------------
 	//
 	// The NoSQL counterweight. JSON Schema, JSON reference, and OData all use
@@ -571,6 +601,7 @@ var declaredClasses = map[string]int{
 	"ssti":      8,
 	"shelli":    8,
 	"scanner":   1,
+	"ldapi":     8,
 }
 
 // classOf returns the attack class a case belongs to, taken from its name.

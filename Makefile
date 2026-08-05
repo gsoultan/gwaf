@@ -3,6 +3,13 @@
 GO      ?= go
 FUZZTIME ?= 30s
 
+# gwaf is multi-module by design: integrations live outside the core module so
+# that importing gwaf never drags in a framework somebody did not choose
+# (CLAUDE.md §3). Every target that walks the tree has to walk all of them, or
+# the split silently stops being checked -- which is worse than not splitting,
+# because the invariant then only appears to hold.
+MODULES ?= . ./middleware ./examples
+
 .DEFAULT_GOAL := check
 
 ## check: everything CI runs.
@@ -22,24 +29,32 @@ fmt-check:
 
 .PHONY: vet
 vet:
-	$(GO) vet ./...
+	@for m in $(MODULES); do \
+		echo "vet $$m"; (cd $$m && $(GO) vet ./...) || exit 1; \
+	done
 
 ## lint: staticcheck, when installed.
 .PHONY: lint
 lint:
 	@if command -v staticcheck >/dev/null 2>&1; then \
-		staticcheck ./...; \
+		for m in $(MODULES); do \
+			echo "staticcheck $$m"; (cd $$m && staticcheck ./...) || exit 1; \
+		done; \
 	else \
 		echo "staticcheck not installed; skipping (go install honnef.co/go/tools/cmd/staticcheck@latest)"; \
 	fi
 
 .PHONY: test
 test:
-	$(GO) test ./...
+	@for m in $(MODULES); do \
+		echo "test $$m"; (cd $$m && $(GO) test ./...) || exit 1; \
+	done
 
 .PHONY: race
 race:
-	$(GO) test -race ./...
+	@for m in $(MODULES); do \
+		echo "race $$m"; (cd $$m && $(GO) test -race ./...) || exit 1; \
+	done
 
 ## calibrate: measure each rule's false-positive rate against the benign corpus.
 ##

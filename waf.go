@@ -47,6 +47,10 @@ func New(opts ...Option) (*WAF, error) {
 		}
 	}
 
+	if cfg.err != nil {
+		return nil, cfg.err
+	}
+
 	// With no ruleset supplied, load the core set. New() with zero arguments
 	// must return a WAF that actually protects something: requiring
 	// configuration before a library does its job is how integrations end up

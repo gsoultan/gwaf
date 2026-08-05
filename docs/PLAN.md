@@ -94,7 +94,14 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        than a lattice. Six ambiguity classes including UTF-7 (CVE-2026-21876).
        76/76 evasion corpus, 0/72 false positives, 1× cost on unambiguous input.
        The lattice is not needed until profiles show ambiguous traffic is common.
-4. [~] Semantic detectors. **SQLi and XSS shipped** (`detect/sqli`): tokenizes the value
+4. [x] Semantic detectors — **all seven shipped**: sqli, xss, shelli, ssti,
+       nosqli, ldapi, plus traversal carried by canonicalization. The three
+       literal rule families they replaced included two active false positives.
+       Details below.
+
+   Original entry, kept for the history:
+
+   [~] Semantic detectors. **SQLi and XSS shipped** (`detect/sqli`): tokenizes the value
        and scores grammar rather than matching strings, under four interpolation
        contexts so quote-breaking is visible. 48/48 payload variants, 0/56
        false positives on prose. `detect/xss` reads markup structure in
@@ -171,6 +178,7 @@ few cases behind the claim.
 | Class | Detector | Corpus | Confidence |
 |---|---|---|---|
 | SQL injection | `detect/sqli` structural | 21/21 | Certain |
+| LDAP injection | `detect/ldapi` structural | 9/9 | Certain |
 | Cross-site scripting | `detect/xss` structural | 20/20 | Certain |
 | Command injection | `detect/shelli` structural | 16/16 | Certain |
 | Path traversal | canonicalization + literals | 14/14 | Certain |
@@ -179,13 +187,12 @@ few cases behind the claim.
 | NoSQL injection | `detect/nosqli` structural | 12/12 | Certain / High |
 | Scanners | literals | 3/3 | High |
 
-Detection 118/118, false positives 0/114. Neither number means anything alone.
+Detection 127/127, false positives 0/124. Neither number means anything alone.
 
 Still literal-only, and therefore still on the wrong side of the thesis: LFI
-wrappers, sensitive-file access, and scanner detection. LDAP injection has no
-detector and no corpus, and is deliberately not in `declaredClasses` yet —
-claiming a class without cases behind it is the failure this table exists to
-prevent.
+wrappers, sensitive-file access, and scanner detection. Path traversal is
+carried by canonicalization rather than by a grammar, which is defensible —
+traversal *is* a decoding problem — but it should be stated rather than assumed.
 
 ## M3 — Schema + integration (weeks 14–24)
 
@@ -204,9 +211,12 @@ and the framework adapters belong.
 2. [ ] **OpenAPI 3.1 frontend** — a separate module, since YAML needs a
        dependency the core will not carry. Compiles down to `schema.Operation`,
        exactly as rule frontends compile to one IR.
-3. [ ] **Compile-time per-route plan pruning** — the other half of §6. The
-       per-value form already delivers most of the benefit; measure before
-       building the machinery.
+3. [ ] **Compile-time per-route plan pruning** — the other half of §6, and now
+       the measured route to the one unmet SLO. Benign POST with a 1 KiB JSON
+       body sits at ~17µs against a 15µs target; transform-prefix reuse took
+       ~11% off it and the remainder is the evaluation loop itself (Eval is
+       ~80% of the profile). Making each rule cheaper has run out of room —
+       what is left is evaluating fewer of them.
 4. [ ] **Context-aware confidence from schema** (§9)
 4. [ ] GraphQL depth/complexity/introspection; gRPC frame + protobuf
 5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation

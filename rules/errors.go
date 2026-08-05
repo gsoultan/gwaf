@@ -52,3 +52,8 @@ func (e *RuleError) Unwrap() error { return e.Err }
 func ruleErr(id types.RuleID, field string, err error, hint string) *RuleError {
 	return &RuleError{ID: id, Field: field, Err: err, Hint: hint}
 }
+
+// ErrExceptionTooBroad reports an exception with no field set, which would
+// suppress every rule everywhere. Refusing it is the point: an exception is a
+// scalpel, and one with nothing set is a switch labelled "off".
+var ErrExceptionTooBroad = errors.New("rules: exception matches everything; set at least RuleID")

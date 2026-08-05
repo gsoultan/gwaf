@@ -126,6 +126,15 @@ type Decision struct {
 	reading interpret.Class
 	detail  string
 
+	// path and matchedBytes exist for Explain, which needs to name the route an
+	// exception should be scoped to and to show the bytes that matched.
+	path         string
+	matchedBytes []byte
+
+	// derivedFrom is the authored rule this one was generated from, so Explain
+	// can suggest an exception that covers both phases rather than one.
+	derivedFrom types.RuleID
+
 	// rulesEvaluated is the leading indicator for latency: on benign traffic it
 	// must be zero, and a drift above zero means the prefilter has stopped
 	// doing its job.

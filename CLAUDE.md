@@ -173,7 +173,7 @@ L4  behavioral  Rate limits, JA4 fingerprints, bot scoring, reputation.
 | Metric | Target |
 |---|---|
 | Benign GET, no body | p50 < 2 µs, **0 allocations** |
-| Benign POST, 1 KB JSON, core ruleset | p50 < 15 µs, < 4 KB |
+| Benign POST, 1 KB JSON, core ruleset | p50 < 15 µs, < 4 KB — **not met: ~17 µs, see bench/baseline.txt** |
 | p99, any workload | < 100 µs |
 | Rules evaluated / benign request | **0** |
 | Resident ruleset, 10k rules | < 16 MB, shared, off-heap |

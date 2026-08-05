@@ -31,6 +31,8 @@ func main() {
 		err = runCalibrate(os.Args[2:])
 	case "lint":
 		err = runLint(os.Args[2:])
+	case "explain":
+		err = runExplain(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -51,8 +53,13 @@ func usage() {
 
   calibrate   measure each rule's false-positive rate against a benign corpus
   lint        report prefilter coverage and the cost of unconditional rules
+  explain     describe a rule, or replay a request and explain the outcome
 
-Both are compile-time tools. Neither runs on the request path.
+    gwaf explain 7002
+    gwaf explain -arg 'q=1'"'"' OR 1=1--'
+
+All three are compile-time tools. None runs on the request path, and none
+contains detection logic -- they are drivers over the library.
 `)
 }
 

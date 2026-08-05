@@ -29,6 +29,11 @@ type Transaction struct {
 	meter budget.Meter
 	arena memz.Arena
 
+	// reqPath is the request path with the query stripped. Explain scopes its
+	// suggested exception to the route, so the narrow form it hands back
+	// suppresses one finding rather than a rule everywhere.
+	reqPath string
+
 	values []engine.Value
 
 	// spans records where each value's key and data live in the arena, so both
@@ -129,6 +134,7 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.violatedAt = ""
 	tx.bodyErr = nil
 	tx.bodyParseFailed = ""
+	tx.reqPath = ""
 	tx.contentType = ""
 	tx.contentEncoding = ""
 	tx.undecodable = ""
@@ -242,6 +248,7 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 		path, query = target[:i], target[i+1:]
 	}
 	tx.addValue(types.Target{Kind: types.TargetRequestPath}, "", path)
+	tx.reqPath = path
 
 	// Resolve the schema operation now, so that arguments recorded afterwards
 	// can be validated and marked as they arrive rather than in a second pass.
@@ -1089,6 +1096,51 @@ func (tx *Transaction) appendValue(target types.Target, keySpan, dataSpan types.
 	})
 }
 
+// applyExceptions drops the hits an embedder has scoped away, and takes their
+// score with them.
+//
+// Removing the score matters as much as removing the hit. A suppressed finding
+// that still contributes to the anomaly total blocks the request anyway, one
+// rule later, with a message naming a rule the operator did not except -- which
+// is the most confusing possible outcome of adding an exception.
+//
+// Runs after evaluation rather than before it, because the exception is scoped
+// by target and key, and neither is known until a rule has actually matched
+// something. The cost lands only on requests that produced a hit.
+func (tx *Transaction) applyExceptions() {
+	xs := tx.waf.cfg.exceptions
+	if len(xs) == 0 || len(tx.result.Hits) == 0 {
+		return
+	}
+
+	kept := tx.result.Hits[:0]
+	for i := range tx.result.Hits {
+		h := &tx.result.Hits[i]
+		if _, ok := xs.Suppresses(h.Rule.Rule.ID, h.Rule.Rule.DerivedFrom,
+			tx.reqPath, h.Target, h.Key); ok {
+			if h.Outcome.Kind == rules.ActionScore {
+				score := h.Outcome.Score
+				if score == 0 {
+					score = h.Rule.Rule.Severity.Score()
+				}
+				tx.result.Score -= score
+			}
+			if h.Outcome.Terminal() {
+				tx.result.Terminal = false
+			}
+			continue
+		}
+		kept = append(kept, *h)
+	}
+	tx.result.Hits = kept
+
+	// A terminal action may have stopped evaluation early; if the rule that
+	// stopped it was excepted, the remaining hits still stand on their own.
+	if tx.result.Score < 0 {
+		tx.result.Score = 0
+	}
+}
+
 // runPhase evaluates one phase and folds the result into the transaction.
 func (tx *Transaction) runPhase(phase types.Phase) Decision {
 	if tx.decided {
@@ -1110,6 +1162,8 @@ func (tx *Transaction) runPhase(phase types.Phase) Decision {
 
 	tx.result.Reset()
 	tx.eval.Eval(tx.rs, phase, values, &tx.meter, &tx.result)
+
+	tx.applyExceptions()
 
 	tx.score += tx.result.Score
 	tx.evaluated += tx.result.RulesEvaluated
@@ -1191,6 +1245,8 @@ func (tx *Transaction) blockDecision(reason Reason, status int, rule *rules.Comp
 				d.target = tx.result.Hits[i].Target
 				d.key = tx.result.Hits[i].Key
 				d.reading = tx.result.Hits[i].Reading
+				d.matchedBytes = tx.result.Hits[i].Matched
+				d.derivedFrom = tx.result.Hits[i].Rule.Rule.DerivedFrom
 				break
 			}
 		}
@@ -1335,6 +1391,7 @@ func (tx *Transaction) limitExceeded(string) Decision {
 
 // finish records a terminal decision and notifies the callback.
 func (tx *Transaction) finish(d Decision) Decision {
+	d.path = tx.reqPath
 	tx.decided = true
 	tx.decision = d
 	if fn := tx.waf.cfg.onDecide; fn != nil {

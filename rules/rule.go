@@ -20,6 +20,19 @@ import (
 // A Rule is immutable once compiled and is shared across every transaction that
 // evaluates it, so it and everything reachable from it must be concurrent-safe.
 type Rule struct {
+	// DerivedFrom names the rule this one was generated from, or zero when it
+	// was authored directly.
+	//
+	// Generated counterparts -- the request-body mirror of a header-phase rule,
+	// the response-body mirror of a header one -- are the same detection at a
+	// different phase, and they carry different IDs so audit logs stay
+	// unambiguous. An exception written against the original therefore has to
+	// cover the derivative, or an operator excepts "SQL injection on this
+	// field" and is blocked one phase later by "SQL injection (body)" with an
+	// ID they have never seen. That is the most confusing possible outcome of
+	// adding an exception, so the relationship is recorded rather than inferred.
+	DerivedFrom types.RuleID
+
 	// ID is the stable public identifier. User rules must be in the range
 	// types.UserMin..types.UserMax; the compiler rejects collisions and rules
 	// placed in reserved ranges.

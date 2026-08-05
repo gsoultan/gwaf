@@ -519,3 +519,110 @@ reading and is reported.
 ## Open: BenignPOSTJSON is 18.5us against a 15us SLO
 Pre-existing, not a regression (HEAD measured 18.7us before this work). Recorded
 so it is not mistaken for new.
+
+## SHIPPED: detect/ldapi — unbalanced structure, not keywords
+An LDAP filter is a fully parenthesised prefix expression, so the payload closes
+the clause it was substituted into and opens one that is already satisfied. What
+identifies it is *unbalanced parentheses plus a filter operator in filter
+position* — not any attribute name. Enumerating attributes would be the SQL
+keyword-list mistake again: the schema is site-specific, the grammar is not.
+
+Parentheses, "&", "|", and "*" are each ordinary alone — "Smith & Sons (Ltd)",
+"thanks :)", "search*" — so nothing fires alone except a NUL byte.
+
+**The fuzz harness corrected the weights.** With imbalance at 3 and always-true
+at 2, "*)" scored 5 with no declared literal covering it, so the prefilter would
+have dropped it and the rule could never have fired on it. Reweighted to 2/2/3/5
+so reaching the threshold *always* requires an injected clause or a NUL — which
+is what makes the literal set exhaustive. TestThresholdRequiresAnInjectedClause
+now states that property directly, because a future reweighting would otherwise
+break the prefilter silently.
+
+## SHIPPED: Explain, and a documented API that could not exist
+docs/INTEGRATION.md specified `waf.Explain(txID)`. That API **cannot exist**:
+looking a transaction up by ID means the WAF remembers transactions, which is
+cross-request state and the first ownership test. The explanation now travels
+with the `Decision` the caller already holds.
+
+`MatchedBytes` is **copied**, not a view into the transaction arena. The arena
+is recycled on Close, so a borrowed slice would report a *different* request's
+bytes with total confidence — worse than no explanation. TestExplainSurvivesClose
+churns the pool to prove it.
+
+## SHIPPED: rules.Exception, and why the narrow form is the short one
+A tuning API where the blunt instrument is easier to type produces blunt
+instruments. Exceptions are conjunctive: every field set must match, every field
+left zero matches anything, so `{RuleID: 7002}` looks as wide as it is and the
+narrow form is the specific one. An exception with nothing set is **refused** —
+it would disable every rule everywhere.
+
+`NarrowestException()` computes the tightest suppression for a finding that
+already happened, so the correct fix is the one an operator copies rather than
+derives. Under time pressure the exception a human writes is the rule-wide one.
+
+**Two bugs found by writing the tests:**
+1. **A suppressed hit still contributed its score**, so the request blocked one
+   rule later with a message naming a rule the operator never excepted — the
+   most confusing possible outcome of adding an exception. `applyExceptions`
+   removes the score with the hit.
+2. **Generated mirrors have different IDs**, so an exception on the authored
+   rule did not cover its body-phase counterpart. Added `Rule.DerivedFrom`: the
+   mirror *is* the same detection at another phase, so the relationship is
+   recorded rather than inferred, and `NarrowestException` suggests the authored
+   ID so the exception covers every phase.
+
+## SHIPPED: multi-module — middleware and examples split out
+CLAUDE.md §3 has always marked `middleware/` as a separate module; it was inside
+the core module. Nothing there needs a third-party package today — net/http is
+stdlib — **and that is exactly why the split had to happen before it does**.
+Once gin, echo, and fiber adapters sit alongside it, one module puts all four in
+the graph of every embedder who wants one, and the zero-dependency invariant is
+already lost.
+
+`examples/` became a module too, because it imports the integrations and a
+library must never depend on its own integrations. Side benefit: the examples
+now resolve gwaf exactly the way an embedder does, so an example that compiles
+is evidence the public API is usable from outside.
+
+The Makefile walks `MODULES` for vet/lint/test/race. A split that CI does not
+check is worse than no split — the invariant only *appears* to hold.
+
+## SHIPPED: transform-prefix reuse (internal/engine/stages.go)
+Chain grouping applied a chain once per group; the redundancy left was *between*
+groups. The core chains are [lowercase], [url_decode],
+[url_decode lowercase normalize_path], [url_decode lowercase remove_whitespace]
+— eight transform applications per value where five suffice, and 32% of the
+profile on a benign 1 KiB JSON body.
+
+Groups are now sorted so shared prefixes are adjacent, and each chain depth
+keeps its own buffer so an intermediate result survives for the next chain to
+resume from. Ping-ponging two buffers cannot do this — that is the whole reason
+for the staging array.
+
+The group/reading loops were **inverted** (readings outside, groups inside)
+because reuse is only valid within one reading's bytes. Both orders evaluate the
+same (rule, reading) pairs; for benign traffic there is exactly one reading, so
+nothing changes semantically at all.
+
+**Measured, interleaved A/B, minimum of 6 runs:** benign GET −14.5%, benign POST
+JSON −11.0%. Detection identical (127/127, 0/124), zero allocations preserved,
+ruleset scaling still flat.
+
+*Methodology note:* the first attempt reported benign GET +36.9% and
+RulesetScaling/100 +136% — nonsense for a change that strictly removes work. The
+machine had gone busy mid-run (1554 ns → 7719 ns within one sample set). A
+change that cannot cost work and appears to cost 136% is a measurement problem,
+not a result. Interleaving A/B and taking minima fixed it.
+
+## The 15us SLO is not met, and is now recorded as such
+Benign POST with a 1 KiB JSON body: ~17us against a 15us target. It has never
+been met — the previous bench/baseline.txt recorded 30.3us and did not flag it.
+
+Eval is ~80% of the profile with the Aho-Corasick scan the largest component.
+Making each rule cheaper has run out of room; the remaining route is **per-route
+plan pruning** (CONCEPT.md §6, PLAN.md M3.3), which evaluates fewer rules rather
+than cheaper ones.
+
+Recorded in CLAUDE.md §2, bench/baseline.txt, and PLAN.md rather than quietly
+rebaselined. A benchmark file that ratchets to whatever the code currently does
+is not a gate.

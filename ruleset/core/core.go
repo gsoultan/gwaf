@@ -16,6 +16,7 @@
 package core
 
 import (
+	"github.com/gsoultan/gwaf/detect/ldapi"
 	"github.com/gsoultan/gwaf/detect/nosqli"
 	"github.com/gsoultan/gwaf/detect/shelli"
 	"github.com/gsoultan/gwaf/detect/sqli"
@@ -37,6 +38,7 @@ import (
 //	6,000–6,999  response-side disclosure
 //	7,000–7,999  NoSQL injection
 //	8,000–8,999  server-side template injection
+//	9,000–9,999  LDAP injection
 //
 // An authored ID must end below 100 within its band, because the generated
 // body-phase counterpart is the ID plus 900 (see bodyPhaseOffset) and has to
@@ -109,6 +111,9 @@ const (
 
 	// 8,000-8,999: server-side template injection.
 	IDSSTIExpression types.RuleID = 8001
+
+	// 9,000-9,999: LDAP injection.
+	IDLDAPiFilter types.RuleID = 9001
 )
 
 // argTargets are the request values an injection rule inspects. Header values
@@ -334,6 +339,25 @@ func requestRules() rules.Set {
 			Confidence: types.High,
 			Msg:        "NoSQL injection: query operator in parameter name",
 			Tags:       []string{"nosqli", "owasp-a03", "semantic"},
+		},
+
+		// ---- LDAP injection --------------------------------------------------
+		{
+			ID:      IDLDAPiFilter,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// Percent-decoding only. The detector counts parentheses and reads
+			// what follows them, so stripping whitespace or folding case would
+			// leave the structure intact but is pointless work -- and the
+			// filter grammar is case-insensitive in exactly the places this
+			// does not look at.
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op:         ldapi.Operator(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "LDAP injection (structural)",
+			Tags:       []string{"ldapi", "owasp-a03", "semantic"},
 		},
 
 		// ---- Server-side template injection ---------------------------------
@@ -566,6 +590,7 @@ const bodyPhaseOffset types.RuleID = 900
 func mirrorToBody(r rules.Rule) rules.Rule {
 	m := r
 	m.ID = r.ID + bodyPhaseOffset
+	m.DerivedFrom = r.ID
 	m.Phase = types.PhaseRequestBody
 	m.Targets = bodyTargetsFor(r.Targets)
 	m.Msg = r.Msg + " (body)"

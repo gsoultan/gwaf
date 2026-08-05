@@ -5,15 +5,11 @@ package gwaf_test
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gsoultan/gwaf"
-	"github.com/gsoultan/gwaf/middleware"
 )
 
 // respond drives a full request and response through a transaction.
@@ -178,68 +174,6 @@ func TestGwafNeverBuffers(t *testing.T) {
 	}
 	if d.Reason() != gwaf.ReasonNoMatch {
 		t.Errorf("Reason() = %v", d.Reason())
-	}
-}
-
-// ---- middleware ------------------------------------------------------------
-
-// TestMiddlewareResponseInspection covers the option that used to buffer the
-// response and inspect nothing — pure cost for no benefit.
-func TestMiddlewareResponseInspection(t *testing.T) {
-	w := newWAF(t)
-
-	leaky := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		rw.Header().Set("Content-Type", "text/plain")
-		_, _ = io.WriteString(rw,
-			"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA...\n")
-	})
-
-	t.Run("inspection on", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		middleware.HTTP(w, middleware.WithResponseInspection(1<<20))(leaky).
-			ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/key", nil))
-
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("status = %d, want 403", rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), "PRIVATE KEY") {
-			t.Error("the private key reached the client")
-		}
-	})
-
-	t.Run("inspection off", func(t *testing.T) {
-		// Off by default, so the response is untouched — the embedder opted out.
-		rec := httptest.NewRecorder()
-		middleware.HTTP(w)(leaky).
-			ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/key", nil))
-
-		if rec.Code != http.StatusOK {
-			t.Errorf("status = %d, want 200", rec.Code)
-		}
-	})
-}
-
-func TestMiddlewareBenignResponseUnchanged(t *testing.T) {
-	w := newWAF(t)
-
-	h := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(rw, `{"id":42,"status":"created"}`)
-	})
-
-	rec := httptest.NewRecorder()
-	middleware.HTTP(w, middleware.WithResponseInspection(1<<20))(h).
-		ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/orders", nil))
-
-	if rec.Code != http.StatusCreated {
-		t.Errorf("status = %d, want 201 — the handler's status was lost", rec.Code)
-	}
-	if got := rec.Body.String(); got != `{"id":42,"status":"created"}` {
-		t.Errorf("body = %q, want the handler's output", got)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("Content-Type = %q, want the handler's", ct)
 	}
 }
 

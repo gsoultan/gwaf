@@ -79,12 +79,45 @@ type ChainGroup struct {
 	Unconditional []int
 }
 
+// sortGroupsByChain orders a phase's groups so that chains sharing a prefix are
+// adjacent.
+//
+// This is what makes prefix reuse possible in the evaluator. The core ruleset's
+// chains are [lowercase], [url_decode], [url_decode lowercase normalize_path],
+// and [url_decode lowercase remove_whitespace]: applied independently that is
+// eight transform applications per value, and applied in sorted order, each
+// resuming where the previous left off, it is five. The saving is structural
+// rather than a micro-optimisation, and it grows with the ruleset — a chain
+// added to an existing family costs only its own last step.
+func sortGroupsByChain(groups []*ChainGroup) {
+	slices.SortStableFunc(groups, func(a, b *ChainGroup) int {
+		for i := 0; i < len(a.Transforms) && i < len(b.Transforms); i++ {
+			if c := strings.Compare(a.Transforms[i].Name(), b.Transforms[i].Name()); c != 0 {
+				return c
+			}
+		}
+		return len(a.Transforms) - len(b.Transforms)
+	})
+}
+
 // phasePlan holds everything needed to evaluate one phase.
 type phasePlan struct {
 	groups []*ChainGroup
 	rules  []*CompiledRule // every rule in the phase, for reporting
 	// maxGroupRules sizes the candidate bitset.
 	maxGroupRules int
+	// maxChainLen sizes the evaluator's per-depth staging buffers, which is
+	// what lets one group resume where the previous one left off.
+	maxChainLen int
+}
+
+// maxChainLen returns the longest transform chain among the groups.
+func maxChainLen(groups []*ChainGroup) int {
+	n := 0
+	for _, g := range groups {
+		n = max(n, len(g.Transforms))
+	}
+	return n
 }
 
 // Ruleset is a compiled, immutable, concurrency-safe plan.
@@ -241,7 +274,9 @@ func Compile(set Set, opts Options) (*Ruleset, error) {
 	rs.report.Rules = len(rs.all)
 	rs.report.Literals = len(literals)
 	for p := range rs.phases {
+		sortGroupsByChain(rs.phases[p].groups)
 		rs.report.ChainGroups += len(rs.phases[p].groups)
+		rs.phases[p].maxChainLen = maxChainLen(rs.phases[p].groups)
 	}
 	return rs, nil
 }
@@ -378,6 +413,15 @@ func (rs *Ruleset) PhaseRules(p types.Phase) []*CompiledRule {
 		return nil
 	}
 	return rs.phases[p].rules
+}
+
+// MaxChainLen returns the longest transform chain in a phase, so the evaluator
+// can size its staging buffers once.
+func (rs *Ruleset) MaxChainLen(p types.Phase) int {
+	if int(p) >= len(rs.phases) {
+		return 0
+	}
+	return rs.phases[p].maxChainLen
 }
 
 // Groups returns the transform-chain groups for a phase. The engine walks these

@@ -199,6 +199,54 @@ func (k TargetKind) caseInsensitiveKeys() bool {
 }
 
 // String implements fmt.Stringer.
+// ConstName returns the Go identifier for this kind, so generated snippets --
+// the exception Explain suggests, for one -- paste in and compile rather than
+// needing a lookup table on the reader's side.
+func (k TargetKind) ConstName() string {
+	switch k {
+	case TargetRequestMethod:
+		return "TargetRequestMethod"
+	case TargetRequestURI:
+		return "TargetRequestURI"
+	case TargetRequestPath:
+		return "TargetRequestPath"
+	case TargetRequestProtocol:
+		return "TargetRequestProtocol"
+	case TargetRequestHeaders:
+		return "TargetRequestHeaders"
+	case TargetRequestHeaderNames:
+		return "TargetRequestHeaderNames"
+	case TargetArgs:
+		return "TargetArgs"
+	case TargetArgNames:
+		return "TargetArgNames"
+	case TargetArgsGet:
+		return "TargetArgsGet"
+	case TargetArgsPost:
+		return "TargetArgsPost"
+	case TargetArgsJoined:
+		return "TargetArgsJoined"
+	case TargetRequestBody:
+		return "TargetRequestBody"
+	case TargetRequestCookies:
+		return "TargetRequestCookies"
+	case TargetRequestCookieNames:
+		return "TargetRequestCookieNames"
+	case TargetRemoteAddr:
+		return "TargetRemoteAddr"
+	case TargetResponseStatus:
+		return "TargetResponseStatus"
+	case TargetResponseHeaders:
+		return "TargetResponseHeaders"
+	case TargetResponseHeaderNames:
+		return "TargetResponseHeaderNames"
+	case TargetResponseBody:
+		return "TargetResponseBody"
+	default:
+		return "TargetInvalid"
+	}
+}
+
 func (t Target) String() string {
 	if t.Name == "" {
 		return t.Kind.String()
