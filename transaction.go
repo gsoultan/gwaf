@@ -216,6 +216,10 @@ func (tx *Transaction) runPhase(phase types.Phase) Decision {
 		return tx.budgetExhausted()
 	}
 
+	if tx.result.Undecidable {
+		return tx.undecidable(tx.result.UndecidableReason)
+	}
+
 	if tx.result.Terminal {
 		out := tx.result.TerminalOutcome
 		if out.Kind == rules.ActionAllow {
@@ -284,6 +288,7 @@ func (tx *Transaction) blockDecision(reason Reason, status int, rule *rules.Comp
 				d.hit = &m
 				d.target = tx.result.Hits[i].Target
 				d.key = tx.result.Hits[i].Key
+				d.reading = tx.result.Hits[i].Reading
 				break
 			}
 		}
@@ -303,6 +308,26 @@ func (tx *Transaction) budgetExhausted() Decision {
 		reason:         ReasonBudget,
 		score:          tx.score,
 		status:         tx.waf.cfg.blockCode,
+		rulesEvaluated: tx.evaluated,
+	}
+	if tx.waf.cfg.failMode == FailClosed && tx.waf.cfg.mode == Blocking {
+		d.verdict = VerdictBlock
+	}
+	return tx.finish(d)
+}
+
+// undecidable rejects input too ambiguous to analyse, per the fail mode.
+//
+// Allowing here would assert that a value gwaf could not fully read is clean,
+// which is the assumption CVE-2026-21876 turned into a bypass. Under FailOpen
+// the request proceeds, but the reason travels with the decision so the choice
+// is visible rather than implied.
+func (tx *Transaction) undecidable(reason string) Decision {
+	d := Decision{
+		reason:         ReasonUndecidable,
+		score:          tx.score,
+		status:         tx.waf.cfg.blockCode,
+		detail:         reason,
 		rulesEvaluated: tx.evaluated,
 	}
 	if tx.waf.cfg.failMode == FailClosed && tx.waf.cfg.mode == Blocking {

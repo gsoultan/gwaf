@@ -90,7 +90,10 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        Kill criterion invoked on performance rather than correctness. See CONCEPT.md §3 and
        `bench/transducer-experiment.txt`. The materialized path plus chain-level CSE already
        delivers the zero-allocation result the transducer was supposed to buy.
-3. [ ] Decode lattice + NFA simulation, bounded interpretations ← **next**
+3. [x] **Multi-interpretation decoding** — shipped as conditional enumeration rather
+       than a lattice. Six ambiguity classes including UTF-7 (CVE-2026-21876).
+       76/76 evasion corpus, 0/72 false positives, 1× cost on unambiguous input.
+       The lattice is not needed until profiles show ambiguous traffic is common.
 4. [ ] Semantic detectors: **SQLi → XSS** first, then shell, path traversal, SSTI, NoSQL, LDAP
 5. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
 6. [ ] **SecLang parser** (pulled forward — gateon's DB requires it)

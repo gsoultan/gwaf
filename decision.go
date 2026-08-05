@@ -3,6 +3,7 @@
 package gwaf
 
 import (
+	"github.com/gsoultan/gwaf/internal/interpret"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -52,6 +53,14 @@ const (
 
 	// ReasonLimit means a hard input limit was exceeded before rules ran.
 	ReasonLimit
+
+	// ReasonUndecidable means the input had more plausible interpretations than
+	// gwaf will enumerate, so no verdict about it would be meaningful.
+	//
+	// This is deliberately distinct from ReasonNoMatch. A value too ambiguous
+	// to analyse has not been shown to be clean, and reporting it as clean is
+	// exactly the assumption that CVE-2026-21876 exploited.
+	ReasonUndecidable
 )
 
 // String implements fmt.Stringer.
@@ -67,6 +76,8 @@ func (r Reason) String() string {
 		return "budget_exhausted"
 	case ReasonLimit:
 		return "limit_exceeded"
+	case ReasonUndecidable:
+		return "undecidable"
 	default:
 		return "invalid"
 	}
@@ -88,6 +99,8 @@ type Decision struct {
 	hit     *rules.Match
 	target  types.Target
 	key     string
+	reading interpret.Class
+	detail  string
 
 	// rulesEvaluated is the leading indicator for latency: on benign traffic it
 	// must be zero, and a drift above zero means the prefilter has stopped
@@ -160,6 +173,18 @@ func (d Decision) MatchedSpan() (types.Span, bool) {
 	}
 	return d.hit.Span, true
 }
+
+// Interpretation names the alternative decoding under which the match was
+// found, or "none" when it matched the value exactly as sent.
+//
+// A non-"none" value is the most useful line in the audit record for that
+// request: it says the payload was invisible in the bytes on the wire and only
+// appeared once the value was read the way the origin would read it.
+func (d Decision) Interpretation() string { return d.reading.String() }
+
+// Detail returns extra context for decisions that have no responsible rule,
+// such as why the input was undecidable. It is empty otherwise.
+func (d Decision) Detail() string { return d.detail }
 
 // RulesEvaluated returns how many operators actually ran.
 func (d Decision) RulesEvaluated() int { return d.rulesEvaluated }

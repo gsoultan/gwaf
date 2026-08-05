@@ -41,6 +41,12 @@ test:
 race:
 	$(GO) test -race ./...
 
+## corpus: detection rate and false-positive rate, reported together.
+.PHONY: corpus
+corpus:
+	$(GO) test -run 'TestEvasionCorpus|TestBenignCorpus' -v . 2>&1 | \
+		grep -E 'detection:|false positives:|NOT BLOCKED|FALSE POSITIVE'
+
 ## cover: coverage across all packages.
 .PHONY: cover
 cover:
@@ -80,6 +86,8 @@ bench-check:
 fuzz:
 	$(GO) test -run=XXX -fuzz=FuzzScan -fuzztime=$(FUZZTIME) ./internal/prefilter/
 	$(GO) test -run=XXX -fuzz=FuzzTransforms -fuzztime=$(FUZZTIME) ./rules/transform/
+	$(GO) test -run=XXX -fuzz=FuzzIndexFold -fuzztime=$(FUZZTIME) ./rules/op/
+	$(GO) test -run=XXX -fuzz=FuzzBuild -fuzztime=$(FUZZTIME) ./internal/interpret/
 
 ## vuln: check dependencies and stdlib for known vulnerabilities.
 .PHONY: vuln

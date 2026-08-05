@@ -123,31 +123,62 @@ path that already allocates nothing. Not worth it.
 This entry stays in the document rather than being deleted. The idea is attractive enough that
 someone will propose it again, and the useful artifact of the experiment is the measurement.
 
-### 4. Multi-interpretation as a lattice, not a loop
+### 4. Multi-interpretation: evaluate every reading — SHIPPED
 
-The CVE-2026-21876 bug class comes from picking *one* decoding and matching against it, while the
-backend picks another. The obvious fix — evaluate all N plausible decodings — costs N× and so nobody
-ships it.
+> **Status: built and measured.** 76/76 evasion corpus, 0/72 false positives.
+> Shipped as *conditional* multi-interpretation rather than the lattice
+> originally specified; the reason is below.
 
-Represent the ambiguity as a **decode lattice**: a DAG over byte positions where ambiguous input
-forks (`%2e` → `.` *or* literal `%2e`; a multipart part under charset A *or* charset B) and rejoins.
+The CVE-2026-21876 bug class comes from picking *one* decoding and matching
+against it, while the origin picks another. The obvious fix — evaluate all N
+plausible decodings — costs N×, so nobody ships it.
 
-Then run the automaton over the lattice as an **NFA with a bitset of active states**. Shared prefixes
-are evaluated once. Cost stays `O(|states| × |input|)` — linear, same as before.
+The original plan was a **decode lattice**: a DAG over byte positions where
+ambiguous input forks and rejoins, walked as an NFA so shared prefixes are
+evaluated once and cost stays ~1×.
 
-```
-        ┌─ "." ─┐
-"..%2e" ┤       ├─ "/" ─►  matches path-traversal on branch 1 only
-        └"%2e"──┘
-```
+**What shipped is simpler, and the transducer taught the lesson that made it
+simpler.** The premise "N× is too expensive" only holds if every value is
+ambiguous. Almost none are. So: one cheap pass detects whether a value contains
+any ambiguity marker at all (`%`, `\`, `+…-`, `&`, NUL, an overlong lead byte),
+and a value with none has exactly one reading and costs exactly what it cost
+before. Only genuinely ambiguous input — which is precisely the input that
+deserves scrutiny — pays for alternatives.
 
-This is the concept I'd defend hardest, because it collapses the usual tradeoff: multi-interpretation
-is normally the *expensive, secure* choice, and here it's nearly free. Security and speed from the
-same mechanism rather than in tension.
+Measured: detection is 22 ns for a 57-byte clean value (2.5 GB/s), and building
+readings for an unambiguous value is 1.7 ns.
 
-**Bounded, always.** Max simultaneous interpretations is a config parameter (default 8). Exceeding it
-is a *decision*, not a silent truncation — ambiguity beyond the bound means the request is
-un-analyzable, and un-analyzable is not the same as clean.
+Six readings, each grounded in a real disagreement rather than a theoretical
+encoding:
+
+| Class | Origin behaviour it models |
+|---|---|
+| `double_encoded` | Proxy and app server each decode once |
+| `separator` | Windows, .NET, Java accept `\` as a path separator |
+| `null_truncate` | C-backed handlers stop at NUL (matters for allowlists) |
+| `overlong_utf8` | Permissive decoders resolve `%c0%ae` to `.` |
+| `utf7` | **CVE-2026-21876** — `+ADw-script+AD4-` is `<script>` |
+| `html_entity` | Value reflected into a document before use |
+
+Detection is the **union over readings**, which is the safe direction: an extra
+reading costs work, never coverage. Every decision reports which reading found
+the payload, because an operator seeing inert bytes in an audit log and no
+explanation concludes the firewall malfunctioned.
+
+**Bounded, and the bound is a decision.** Readings are capped; exceeding the cap
+yields `ReasonUndecidable`, not an allow. A value too ambiguous to enumerate has
+not been shown to be clean — that assumption is exactly what CVE-2026-21876
+turned into a bypass.
+
+**Known limitation, stated rather than hidden.** UTF-7 detection requires the
+explicit `-` terminator. Implicit termination is legal UTF-7 and is not
+detected; covering it would mean reading every `+` in every query string two
+ways, and `+`-as-space is most of the internet. Revisit if a payload in the wild
+uses it.
+
+**Is the lattice still worth building?** Only if profiles show ambiguous traffic
+is common enough for N× to matter. On this corpus it is not. That is the
+transducer lesson applied: test the premise before building the optimization.
 
 ### 5. Pointer-free transaction state
 
@@ -306,7 +337,7 @@ and a human approves every suppression.
 | Regex executions / request | ~4,000 | **0–3** |
 | Transform allocations / request | ~40 | **0** (via chain CSE, not transducers — §3) |
 | Budget enforcement | wall clock, nondeterministic | **fuel, deterministic** |
-| Multi-interpretation cost | N× (so: not shipped) | **~1×** |
+| Multi-interpretation cost | N× (so: not shipped) | **1× on clean input, N× only when ambiguous** |
 | GC pressure from tx state | proportional to traffic | **~0 (pointer-free)** |
 | Ruleset cold start | 100s of ms | **~0 (mmap)** |
 | Schema effect on cost | none | **70–90% plan reduction** |
@@ -335,7 +366,7 @@ Target SLOs, all CI-gated:
 | 1. Closure plan | Closure-threading may not beat a naive loop until the ruleset is large | Benchmark both at 10/100/1k rules in Phase 1. Keep the IR; the executor is swappable. |
 | 2. Fuel | Static cost estimates drift from reality | Calibrate costs from benchmarks; CI asserts fuel↔wall-clock correlation |
 | ~~3. Transducers~~ | **Resolved: rejected.** Correct (38.6M fuzz execs agreed) but 1.3–2.0× slower. The harness caught it before it shipped. | Materialized transforms + chain CSE, already in production |
-| 4. Decode lattice | State explosion on adversarial input | Hard bound on simultaneous interpretations; exceeding it is an explicit decision |
+| ~~4. Decode lattice~~ | **Resolved: not needed.** Conditional multi-interpretation ships the same security property at 1× on clean input. | Reading cap; exceeding it yields ReasonUndecidable |
 | 5. Pointer-free | Ergonomic cost — `Span` is less pleasant than `[]byte` | Confine to `internal/`; the public API speaks `[]byte` |
 | 6. Schema specialization | Only helps specified APIs; a wrong schema prunes real coverage | Fall back to the full plan when unspecified. Schema changes force recompile; never trust a runtime-supplied schema. |
 | 7. mmap artifact | Format versioning, endianness, a new corruption surface | Version + checksum + signature; reject on mismatch, never "best effort" load |
@@ -358,8 +389,8 @@ Sequenced so each step is independently valuable and de-risks the next.
 3. ~~**Arena + Span**~~ (concept 5). **Done.** Zero allocations on benign traffic.
 4. ~~**Transducers**~~ (concept 3). **Rejected on measurement** — see §3. The step-2 oracle did its
    job.
-5. **Decode lattice** (concept 4). Ship semantic detectors on top. ← next
-6. **Schema specialization** (concept 6), once OpenAPI validation exists.
+5. ~~**Decode lattice**~~ (concept 4). **Done** as conditional multi-interpretation — 76/76 evasion, 0 false positives.
+6. **Schema specialization** (concept 6), once OpenAPI validation exists. ← next, and the highest-value item left
 7. **mmap artifacts** (concept 7). Pure win, no dependents — last.
 
 Steps 1–3 delivered most of the performance and are done. Steps 5–6 are what make gwaf

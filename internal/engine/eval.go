@@ -20,6 +20,7 @@ package engine
 import (
 	"github.com/gsoultan/gwaf/internal/bitset"
 	"github.com/gsoultan/gwaf/internal/budget"
+	"github.com/gsoultan/gwaf/internal/interpret"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -46,6 +47,12 @@ type Hit struct {
 	// bytes. Explain output has to say which, or someone reading the audit log
 	// cannot reproduce the match.
 	Transformed bool
+
+	// Reading names the ambiguity class whose interpretation produced this
+	// match, or zero when it matched the value as sent. A non-zero value means
+	// the payload was only visible under an alternative decoding, which is the
+	// single most useful fact in the audit record for that request.
+	Reading interpret.Class
 }
 
 // Result is the outcome of evaluating one phase.
@@ -71,6 +78,15 @@ type Result struct {
 	// bypass.
 	Exhausted bool
 
+	// Undecidable reports that the value could not be fully analysed — too
+	// many plausible readings to enumerate. It is distinct from Exhausted: the
+	// budget was fine, the input was ambiguous beyond the point where any
+	// verdict would be meaningful. The caller applies its fail mode.
+	Undecidable bool
+
+	// UndecidableReason explains Undecidable, for the audit record.
+	UndecidableReason string
+
 	// RulesEvaluated counts operator invocations. It is the leading indicator
 	// for latency and is asserted in tests and benchmarks: if it drifts above
 	// zero on benign traffic, the prefilter has stopped working.
@@ -85,6 +101,8 @@ func (r *Result) Reset() {
 	r.TerminalOutcome = rules.Outcome{}
 	r.TerminalRule = nil
 	r.Exhausted = false
+	r.Undecidable = false
+	r.UndecidableReason = ""
 	r.RulesEvaluated = 0
 }
 
@@ -100,6 +118,11 @@ type Evaluator struct {
 	// between them rather than allocating per step.
 	scratch []byte
 	alt     []byte
+
+	// readings holds the plausible interpretations of the value under
+	// evaluation. It owns reusable buffers, so enumerating alternatives costs
+	// no allocation after warm-up.
+	readings interpret.Set
 
 	ctx rules.EvalContext
 }
@@ -141,63 +164,99 @@ func (e *Evaluator) Eval(
 	for i := range values {
 		v := &values[i]
 
-		for _, g := range groups {
-			// The chain is applied once here and shared by every rule in the
-			// group — the common-subexpression elimination from
-			// docs/CONCEPT.md §1.3. A chain that changes nothing returns the
-			// input slice, so already-normal traffic performs no copy at all.
-			data, transformed, ok := e.applyChain(g.Transforms, v.Data, meter)
-			if !ok {
-				out.Exhausted = true
-				return
-			}
+		// Enumerate the plausible readings of this value once, before the chain
+		// groups, because ambiguity is a property of the value rather than of
+		// any rule's normalization. A value with no ambiguity yields exactly one
+		// reading and costs a single detection pass, so benign traffic is
+		// unaffected; only genuinely ambiguous input pays for alternatives.
+		classes := interpret.Detect(v.Data)
+		e.readings.Build(v.Data, classes)
+		if !meter.Spend(budget.Fuel(len(v.Data)) * budget.CostPerByteScanned) {
+			out.Exhausted = true
+			return
+		}
 
-			e.candidates.Reset()
-			if g.Automaton != nil && !g.Automaton.Empty() {
-				n := g.Automaton.Scan(data, &e.candidates)
-				if !meter.Spend(budget.Fuel(n) * budget.CostPerByteScanned) {
+		// A value with more plausible readings than the cap allows has not been
+		// shown to be clean, so the caller must treat it as undecidable rather
+		// than allow it on the strength of an incomplete enumeration.
+		if e.readings.Truncated() {
+			out.Undecidable = true
+			out.UndecidableReason = "ambiguity exceeded the reading limit"
+			return
+		}
+
+		for _, g := range groups {
+			// Every reading is evaluated. Detection is the union over readings,
+			// which is the safe direction: an extra reading can cost work but
+			// can never cost coverage. Picking one reading and hoping the
+			// origin agrees is the CVE-2026-21876 failure mode.
+			for r := range e.readings.Len() {
+				reading := e.readings.At(r)
+
+				// The chain is applied once per reading and shared by every
+				// rule in the group — the common-subexpression elimination
+				// from docs/CONCEPT.md §1.3. A chain that changes nothing
+				// returns the input slice, so already-normal traffic performs
+				// no copy at all.
+				data, transformed, ok := e.applyChain(g.Transforms, reading.Bytes, meter)
+				if !ok {
 					out.Exhausted = true
 					return
 				}
-			}
 
-			// Unconditional rules have no literals to key on and must run for
-			// every value. Their cost is reported at compile time, so it is a
-			// budgeted expense rather than a surprise.
-			for _, idx := range g.Unconditional {
-				if !e.evalRule(g.Rules[idx], v, data, transformed, meter, out) {
-					return
+				e.candidates.Reset()
+				if g.Automaton != nil && !g.Automaton.Empty() {
+					n := g.Automaton.Scan(data, &e.candidates)
+					if !meter.Spend(budget.Fuel(n) * budget.CostPerByteScanned) {
+						out.Exhausted = true
+						return
+					}
 				}
-				if out.Terminal {
-					return
-				}
-			}
 
-			stop := false
-			e.candidates.All(func(idx int) bool {
-				if idx >= len(g.Rules) {
-					// Defensive: a stale automaton could name an index outside
-					// the current group. Skipping is safe — the rule simply is
-					// not treated as a candidate — and it must never panic on
-					// the request path.
+				// Unconditional rules have no literals to key on and must run
+				// for every value. Their cost is reported at compile time, so
+				// it is a budgeted expense rather than a surprise. They run
+				// only against the verbatim reading: an operator that inspects
+				// everything does not gain from alternatives, and running it
+				// per reading would multiply the one cost the compile report
+				// warns about.
+				if r == 0 {
+					for _, idx := range g.Unconditional {
+						if !e.evalRule(g.Rules[idx], v, data, transformed, reading.Class, meter, out) {
+							return
+						}
+						if out.Terminal {
+							return
+						}
+					}
+				}
+
+				stop := false
+				e.candidates.All(func(idx int) bool {
+					if idx >= len(g.Rules) {
+						// Defensive: a stale automaton could name an index
+						// outside the current group. Skipping is safe — the
+						// rule simply is not treated as a candidate — and it
+						// must never panic on the request path.
+						return true
+					}
+					cr := g.Rules[idx]
+					if cr.Unconditional() {
+						return true // already evaluated above
+					}
+					if !e.evalRule(cr, v, data, transformed, reading.Class, meter, out) {
+						stop = true
+						return false
+					}
+					if out.Terminal {
+						stop = true
+						return false
+					}
 					return true
+				})
+				if stop {
+					return
 				}
-				cr := g.Rules[idx]
-				if cr.Unconditional() {
-					return true // already evaluated above
-				}
-				if !e.evalRule(cr, v, data, transformed, meter, out) {
-					stop = true
-					return false
-				}
-				if out.Terminal {
-					stop = true
-					return false
-				}
-				return true
-			})
-			if stop {
-				return
 			}
 		}
 	}
@@ -210,6 +269,7 @@ func (e *Evaluator) evalRule(
 	v *Value,
 	data []byte,
 	transformed bool,
+	reading interpret.Class,
 	meter *budget.Meter,
 	out *Result,
 ) bool {
@@ -246,6 +306,7 @@ func (e *Evaluator) evalRule(
 			Key:         v.Key,
 			Match:       m,
 			Transformed: transformed,
+			Reading:     reading,
 		})
 
 		if outcome.Kind == rules.ActionScore {

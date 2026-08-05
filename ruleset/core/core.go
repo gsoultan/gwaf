@@ -33,6 +33,7 @@ const (
 	IDTraversalEncoded  types.RuleID = 1001
 	IDTraversalRaw      types.RuleID = 1002
 	IDSensitiveFile     types.RuleID = 1003
+	IDTraversalRepeated types.RuleID = 1004
 	IDSQLiTautology     types.RuleID = 2001
 	IDSQLiUnionSelect   types.RuleID = 2002
 	IDSQLiComment       types.RuleID = 2003
@@ -78,7 +79,16 @@ var pathChain = []rules.Transform{
 }
 
 // Default is the ruleset gwaf.New loads when the embedder supplies none.
+//
+// It is the request-phase rules plus a generated request-body counterpart for
+// every rule that inspects attacker-supplied content, so a payload blocked in a
+// query string is blocked identically in a JSON or form body.
 func Default() rules.Set {
+	return withBodyPhase(requestRules())
+}
+
+// requestRules returns the rules authored for the request-headers phase.
+func requestRules() rules.Set {
 	return rules.Set{
 		// ---- Path traversal -------------------------------------------------
 		{
@@ -127,6 +137,22 @@ func Default() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "Access to sensitive system file",
 			Tags:       []string{"lfi", "owasp-a01"},
+		},
+		{
+			ID:         IDTraversalRepeated,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// A single "../" appears in legitimate relative references, but a
+			// repeated segment does not: nothing a browser or client library
+			// emits walks two levels up inside one parameter. Whitespace is
+			// stripped by the chain, so padded variants are covered too.
+			Op:         op.ContainsAny("../..", `..\..`, "..%2f..", `..%5c..`),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Repeated path traversal segment",
+			Tags:       []string{"traversal", "owasp-a01"},
 		},
 
 		// ---- SQL injection --------------------------------------------------
@@ -276,31 +302,79 @@ func Default() rules.Set {
 			Msg:        "Known vulnerability scanner",
 			Tags:       []string{"scanner", "reputation"},
 		},
-
-		// ---- Body phase ------------------------------------------------------
-		{
-			ID:         IDSQLiUnionSelect + 900, // 2902: body-phase counterpart
-			Phase:      types.PhaseRequestBody,
-			Targets:    bodyTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny("unionselect", "unionallselect"),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "SQL injection UNION SELECT in body",
-			Tags:       []string{"sqli", "owasp-a03"},
-		},
-		{
-			ID:         IDXSSScriptTag + 900, // 3901: body-phase counterpart
-			Phase:      types.PhaseRequestBody,
-			Targets:    bodyTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny("<script", "</script", "<svg/onload"),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "XSS script tag injection in body",
-			Tags:       []string{"xss", "owasp-a03"},
-		},
 	}
+}
+
+// bodyPhaseOffset is added to a request-headers rule's ID to derive the ID of
+// its request-body counterpart.
+//
+// The pairing is by construction rather than by hand. Hand-written duplicates
+// drift: the first version of this ruleset mirrored two of the ten injection
+// rules into the body phase, so a payload that was blocked in a query string
+// sailed through in a JSON body. The evasion corpus caught it, and generating
+// the pair removes the class of mistake rather than the instance.
+const bodyPhaseOffset types.RuleID = 900
+
+// mirrorToBody returns the request-body counterpart of a request-headers rule.
+//
+// Only the targets and phase change: an injection payload is the same payload
+// whether it arrives in a query string or a JSON body, so the operator,
+// transform chain, severity, and confidence are shared.
+func mirrorToBody(r rules.Rule) rules.Rule {
+	m := r
+	m.ID = r.ID + bodyPhaseOffset
+	m.Phase = types.PhaseRequestBody
+	m.Targets = bodyTargets
+	m.Msg = r.Msg + " (body)"
+	return m
+}
+
+// mirroredTags names the rule tags whose rules apply equally to request bodies.
+//
+// Traversal in a *path* and a hostile *user agent* are properties of the
+// request line and headers, so those rules are not mirrored. Everything that
+// inspects attacker-supplied content is.
+var mirroredTags = []string{"sqli", "xss", "rce", "lfi"}
+
+// withBodyPhase returns set plus a request-body counterpart for every rule
+// carrying a mirrored tag.
+func withBodyPhase(set rules.Set) rules.Set {
+	out := make(rules.Set, 0, len(set)*2)
+	out = append(out, set...)
+
+	for _, r := range set {
+		if r.Phase != types.PhaseRequestHeaders {
+			continue
+		}
+		if !anyTag(r, mirroredTags) {
+			continue
+		}
+		// A rule reading the request path or a specific header has no body
+		// equivalent; mirroring it would produce a rule that never matches.
+		if !readsArgs(r) {
+			continue
+		}
+		out = append(out, mirrorToBody(r))
+	}
+	return out
+}
+
+func anyTag(r rules.Rule, tags []string) bool {
+	for _, want := range tags {
+		if r.HasTag(want) {
+			return true
+		}
+	}
+	return false
+}
+
+// readsArgs reports whether a rule inspects attacker-supplied argument values,
+// which is what makes a body counterpart meaningful.
+func readsArgs(r rules.Rule) bool {
+	for _, t := range r.Targets {
+		if t.Kind == types.TargetArgs && t.Name == "" {
+			return true
+		}
+	}
+	return false
 }

@@ -2,108 +2,132 @@ goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf
 cpu: Apple M5 Pro
-BenchmarkBenignGET-15          	 1016834	      1143 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignGET-15          	 1000000	      1110 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignGET-15          	 1000000	      1095 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignGET-15          	 1000000	      1101 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignGET-15          	 1000000	      1130 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignGET-15          	 1000000	      1107 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignPOSTJSON-15     	  386043	      3128 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignPOSTJSON-15     	  390003	      3232 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignPOSTJSON-15     	  389535	      3173 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignPOSTJSON-15     	  388750	      3126 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignPOSTJSON-15     	  371018	      3292 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignPOSTJSON-15     	  385458	      3163 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignLargeBody-15    	   10000	    116259 ns/op	9019.03 MB/s	      27 B/op	       0 allocs/op
-BenchmarkBenignLargeBody-15    	   10000	    117976 ns/op	8887.80 MB/s	      27 B/op	       0 allocs/op
-BenchmarkBenignLargeBody-15    	   10000	    119863 ns/op	8747.86 MB/s	      27 B/op	       0 allocs/op
-BenchmarkBenignLargeBody-15    	    9784	    117945 ns/op	8890.12 MB/s	      27 B/op	       0 allocs/op
-BenchmarkBenignLargeBody-15    	    9658	    124906 ns/op	8394.66 MB/s	      28 B/op	       0 allocs/op
-BenchmarkBenignLargeBody-15    	   10000	    117900 ns/op	8893.50 MB/s	      27 B/op	       0 allocs/op
-BenchmarkAttack-15             	 1526836	       779.2 ns/op	       8 B/op	       1 allocs/op
-BenchmarkAttack-15             	 1593470	       769.7 ns/op	       8 B/op	       1 allocs/op
-BenchmarkAttack-15             	 1529115	       780.1 ns/op	       8 B/op	       1 allocs/op
-BenchmarkAttack-15             	 1555207	       768.0 ns/op	       8 B/op	       1 allocs/op
-BenchmarkAttack-15             	 1581777	       755.7 ns/op	       8 B/op	       1 allocs/op
-BenchmarkAttack-15             	 1582852	       757.7 ns/op	       8 B/op	       1 allocs/op
-BenchmarkManyArgs-15           	   22299	     53471 ns/op	       4 B/op	       0 allocs/op
-BenchmarkManyArgs-15           	   21489	     55688 ns/op	       4 B/op	       0 allocs/op
-BenchmarkManyArgs-15           	   22330	     53674 ns/op	       4 B/op	       0 allocs/op
-BenchmarkManyArgs-15           	   23301	     52211 ns/op	       3 B/op	       0 allocs/op
-BenchmarkManyArgs-15           	   22777	     52532 ns/op	       4 B/op	       0 allocs/op
-BenchmarkManyArgs-15           	   22690	     53885 ns/op	       4 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10-15         	 5679907	       209.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10-15         	 5739944	       214.4 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10-15         	 5634441	       211.6 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10-15         	 5742358	       211.3 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10-15         	 5780217	       208.8 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10-15         	 5724886	       210.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=100-15        	 5470837	       211.4 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=100-15        	 5769207	       208.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=100-15        	 5652751	       209.6 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=100-15        	 5775518	       208.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=100-15        	 5722556	       209.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=100-15        	 5699460	       209.2 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	 5586510	       210.7 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	 5654212	       210.1 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	 5712016	       209.7 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	 5758407	       209.3 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	 5784066	       210.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	 5790132	       208.6 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	 5798349	       208.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	 5769925	       208.7 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	 5754858	       209.6 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	 5677651	       210.6 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	 5466447	       212.3 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	 5592949	       211.4 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	 2340864	       505.1 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	 2360689	       495.7 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	 2538207	       470.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	 2537408	       470.8 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	 2633805	       461.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	 2574758	       469.0 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	20311255	        59.30 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	20591799	        58.49 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	21097556	        57.75 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	20861869	        58.93 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	20364855	        58.94 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	19219936	        58.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15          	  955315	      1261 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15          	  946832	      1243 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15          	  997050	      1198 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15          	  971007	      1221 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15          	  967714	      1209 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15          	 1000000	      1208 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15     	  190448	      6553 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15     	  185991	      6598 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15     	  186111	      6525 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15     	  180937	      6436 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15     	  182520	      6474 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15     	  180418	      6309 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignLargeBody-15    	    4101	    274880 ns/op	3814.55 MB/s	      69 B/op	       0 allocs/op
+BenchmarkBenignLargeBody-15    	    4266	    281570 ns/op	3723.92 MB/s	      66 B/op	       0 allocs/op
+BenchmarkBenignLargeBody-15    	    4124	    285081 ns/op	3678.06 MB/s	      68 B/op	       0 allocs/op
+BenchmarkBenignLargeBody-15    	    3789	    288881 ns/op	3629.68 MB/s	      74 B/op	       0 allocs/op
+BenchmarkBenignLargeBody-15    	    4178	    273817 ns/op	3829.36 MB/s	      67 B/op	       0 allocs/op
+BenchmarkBenignLargeBody-15    	    4130	    277265 ns/op	3781.74 MB/s	      68 B/op	       0 allocs/op
+BenchmarkAttack-15             	 1448739	       831.3 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAttack-15             	 1461414	       825.4 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAttack-15             	 1462462	       825.1 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAttack-15             	 1467326	       824.9 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAttack-15             	 1462477	       820.2 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAttack-15             	 1455091	       822.5 ns/op	       8 B/op	       1 allocs/op
+BenchmarkManyArgs-15           	   20660	     58567 ns/op	       4 B/op	       0 allocs/op
+BenchmarkManyArgs-15           	   20448	     59163 ns/op	       4 B/op	       0 allocs/op
+BenchmarkManyArgs-15           	   20430	     58940 ns/op	       4 B/op	       0 allocs/op
+BenchmarkManyArgs-15           	   19874	     60098 ns/op	       4 B/op	       0 allocs/op
+BenchmarkManyArgs-15           	   20061	     59839 ns/op	       4 B/op	       0 allocs/op
+BenchmarkManyArgs-15           	   20138	     59979 ns/op	       4 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4342212	       278.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4343314	       277.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4364616	       278.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4340422	       275.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4341711	       274.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4323570	       275.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4327880	       275.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4391150	       275.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4370252	       276.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4383332	       275.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4386930	       276.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4380744	       282.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4355882	       275.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4318814	       274.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4312776	       275.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4279557	       275.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4319396	       275.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4317412	       275.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4364076	       276.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4367847	       275.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4395194	       274.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4377045	       274.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4363009	       275.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4271737	       277.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 2229688	       535.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 2311648	       517.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 2278882	       521.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 2346416	       530.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 2388967	       500.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 2375922	       502.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	16912405	        65.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	17267905	        66.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	17454628	        66.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	18679683	        65.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	18840054	        65.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	18018039	        66.44 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf	79.360s
+ok  	github.com/gsoultan/gwaf	79.463s
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/internal/bitset
 cpu: Apple M5 Pro
-BenchmarkResetSparse-15    	250289570	         4.858 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResetSparse-15    	247853101	         4.869 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResetSparse-15    	243025566	         4.910 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResetSparse-15    	239251004	         4.984 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResetSparse-15    	247446722	         4.890 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResetSparse-15    	248062506	         4.883 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	245314200	         4.941 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	243331388	         4.878 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	242649182	         4.958 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	245740225	         4.934 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	244272736	         4.859 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	248919038	         4.798 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/internal/bitset	7.615s
+ok  	github.com/gsoultan/gwaf/internal/bitset	7.763s
 PASS
-ok  	github.com/gsoultan/gwaf/internal/budget	0.252s
+ok  	github.com/gsoultan/gwaf/internal/budget	0.486s
 ?   	github.com/gsoultan/gwaf/internal/engine	[no test files]
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/internal/interpret
+cpu: Apple M5 Pro
+BenchmarkDetectClean-15       	74307049	        15.20 ns/op	3749.20 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	78633304	        15.23 ns/op	3743.68 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	78274909	        15.17 ns/op	3757.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	72830266	        15.15 ns/op	3761.33 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	78245770	        15.16 ns/op	3759.46 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	77442667	        15.19 ns/op	3751.81 MB/s	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	693963363	         1.726 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	697411032	         1.724 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	699713386	         1.730 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	695389468	         1.727 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	691587343	         1.723 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	696596446	         1.724 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	 7074274	       168.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	 7073940	       170.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	 7019385	       167.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	 7159232	       169.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	 7153086	       168.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	 7306182	       164.8 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/internal/interpret	21.594s
 goos: darwin
 goarch: arm64
 pkg: github.com/gsoultan/gwaf/internal/memz
 cpu: Apple M5 Pro
-BenchmarkAppendReset-15    	19403425	        61.21 ns/op	       0 B/op	       0 allocs/op
-BenchmarkAppendReset-15    	20374623	        59.61 ns/op	       0 B/op	       0 allocs/op
-BenchmarkAppendReset-15    	20166541	        60.30 ns/op	       0 B/op	       0 allocs/op
-BenchmarkAppendReset-15    	19995861	        60.23 ns/op	       0 B/op	       0 allocs/op
-BenchmarkAppendReset-15    	20157282	        60.30 ns/op	       0 B/op	       0 allocs/op
-BenchmarkAppendReset-15    	20300131	        58.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	18891241	        63.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19311426	        62.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19217474	        62.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19188908	        62.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19314184	        61.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19471009	        61.72 ns/op	       0 B/op	       0 allocs/op
 PASS
-ok  	github.com/gsoultan/gwaf/internal/memz	7.497s
+ok  	github.com/gsoultan/gwaf/internal/memz	8.190s
 PASS
-ok  	github.com/gsoultan/gwaf/internal/prefilter	0.242s
+ok  	github.com/gsoultan/gwaf/internal/prefilter	0.475s
 PASS
-ok  	github.com/gsoultan/gwaf/rules	0.600s
+ok  	github.com/gsoultan/gwaf/rules	0.737s
 PASS
-ok  	github.com/gsoultan/gwaf/rules/op	0.310s
+ok  	github.com/gsoultan/gwaf/rules/op	0.588s
 PASS
-ok  	github.com/gsoultan/gwaf/rules/transform	0.298s
+ok  	github.com/gsoultan/gwaf/rules/transform	0.516s
 ?   	github.com/gsoultan/gwaf/ruleset/core	[no test files]
 ?   	github.com/gsoultan/gwaf/types	[no test files]

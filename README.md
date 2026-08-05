@@ -33,19 +33,31 @@ Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
 
 | Workload | Latency | Allocations |
 |---|---|---|
-| Benign `GET` | **1.10 µs** | **0** |
-| Benign `POST`, 1 KiB JSON | **3.34 µs** | **0** |
-| Attack (blocked at header phase) | **0.76 µs** | 1 |
-| Large body throughput | — | **9.0 GB/s** |
+| Benign `GET` | **1.22 µs** | **0** |
+| Benign `POST`, 1 KiB JSON | **6.48 µs** | **0** |
+| Attack (blocked at header phase) | **0.83 µs** | 1 |
+
+**Detection, on a corpus of real bypass techniques:**
+
+| | |
+|---|---|
+| Evasion corpus | **76/76 blocked (100%)** |
+| Benign corpus | **0/72 false positives (0.00%)** |
+
+The evasion corpus covers case variation, whitespace splitting, single and
+double percent-encoding, overlong UTF-8, NUL truncation, backslash separators,
+HTML entities, and **UTF-7 (CVE-2026-21876)** — plus combinations, and payloads
+delivered via headers and bodies. Detection rate is never reported without the
+false-positive rate beside it.
 
 **Ruleset scaling — the central claim:**
 
 | Rules | Latency | Rules evaluated |
 |---|---|---|
-| 10 | 211.9 ns | 0 |
-| 100 | 209.1 ns | 0 |
-| 1,000 | 209.6 ns | 0 |
-| 10,000 | **209.8 ns** | **0** |
+| 10 | 277 ns | 0 |
+| 100 | 277 ns | 0 |
+| 1,000 | 275 ns | 0 |
+| 10,000 | **276 ns** | **0** |
 
 A thousand-fold larger ruleset costs the same, because on benign traffic the
 prefilter yields no candidates and no operator runs. These are enforced as
@@ -57,7 +69,7 @@ tests (`TestSLO*`), not just observed in benchmarks.
 |---|---|
 | **Fast** | 0 rules evaluated and 0 allocations on benign traffic; flat in ruleset size |
 | **Accurate** | Semantic detection over signatures; confidence **measured on a corpus**, CI-gated |
-| **Secure** | Multi-interpretation decoding at ~1× cost; provable DoS bound via fuel metering |
+| **Secure** | Ambiguous input is evaluated *every* plausible way, not guessed at; provable DoS bound via fuel metering |
 | **Embeddable** | Zero CGO, **zero dependencies**, zero global state, no daemon, no UI |
 | **Compounding** | Specifying your API schema makes gwaf both *faster* and *more precise* |
 
