@@ -324,7 +324,14 @@ it's cheap because the prefilter runs over the joined buffer in the same single 
 Guarded: joined-view rules run at reduced confidence by default, because concatenation invents
 adjacency that wasn't in the original request. High FP risk if treated as equal evidence.
 
-### 11. Protocol desync detection is engine-level, not a rule
+### 11. Protocol desync detection is engine-level, not a rule — SHIPPED
+
+> **Status: built, after a probe showed it missing.** This concept was specified
+> during design and never implemented; a CL.TE conflict passed cleanly for
+> several months of commits. `ReasonDesync` is now checked before any rule runs,
+> and is the one reason FailOpen does not soften — an ambiguously framed request
+> is potentially two requests, the second of which no firewall has seen.
+
 
 Request smuggling (CL/TE conflict, duplicate `Content-Length`, obs-fold, chunked-extension abuse) is
 how attackers get the WAF and the origin to disagree about where a request *ends*. No rule can catch

@@ -336,3 +336,40 @@ source, and those should scope an exception rather than lower the tier globally.
 WebSocket upgrade, SSE, and long tokens (up to 87 KiB, both base64 alphabets)
 all pass. 0/1500 false positives on base64 JSON bodies, 0/1500 on base64 query
 tokens.
+
+## Transport shapes (adopter list): compression was a total bypass
+Probed the full list — chunked, HTTP/1.1/2/3, GraphQL subscriptions, gzip,
+brotli, XML/SOAP, gRPC. Most held. Three real gaps.
+
+**1. Compression was a COMPLETE bypass.** gzip/deflate a payload and gwaf saw
+nothing; the identical payload plain was blocked. There is no grammar in a
+DEFLATE stream, so every detector found nothing and the request was reported
+clean while the origin decompressed and acted on it. **The entire firewall,
+disabled by one header.**
+
+Fixed: decompress before anything else, using stdlib only (`compress/gzip`,
+`flate`, `zlib`) so zero dependencies holds. gzip is also **sniffed** by magic
+number, because an origin that sniffs decompresses a body whose header says
+nothing — same multi-interpretation reasoning as everywhere else.
+
+Bounded against decompression bombs (8 KiB → 8 MiB rejected). **Brotli cannot be
+decoded** without a third-party library the core module will not carry, so it is
+`ReasonUndecidable`, never passed through — passing it would restore the exact
+bypass.
+
+**2. Request smuggling was never built.** CONCEPT.md §11 specified desync
+detection; a probe showed a CL.TE conflict passing cleanly. Now checked *before
+any rule runs*, because ambiguous framing means gwaf may be inspecting a
+different request than the origin will process. **`ReasonDesync` is the one
+reason FailOpen does not soften**: an ambiguously framed request is potentially
+*two* requests, the second of which no firewall has seen.
+
+**3. The body-mirror mechanism was selecting by TAG.** Adding the XXE rule with
+an `xxe` tag produced no body counterpart — nothing failed, the rule simply was
+not there. Now mirrors by what a rule *reads* (`readsArgs`), removing the class
+of mistake. That also silently fixed traversal rules, which had the same gap:
+`..%2f..%2f` in a JSON body was uninspected.
+
+Added rule 4005 for XML entity declarations (XXE + billion laughs). SOAP, plain
+XML, DOCTYPE-without-entities, GraphQL queries/subscriptions/introspection, and
+all four protocol versions pass.

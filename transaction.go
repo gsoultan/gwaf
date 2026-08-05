@@ -47,10 +47,11 @@ type Transaction struct {
 	// was never supplied.
 	phase types.Phase
 
-	headerCount int
-	argCount    int
-	bodyLen     int
-	contentType string
+	headerCount     int
+	argCount        int
+	bodyLen         int
+	contentType     string
+	contentEncoding string
 
 	// op is the schema operation matched for this request, or nil when no
 	// schema is configured or the route is not described.
@@ -71,6 +72,19 @@ type Transaction struct {
 
 	// decodeBuf backs base64 decoding, reused across values.
 	decodeBuf []byte
+
+	// inflateBuf backs decompression, reused across requests.
+	inflateBuf []byte
+
+	// undecodable records a content encoding gwaf could not undo, so the body
+	// was never really inspected.
+	undecodable string
+
+	// Framing state for desync detection. See noteFraming.
+	contentLengths  int
+	firstLength     string
+	transferEncoded bool
+	framingConflict string
 
 	// oversizeKey and oversizeLen record the first value that exceeded the
 	// per-value ceiling and was therefore not inspected at all.
@@ -109,6 +123,12 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.bodyErr = nil
 	tx.bodyParseFailed = ""
 	tx.contentType = ""
+	tx.contentEncoding = ""
+	tx.undecodable = ""
+	tx.contentLengths = 0
+	tx.firstLength = ""
+	tx.transferEncoded = false
+	tx.framingConflict = ""
 	tx.oversizeKey = ""
 	tx.oversizeLen = 0
 }
@@ -239,8 +259,93 @@ func (tx *Transaction) AddRequestHeader(name, value string) {
 	if len(tx.contentType) == 0 && equalFoldASCII(name, "content-type") {
 		tx.contentType = value
 	}
+	if len(tx.contentEncoding) == 0 && equalFoldASCII(name, "content-encoding") {
+		tx.contentEncoding = value
+	}
+	tx.noteFraming(name, value)
 	tx.addValue(types.Target{Kind: types.TargetRequestHeaders, Name: name}, name, value)
 	tx.addValue(types.Target{Kind: types.TargetRequestHeaderNames}, name, name)
+}
+
+// noteFraming records the headers that decide where a request ends, and flags
+// any disagreement between them.
+//
+// This is request smuggling. An attacker sends a request whose length one
+// server computes from Content-Length and another from Transfer-Encoding; the
+// two disagree about where it ends, and the bytes past the boundary become the
+// start of a *different* request that the front end never inspected. No rule
+// can catch it, because by the time rules run the parse has already happened
+// and gwaf is looking at whichever request it happened to reconstruct.
+//
+// So framing ambiguity is treated as a decision rather than a parse detail, and
+// it is checked before any rule runs. docs/CONCEPT.md §11 specified this; it
+// was never built until a probe showed a CL.TE conflict passing cleanly.
+//
+// The rule is deliberately strict: ambiguity is rejected rather than resolved.
+// Resolving it means picking an interpretation, and picking is exactly what the
+// attacker is relying on both ends doing differently.
+func (tx *Transaction) noteFraming(name, value string) {
+	switch {
+	case equalFoldASCII(name, "content-length"):
+		tx.contentLengths++
+		trimmed := trimOWS(value)
+
+		if !isAllDigits(trimmed) {
+			// A non-numeric length is rejected by one parser and coerced by
+			// another, which is the disagreement itself.
+			tx.setFramingConflict("Content-Length is not a number: " + value)
+			return
+		}
+		if tx.contentLengths == 1 {
+			tx.firstLength = trimmed
+			return
+		}
+		// Repeated and identical is merely redundant; repeated and different
+		// means the two ends can pick different answers.
+		if trimmed != tx.firstLength {
+			tx.setFramingConflict("conflicting Content-Length headers: " +
+				tx.firstLength + " and " + trimmed)
+		}
+
+	case equalFoldASCII(name, "transfer-encoding"):
+		tx.transferEncoded = true
+		// An obfuscated value -- leading whitespace, an unusual case, a chunked
+		// token buried in a list -- is how one end is made to see chunked
+		// encoding while the other does not.
+		if trimOWS(value) != value {
+			tx.setFramingConflict("Transfer-Encoding has surrounding whitespace: " +
+				"\"" + value + "\"")
+		}
+	}
+}
+
+// setFramingConflict records the first conflict seen.
+func (tx *Transaction) setFramingConflict(reason string) {
+	if tx.framingConflict == "" {
+		tx.framingConflict = reason
+	}
+}
+
+func trimOWS(s string) string {
+	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t') {
+		s = s[1:]
+	}
+	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // equalFoldASCII compares two ASCII strings case-insensitively without
@@ -331,6 +436,14 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 		return
 	}
 
+	// Decompression comes first, because everything downstream — content-type
+	// dispatch, field parsing, every detector — operates on the body the
+	// application will receive. A compressed body inspected as-is is opaque:
+	// there is no grammar in a DEFLATE stream, so nothing matches and the
+	// request is reported clean while the origin decompresses and acts on the
+	// payload. That is the entire firewall disabled by one header.
+	b = tx.decompress(b)
+
 	// A multipart body is checked first, because its Content-Type carries the
 	// boundary rather than naming a structure.
 	if boundary, isMultipart := body.Boundary(tx.contentType); isMultipart {
@@ -400,6 +513,45 @@ func (tx *Transaction) parseStructuredBody(b []byte, isJSON bool) bool {
 		return false
 	}
 	return true
+}
+
+// decompress undoes a declared content encoding.
+//
+// An encoding gwaf cannot undo — brotli, or an unrecognised token — is recorded
+// as undecodable rather than passed through as binary. A body nobody could read
+// has not been shown to be clean, and reporting it clean is the bypass this
+// exists to close.
+func (tx *Transaction) decompress(b []byte) []byte {
+	enc := body.DetectEncoding(tx.contentEncoding)
+
+	// An origin that sniffs will decompress a body whose header says nothing.
+	// gwaf does not know whether this one does, so a gzip stream is decoded
+	// either way — the same reasoning as evaluating every plausible decoding
+	// rather than guessing one.
+	if enc == body.EncodingNone && body.SniffGzip(b) {
+		enc = body.EncodingGzip
+	}
+
+	switch {
+	case enc == body.EncodingNone:
+		return b
+	case !enc.Decodable():
+		tx.undecodable = enc.String()
+		return b
+	}
+
+	out, err := body.Decompress(tx.inflateBuf, b, enc, tx.waf.cfg.limits.MaxBodySize)
+	if err != nil {
+		// A stream that will not decode is not a body gwaf can vouch for. What
+		// decoded before the error is still inspected, since some origins
+		// accept exactly that, but the failure travels with the decision.
+		tx.undecodable = enc.String() + ": " + err.Error()
+		if len(out) == 0 {
+			return b
+		}
+	}
+	tx.inflateBuf = out
+	return out
 }
 
 // recordBody records an unstructured body for inspection.
@@ -519,6 +671,15 @@ func (tx *Transaction) ProcessRequestHeaders() Decision {
 	if tx.headerCount > tx.waf.cfg.limits.MaxHeaders {
 		return tx.limitExceeded("header count")
 	}
+	// Framing is checked before everything else. If the request boundary is
+	// ambiguous, gwaf may be inspecting a different request than the origin
+	// will process, and every later conclusion is about the wrong bytes.
+	if tx.transferEncoded && tx.contentLengths > 0 {
+		tx.setFramingConflict("both Content-Length and Transfer-Encoding present")
+	}
+	if tx.framingConflict != "" {
+		return tx.framingAmbiguous()
+	}
 	if tx.oversizeKey != "" {
 		return tx.oversizeExceeded()
 	}
@@ -582,6 +743,9 @@ func (tx *Transaction) ProcessRequestBody() Decision {
 	// were never extracted. The reason travels with the decision so an operator
 	// can distinguish "analysed and clean" from "could not be structured",
 	// rather than the difference being invisible.
+	if tx.undecodable != "" {
+		return tx.undecodableBody()
+	}
 	if tx.bodyErr != nil {
 		tx.bodyParseFailed = tx.bodyErr.Error()
 	}
@@ -871,6 +1035,53 @@ func (tx *Transaction) undecidable(reason string) Decision {
 		score:          tx.score,
 		status:         tx.waf.cfg.blockCode,
 		detail:         reason,
+		rulesEvaluated: tx.evaluated,
+	}
+	if tx.waf.cfg.failMode == FailClosed && tx.waf.cfg.mode == Blocking {
+		d.verdict = VerdictBlock
+	}
+	return tx.finish(d)
+}
+
+// framingAmbiguous rejects a request whose boundary two parsers could place
+// differently.
+//
+// Unlike a budget or size limit, this is not softened by FailOpen. A request
+// with ambiguous framing is not one request that went uninspected -- it is
+// potentially two requests, the second of which no firewall has seen at all.
+// Allowing it forwards an uninspected request by construction, so the fail mode
+// has nothing to weigh.
+func (tx *Transaction) framingAmbiguous() Decision {
+	d := Decision{
+		verdict:        VerdictBlock,
+		reason:         ReasonDesync,
+		status:         tx.waf.cfg.blockCode,
+		score:          tx.score,
+		detail:         tx.framingConflict,
+		rulesEvaluated: tx.evaluated,
+	}
+	if tx.waf.cfg.mode == DetectionOnly {
+		d.verdict = VerdictAllow
+	}
+	return tx.finish(d)
+}
+
+// undecodableBody rejects a request whose body gwaf could not decode.
+//
+// Brotli is the case that matters in practice: decoding it needs a third-party
+// library the core module will not carry, so a brotli-encoded body cannot be
+// inspected here. Passing it through would restore exactly the bypass that
+// decompression closes — one header, and the firewall is off.
+//
+// A deployment that serves brotli should decompress before calling gwaf, or run
+// with FailOpen and accept that those bodies are uninspected. Either is a
+// choice; silently reporting them clean is not.
+func (tx *Transaction) undecodableBody() Decision {
+	d := Decision{
+		reason:         ReasonUndecidable,
+		score:          tx.score,
+		status:         tx.waf.cfg.blockCode,
+		detail:         "body content encoding could not be decoded: " + tx.undecodable,
 		rulesEvaluated: tx.evaluated,
 	}
 	if tx.waf.cfg.failMode == FailClosed && tx.waf.cfg.mode == Blocking {

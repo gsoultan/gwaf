@@ -64,6 +64,7 @@ const (
 	IDRCECommonBinaries types.RuleID = 4002
 	IDLFIPHPWrapper     types.RuleID = 4003
 	IDPHPCodeUpload     types.RuleID = 4004
+	IDXMLEntity         types.RuleID = 4005
 	IDSQLiSemantic      types.RuleID = 2010
 	IDXSSSemantic       types.RuleID = 3010
 	IDScannerUserAgent  types.RuleID = 5001
@@ -321,6 +322,29 @@ func requestRules() rules.Set {
 			Msg:        "PHP code in request value",
 			Tags:       []string{"rce", "upload", "owasp-a03"},
 		},
+		{
+			ID:         IDXMLEntity,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// An inline entity declaration in a request body is XML external
+			// entity injection or an expansion bomb. There is no third thing it
+			// is: a client sending data declares elements, never entities, and
+			// a document that needs entities defines them in a schema the
+			// server already has.
+			//
+			// This covers both shapes at once. "<!ENTITY x SYSTEM 'file:///etc/passwd'>"
+			// reads a file the request had no business reading, and
+			// "<!ENTITY lol '&lol;&lol;...'>" expands until the parser runs out
+			// of memory. Whitespace is stripped by the chain, so the spacing
+			// variants collapse together.
+			Op:         op.ContainsAny("<!entity", "<!element", "%remote;", "<!attlist"),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "XML entity declaration in request",
+			Tags:       []string{"xxe", "dos", "owasp-a05"},
+		},
 
 		// ---- Hostile clients -------------------------------------------------
 		{
@@ -365,15 +389,21 @@ func mirrorToBody(r rules.Rule) rules.Rule {
 	return m
 }
 
-// mirroredTags names the rule tags whose rules apply equally to request bodies.
+// withBodyPhase returns set plus a request-body counterpart for every rule that
+// inspects attacker-supplied argument values.
 //
-// Traversal in a *path* and a hostile *user agent* are properties of the
-// request line and headers, so those rules are not mirrored. Everything that
-// inspects attacker-supplied content is.
-var mirroredTags = []string{"sqli", "xss", "rce", "lfi"}
-
-// withBodyPhase returns set plus a request-body counterpart for every rule
-// carrying a mirrored tag.
+// Selection is by what a rule *reads*, not by what it is tagged. An earlier
+// version keyed off a list of tags, and that list is exactly the kind of thing
+// that goes stale silently: the XXE rule was added with an "xxe" tag, no tag
+// matched, no body counterpart was generated, and an entity declaration in a
+// JSON or XML body went uninspected. Nothing failed — the rule simply was not
+// there.
+//
+// Reading the targets removes the class of mistake rather than the instance,
+// which is the same reason these rules are generated instead of hand-written.
+// A rule that inspects the request path or one named header has no body
+// equivalent and is left alone; mirroring it would produce a rule that can
+// never match.
 func withBodyPhase(set rules.Set) rules.Set {
 	out := make(rules.Set, 0, len(set)*2)
 	out = append(out, set...)
@@ -382,26 +412,12 @@ func withBodyPhase(set rules.Set) rules.Set {
 		if r.Phase != types.PhaseRequestHeaders {
 			continue
 		}
-		if !anyTag(r, mirroredTags) {
-			continue
-		}
-		// A rule reading the request path or a specific header has no body
-		// equivalent; mirroring it would produce a rule that never matches.
 		if !readsArgs(r) {
 			continue
 		}
 		out = append(out, mirrorToBody(r))
 	}
 	return out
-}
-
-func anyTag(r rules.Rule, tags []string) bool {
-	for _, want := range tags {
-		if r.HasTag(want) {
-			return true
-		}
-	}
-	return false
 }
 
 // readsArgs reports whether a rule inspects attacker-supplied argument values,

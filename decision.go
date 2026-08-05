@@ -61,6 +61,15 @@ const (
 	// what it was trying to do.
 	ReasonSchema
 
+	// ReasonDesync means the request's framing was ambiguous: Content-Length
+	// and Transfer-Encoding disagreed, or one of them was malformed in a way
+	// two parsers resolve differently.
+	//
+	// This is request smuggling, and it is the one reason FailOpen does not
+	// soften: an ambiguously framed request is potentially two requests, the
+	// second of which no firewall has seen.
+	ReasonDesync
+
 	// ReasonUndecidable means the input had more plausible interpretations than
 	// gwaf will enumerate, so no verdict about it would be meaningful.
 	//
@@ -85,6 +94,8 @@ func (r Reason) String() string {
 		return "limit_exceeded"
 	case ReasonSchema:
 		return "schema_violation"
+	case ReasonDesync:
+		return "framing_ambiguous"
 	case ReasonUndecidable:
 		return "undecidable"
 	default:

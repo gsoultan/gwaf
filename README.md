@@ -36,6 +36,11 @@ Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
 | Benign `POST`, 1 KiB JSON | **18.5 µs** | **0** |
 | Attack (blocked at header phase) | **1.47 µs** | 3 |
 
+Request bodies are **decompressed first** (gzip, deflate, zlib — stdlib only),
+and an encoding gwaf cannot decode is reported rather than passed through: a
+compressed body inspected as-is is opaque, which makes one header enough to
+disable the whole firewall.
+
 **Detectors only ever see text.** JSON, form, and multipart bodies are parsed
 into fields; binary content has its printable runs extracted; base64 is decoded
 first, because the origin decodes it too.
