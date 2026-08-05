@@ -298,7 +298,7 @@ The most important milestone. A WAF library with no adopter is a benchmark, not 
 1. [ ] Third-party security review (budget for it; this is security infrastructure)
 2. [ ] **Published reproducible benchmarks** — methodology, hardware, re-run instructions
 3. [ ] SLSA-3 provenance, SBOM, signed releases, documented CVE process
-4. [ ] Public API + five extension interfaces frozen under semver
+4. [ ] Public API + four extension interfaces frozen under semver
 
 **Gate:** external sign-off, and every SLO in CLAUDE.md §2 met on published hardware.
 

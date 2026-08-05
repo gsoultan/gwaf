@@ -2,7 +2,7 @@
 
 Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
-semver, and the five extension interfaces are frozen hard.
+semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
@@ -22,7 +22,7 @@ semver, and the five extension interfaces are frozen hard.
   use of internal package .../internal/budget not allowed
   ```
 
-  `Operator` is one of the five interfaces CLAUDE.md §4 describes as the most
+  `Operator` is one of the interfaces CLAUDE.md §4 describes as the most
   expensive API surface in the project, "third parties implement them, so
   post-v1.0 they are frozen hard". It was impossible to implement, and no test
   in the tree could see that, because everything in the tree is on the

@@ -212,7 +212,7 @@ if err := plan.WriteTo(w); err != nil {   // flat, signable, mmap-able artifact
 
 ### Your own detectors and operators
 
-The five extension interfaces (RULES.md §4) are the whole point of this profile — implement them in
+The four extension interfaces (RULES.md §4) are the whole point of this profile — implement them in
 your package, no fork:
 
 ```go
