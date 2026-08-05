@@ -7,6 +7,7 @@ import (
 	"github.com/gsoultan/gwaf/internal/engine"
 	"github.com/gsoultan/gwaf/internal/memz"
 	"github.com/gsoultan/gwaf/rules"
+	"github.com/gsoultan/gwaf/schema"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -41,6 +42,15 @@ type Transaction struct {
 	headerCount int
 	argCount    int
 	bodyLen     int
+
+	// op is the schema operation matched for this request, or nil when no
+	// schema is configured or the route is not described.
+	op *schema.Operation
+
+	// violation records the first schema violation seen, so the request is
+	// rejected with the reason rather than merely failing to match a rule.
+	violation  schema.Violation
+	violatedAt string
 }
 
 // reset prepares tx for reuse against a ruleset.
@@ -59,6 +69,9 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.headerCount = 0
 	tx.argCount = 0
 	tx.bodyLen = 0
+	tx.op = nil
+	tx.violation = schema.ViolationNone
+	tx.violatedAt = ""
 }
 
 // Close returns the transaction to its pool. It is safe to call more than once.
@@ -103,6 +116,14 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 		path = target[:i]
 	}
 	tx.addValue(types.Target{Kind: types.TargetRequestPath}, "", path)
+
+	// Resolve the schema operation now, so that arguments recorded afterwards
+	// can be validated and marked as they arrive rather than in a second pass.
+	if s := tx.waf.cfg.schema; s != nil {
+		if op, ok := s.Lookup(method, path); ok {
+			tx.op = op
+		}
+	}
 }
 
 // SetRemoteAddr records the client address.
@@ -130,8 +151,47 @@ func (tx *Transaction) AddArgument(name, value string) {
 	if tx.argCount > tx.waf.cfg.limits.MaxArgs {
 		return
 	}
-	tx.addValue(types.Target{Kind: types.TargetArgs, Name: name}, name, value)
+
+	inert := tx.checkSchema(name, value)
+	tx.addValueInert(types.Target{Kind: types.TargetArgs, Name: name}, name, value, inert)
+
+	// The parameter *name* is attacker-controlled even when its value is
+	// schema-constrained, so it is always inspected.
 	tx.addValue(types.Target{Kind: types.TargetArgNames}, name, name)
+}
+
+// checkSchema validates one argument against the matched operation and reports
+// whether the value is provably incapable of carrying a payload.
+//
+// A violation is recorded rather than acted on immediately: the request is
+// rejected at the next phase boundary so that the decision carries the phase
+// and the accumulated context, like every other decision.
+func (tx *Transaction) checkSchema(name, value string) bool {
+	if tx.op == nil {
+		return false
+	}
+
+	f, ok := schema.FieldFor(tx.op.Query, name)
+	if !ok {
+		// An undeclared parameter under a strict operation is either a client
+		// bug or an attacker probing, and neither should reach the origin.
+		if tx.op.Strict && tx.violation == schema.ViolationNone {
+			tx.violation = schema.ViolationUndeclared
+			tx.violatedAt = name
+		}
+		return false
+	}
+
+	if v := schema.Validate(f, []byte(value)); v != schema.ViolationNone {
+		if tx.violation == schema.ViolationNone {
+			tx.violation = v
+			tx.violatedAt = name
+		}
+		// A value that failed validation is emphatically not inert: it is the
+		// most suspicious value in the request and gets full inspection.
+		return false
+	}
+	return f.Inert()
 }
 
 // SetRequestBody records the request body.
@@ -148,7 +208,34 @@ func (tx *Transaction) ProcessRequestHeaders() Decision {
 	if tx.headerCount > tx.waf.cfg.limits.MaxHeaders {
 		return tx.limitExceeded("header count")
 	}
+	if d, rejected := tx.schemaViolation(); rejected {
+		return d
+	}
 	return tx.runPhase(types.PhaseRequestHeaders)
+}
+
+// schemaViolation rejects a request that fell outside its declared schema.
+//
+// This is positive security: rather than asking whether the input looks like a
+// known attack, it asks whether the input is something the API accepts at all.
+// It runs before rule evaluation because a request the origin would reject is
+// not worth inspecting.
+func (tx *Transaction) schemaViolation() (Decision, bool) {
+	if tx.violation == schema.ViolationNone {
+		return Decision{}, false
+	}
+	d := Decision{
+		verdict:        VerdictBlock,
+		reason:         ReasonSchema,
+		status:         tx.waf.cfg.blockCode,
+		score:          tx.score,
+		detail:         tx.violation.String() + ": " + tx.violatedAt,
+		rulesEvaluated: tx.evaluated,
+	}
+	if tx.waf.cfg.mode == DetectionOnly {
+		d.verdict = VerdictAllow
+	}
+	return tx.finish(d), true
 }
 
 // ProcessRequestBody evaluates the request-body phase.
@@ -156,10 +243,33 @@ func (tx *Transaction) ProcessRequestBody() Decision {
 	if tx.bodyLen > tx.waf.cfg.limits.MaxBodySize {
 		return tx.limitExceeded("body size")
 	}
+	// A route declaring no body must not receive one; the origin has no code
+	// path for it, so anything sent is probing.
+	if tx.op != nil && tx.op.NoBody && tx.bodyLen > 0 {
+		return tx.finish(Decision{
+			verdict:        VerdictBlock,
+			reason:         ReasonSchema,
+			status:         tx.waf.cfg.blockCode,
+			detail:         "body sent to an operation that declares none",
+			rulesEvaluated: tx.evaluated,
+		})
+	}
+	if d, rejected := tx.schemaViolation(); rejected {
+		return d
+	}
 	if tx.argCount > tx.waf.cfg.limits.MaxArgs {
 		return tx.limitExceeded("argument count")
 	}
 	return tx.runPhase(types.PhaseRequestBody)
+}
+
+// addValueInert records a value, marking whether it is schema-inert.
+func (tx *Transaction) addValueInert(target types.Target, key, value string, inert bool) {
+	before := len(tx.values)
+	tx.addValue(target, key, value)
+	if inert && len(tx.values) > before {
+		tx.values[len(tx.values)-1].Inert = true
+	}
 }
 
 // addValue records a string value for evaluation.

@@ -33,6 +33,17 @@ type Value struct {
 	Target types.Target
 	Key    string
 	Data   []byte
+
+	// Inert marks a value that passed schema validation for a type whose
+	// character set cannot express an injection payload — an integer, a UUID, a
+	// value drawn from a declared enum.
+	//
+	// Such a value is skipped entirely: no ambiguity detection, no
+	// normalization, no prefilter scan, no rule evaluation. This is not a
+	// heuristic. A value that validates as an integer contains only digits and
+	// a sign, so no content rule can match it, and running them would be work
+	// with a provably empty result. See docs/CONCEPT.md §6.
+	Inert bool
 }
 
 // Hit records one rule match.
@@ -163,6 +174,14 @@ func (e *Evaluator) Eval(
 
 	for i := range values {
 		v := &values[i]
+
+		// A schema-validated value of a constrained type cannot carry a
+		// payload, so the entire pipeline is skipped for it. On a
+		// well-specified API this removes most of the per-request work, and it
+		// removes it soundly rather than probabilistically.
+		if v.Inert {
+			continue
+		}
 
 		// Enumerate the plausible readings of this value once, before the chain
 		// groups, because ambiguity is a property of the value rather than of

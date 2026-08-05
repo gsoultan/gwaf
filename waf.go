@@ -10,6 +10,7 @@ import (
 	"github.com/gsoultan/gwaf/internal/engine"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/ruleset/core"
+	"github.com/gsoultan/gwaf/schema"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -87,6 +88,9 @@ func (w *WAF) Ruleset() *rules.Ruleset { return w.ruleset.Load() }
 
 // Report returns the active ruleset's compile summary.
 func (w *WAF) Report() rules.Report { return w.ruleset.Load().Report() }
+
+// Schema returns the configured API description, or nil.
+func (w *WAF) Schema() *schema.Schema { return w.cfg.schema }
 
 // Mode returns the configured enforcement mode.
 func (w *WAF) Mode() Mode { return w.cfg.mode }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
+	"github.com/gsoultan/gwaf/schema"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -110,6 +111,8 @@ type config struct {
 	blockCode int
 	onDecide  func(Decision)
 
+	schema *schema.Schema
+
 	// coreDisabled drops the first-party ruleset. Opting out is deliberately
 	// explicit so that shipping an inert WAF is a choice someone made, not a
 	// configuration mistake.
@@ -205,6 +208,19 @@ func WithLogger(l *slog.Logger) Option {
 // WithRuleset adds rules. It may be called more than once; sets accumulate.
 func WithRuleset(set rules.Set) Option {
 	return func(c *config) { c.ruleset = append(c.ruleset, set...) }
+}
+
+// WithSchema supplies an API description.
+//
+// The schema is both a validator and a compiler input. Requests outside it are
+// rejected before any rule runs, and values inside it that validate as a
+// constrained type — an integer, a UUID, a declared enum — skip rule evaluation
+// entirely, because such a value provably cannot carry a payload.
+//
+// The better an API is specified, the faster and the more precise gwaf gets.
+// See docs/CONCEPT.md §6 and §9.
+func WithSchema(s *schema.Schema) Option {
+	return func(c *config) { c.schema = s }
 }
 
 // WithoutCoreRuleset omits the first-party ruleset, leaving only rules the

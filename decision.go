@@ -54,6 +54,13 @@ const (
 	// ReasonLimit means a hard input limit was exceeded before rules ran.
 	ReasonLimit
 
+	// ReasonSchema means the request fell outside the declared API description.
+	//
+	// This is positive security rather than signature matching: the request was
+	// rejected for not being something the API accepts, without any claim about
+	// what it was trying to do.
+	ReasonSchema
+
 	// ReasonUndecidable means the input had more plausible interpretations than
 	// gwaf will enumerate, so no verdict about it would be meaningful.
 	//
@@ -76,6 +83,8 @@ func (r Reason) String() string {
 		return "budget_exhausted"
 	case ReasonLimit:
 		return "limit_exceeded"
+	case ReasonSchema:
+		return "schema_violation"
 	case ReasonUndecidable:
 		return "undecidable"
 	default:

@@ -104,7 +104,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - run: make fuzz FUZZTIME=30s
+      - run: make fuzz FUZZTIME=30s   # includes the Inert-claim harness
 
   # The evasion corpus is the primary security metric, and the benign corpus is
   # reported beside it. Detection rate alone is never a passing signal: a rule

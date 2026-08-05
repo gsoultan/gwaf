@@ -50,6 +50,18 @@ HTML entities, and **UTF-7 (CVE-2026-21876)** — plus combinations, and payload
 delivered via headers and bodies. Detection rate is never reported without the
 false-positive rate beside it.
 
+**Schema as a compiler input — the flagship:**
+
+| | With schema | Without |
+|---|---|---|
+| Latency | **1.14 µs** | 1.59 µs |
+| Work performed (fuel) | **314** | 710 |
+
+29% faster, 56% less work, *and* stricter — every out-of-spec request rejected
+before a rule runs. A field declared an integer that validates as one cannot
+contain `UNION SELECT`, so those rules are skipped soundly rather than
+heuristically. **Specifying your API makes gwaf both faster and safer.**
+
 **Ruleset scaling — the central claim:**
 
 | Rules | Latency | Rules evaluated |

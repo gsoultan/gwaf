@@ -124,9 +124,17 @@ Two lessons worth keeping:
 
 ## M3 — Schema + integration (weeks 14–24)
 
-1. [ ] OpenAPI 3.1 validation (body, query, path, headers)
-2. [ ] **Plan specialization from schema** (CONCEPT.md §6) — the flagship
-3. [ ] **Context-aware confidence from schema** (§9)
+1. [x] **Schema validation and specialization** — the typed core shipped
+       (`schema` package, zero deps). Validation, route matching including
+       templates, strict mode, and `NoBody`. Measured: 29% faster, 56% less
+       work, evasion coverage unchanged, false positives still zero.
+2. [ ] **OpenAPI 3.1 frontend** — a separate module, since YAML needs a
+       dependency the core will not carry. Compiles down to `schema.Operation`,
+       exactly as rule frontends compile to one IR.
+3. [ ] **Compile-time per-route plan pruning** — the other half of §6. The
+       per-value form already delivers most of the benefit; measure before
+       building the machinery.
+4. [ ] **Context-aware confidence from schema** (§9)
 4. [ ] GraphQL depth/complexity/introspection; gRPC frame + protobuf
 5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation
 6. [ ] Framework adapters (separate modules), transaction API, `rules.Overlay`, `Explain()`

@@ -197,26 +197,54 @@ Under Go 1.26's Green Tea GC — which won its 10–40% by improving small-objec
 data the collector never has to mark is the logical endpoint of that optimization. This also gets
 enforcement for free: a `Span` *cannot* outlive its arena by accident, because it isn't a reference.
 
-### 6. Positive security is a performance optimization
+### 6. Positive security is a performance optimization — SHIPPED
 
-The idea I think is genuinely novel here.
+> **Status: built and measured.** 29% faster wall-clock, 56% less work, and
+> stricter, from one artifact. Evasion coverage unchanged, false positives still
+> zero.
 
-An OpenAPI spec says `POST /orders` accepts exactly `{id: int, qty: int, note: string}`. That is
-usually treated as a *validation* input. It is also a **compiler input**:
+An OpenAPI spec says `POST /orders` takes `{id: int, qty: int, note: string}`.
+That is usually treated as a *validation* input. It is also a **compiler input**.
 
-- `id` and `qty` are integers → no SQLi, XSS, SSTI, or shell rule can ever match. **Prune them from
-  the plan entirely.** Not "run and fail fast" — never compiled in.
-- Only `note` is a string → the full detection plan compiles for one field out of three.
-- No file upload declared → multipart machinery is dead code for this route.
-- No cookies read → cookie resolution is dead code.
+If a field is declared an integer and the value really is an integer, it
+contains only digits and a sign. It cannot contain `UNION SELECT`. It cannot
+contain `<script`. Running injection rules against it is not merely unlikely to
+match — it is *provably incapable* of matching, so the rules are skipped and
+skipping them is sound rather than heuristic.
 
-Schema-driven specialization typically prunes **70–90% of the plan** for a well-specified API
-endpoint, and the pruning is *provably safe* because anything outside the schema was already going
-to be rejected.
+Measured on a realistically specified endpoint — five constrained fields, one
+free-text field:
 
-So the two things you'd normally trade against each other compound instead: **the better your API is
-specified, the faster AND safer gwaf gets.** No WAF on the market treats a schema as a compiler
-input. This is the flagship feature.
+| | With schema | Without |
+|---|---|---|
+| Latency | **1135 ns** | 1593 ns |
+| Fuel (work performed) | **314** | 710 |
+
+29% faster, 56% less work, *and* every out-of-spec request rejected before a
+rule runs.
+
+**The claim is enforced, not asserted.** `Field.Inert()` says a validated value
+cannot carry a payload, and a fuzz harness fails the build if any inert field
+ever validates a value containing a byte from the attack vocabulary. It found
+one on the first run: RFC 3339 permits a space as the date/time separator, and a
+space is a byte an attack can use. The grammar was tightened rather than the
+invariant weakened.
+
+**Guard rails that keep a partial schema from becoming a hole:**
+
+- A route the schema does not describe gets full inspection, exactly as if no
+  schema existed.
+- A string field is never inert. Free text gets the whole pipeline, so a payload
+  in `note` is still caught.
+- A value that *fails* validation is the opposite of inert — it is the most
+  suspicious value in the request and gets full inspection.
+- Base64 is not inert: its alphabet includes `+` and `/`, and the decoded
+  content is unknown to the schema.
+
+**Compile-time plan specialization** — pruning rules per route rather than per
+value — is the remaining half and is not built. The per-value form already
+delivers most of the benefit; the transducer lesson says measure before adding
+the machinery.
 
 ### 7. Compile once, mmap everywhere
 
@@ -340,7 +368,7 @@ and a human approves every suppression.
 | Multi-interpretation cost | N× (so: not shipped) | **1× on clean input, N× only when ambiguous** |
 | GC pressure from tx state | proportional to traffic | **~0 (pointer-free)** |
 | Ruleset cold start | 100s of ms | **~0 (mmap)** |
-| Schema effect on cost | none | **70–90% plan reduction** |
+| Schema effect on cost | none | **56% less work, 29% faster (measured)** |
 | Confidence rating | author's opinion | **measured on corpus, CI-gated** |
 | Split-payload evasion | missed | joined-view target, same pass |
 | FP tuning | production archaeology | **`gwaf learn` → reviewable diff** |
@@ -368,7 +396,7 @@ Target SLOs, all CI-gated:
 | ~~3. Transducers~~ | **Resolved: rejected.** Correct (38.6M fuzz execs agreed) but 1.3–2.0× slower. The harness caught it before it shipped. | Materialized transforms + chain CSE, already in production |
 | ~~4. Decode lattice~~ | **Resolved: not needed.** Conditional multi-interpretation ships the same security property at 1× on clean input. | Reading cap; exceeding it yields ReasonUndecidable |
 | 5. Pointer-free | Ergonomic cost — `Span` is less pleasant than `[]byte` | Confine to `internal/`; the public API speaks `[]byte` |
-| 6. Schema specialization | Only helps specified APIs; a wrong schema prunes real coverage | Fall back to the full plan when unspecified. Schema changes force recompile; never trust a runtime-supplied schema. |
+| ~~6. Schema specialization~~ | **Resolved.** Undescribed routes fall back to full inspection; strings are never inert; a fuzz harness enforces the Inert claim. | — |
 | 7. mmap artifact | Format versioning, endianness, a new corruption surface | Version + checksum + signature; reject on mismatch, never "best effort" load |
 
 **Concept 3 is the one I'd watch.** Transducers are where a clever optimization can silently
@@ -390,7 +418,7 @@ Sequenced so each step is independently valuable and de-risks the next.
 4. ~~**Transducers**~~ (concept 3). **Rejected on measurement** — see §3. The step-2 oracle did its
    job.
 5. ~~**Decode lattice**~~ (concept 4). **Done** as conditional multi-interpretation — 76/76 evasion, 0 false positives.
-6. **Schema specialization** (concept 6), once OpenAPI validation exists. ← next, and the highest-value item left
+6. ~~**Schema specialization**~~ (concept 6). **Done** per-value: 29% faster, 56% less work, stricter. Compile-time per-route pruning remains, unbuilt pending measurement.
 7. **mmap artifacts** (concept 7). Pure win, no dependents — last.
 
 Steps 1–3 delivered most of the performance and are done. Steps 5–6 are what make gwaf
