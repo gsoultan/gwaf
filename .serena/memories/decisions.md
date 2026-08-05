@@ -89,3 +89,31 @@ evaluated is a small constant independent of ruleset size, zero when the value
 has no attack vocabulary. Benign POST with a 1 KiB JSON body went 6.5us -> 17.6us
 because the whole body is tokenized as one value; field-level JSON parsing will
 cut that and is the next real optimization.
+
+## SHIPPED: structural XSS detection (`detect/xss`)
+Harder than SQL: an HTML parser never rejects input, so a payload need not be
+well formed to execute (`<svg/onload=alert(1)` works unclosed). Signals are
+correspondingly narrower and the FP corpus is larger (78 entries vs 56).
+
+**Position is the whole detector.** "onerror" in prose is a word; "onerror="
+between a tag name and its `>` is a handler. Same bytes, different grammar.
+
+53/53 payloads, 0/78 false positives. Replaced literal rules 3001-3003
+(retired, not reused).
+
+Signal design that mattered:
+- `executingTags` deliberately **excludes** b/i/em/p/a/code/ul — the tags people
+  actually write in comment fields. An `<a>` is dangerous via its href *scheme*,
+  not via being an `<a>`.
+- Event-handler detection checks the *shape* (`on` + letters) rather than an
+  enumerated list; browsers keep adding events and a list is permanently behind.
+- Scheme matching skips whitespace and control bytes, which is why
+  `java\tscript:` and `java\x00script:` are caught.
+- `SignalSchemeInAttribute` (5) is separate from `SignalScriptURI` (3): a
+  scheme in an href *is* a link that runs code; a scheme mentioned in prose is a
+  sentence.
+
+Two test payloads of mine were wrong, not the code: `<img/src=x/onerror=...>`
+does not execute (an unquoted attribute value runs to whitespace, so the handler
+is part of the value), and the doubled-quote SQL case is correct escaping.
+Verify which side is wrong before "fixing".

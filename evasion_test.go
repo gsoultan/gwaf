@@ -631,6 +631,21 @@ func TestSemanticDetectionCoversUnlistedVariants(t *testing.T) {
 		{"stacked truncate", "x'; TRUNCATE TABLE logs--"},
 		{"stacked update", "1; UPDATE users SET admin=1"},
 		{"union distinct", "1 UNION DISTINCT SELECT 1"},
+
+		// XSS variants no literal in the ruleset matches.
+		{"svg onload slash", "<svg/onload=alert(1)>"},
+		{"tab in scheme", `<a href="java` + "\t" + `script:alert(1)">x</a>`},
+		{"null in scheme", `<a href="java` + "\x00" + `script:alert(1)">x</a>`},
+		{"attribute breakout", `x" onerror="alert(1)`},
+		{"single quote breakout", `x' onfocus='alert(1)`},
+		{"textarea escape", "</textarea><script>alert(1)</script>"},
+		{"style expression", `<div style="width:expression(alert(1))">`},
+		{"moz binding", `<div style="-moz-binding:url(//evil.com/x.xml)">`},
+		{"details ontoggle", "<details open ontoggle=alert(1)>"},
+		{"formaction", `<button formaction="javascript:alert(1)">x</button>`},
+		{"base tag", `<base href="//evil.com/">`},
+		{"svg animate onbegin", `<svg><animate onbegin=alert(1) attributeName=x>`},
+		{"newline before handler", "<img src=x\nonerror=alert(1)>"},
 	}
 
 	for _, v := range variants {
@@ -662,6 +677,18 @@ func TestProseWithSQLKeywordsStillPasses(t *testing.T) {
 		"the total = 42 dollars, price < 100 or rating > 4",
 		"see note -- it explains the change",
 		"insert the card, then select your language",
+
+		// Markup and web prose a user legitimately sends.
+		"use the <b>bold</b> tag for emphasis",
+		"<p>first paragraph</p><p>second</p>",
+		`<a href="/docs/getting-started">read the docs</a>`,
+		`<img src="/static/logo.png" alt="company logo">`,
+		"the onerror callback fires when an image fails to load",
+		"a regular expression would be simpler here",
+		"List<String> names = new ArrayList<>();",
+		"const f = (a) => a < 10 && a > 0",
+		"avoid eval in production javascript",
+		"the iframe is sandboxed by default",
 	}
 
 	for _, p := range prose {

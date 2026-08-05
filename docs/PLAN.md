@@ -94,13 +94,15 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        than a lattice. Six ambiguity classes including UTF-7 (CVE-2026-21876).
        76/76 evasion corpus, 0/72 false positives, 1× cost on unambiguous input.
        The lattice is not needed until profiles show ambiguous traffic is common.
-4. [~] Semantic detectors. **SQLi shipped** (`detect/sqli`): tokenizes the value
+4. [~] Semantic detectors. **SQLi and XSS shipped** (`detect/sqli`): tokenizes the value
        and scores grammar rather than matching strings, under four interpolation
        contexts so quote-breaking is visible. 48/48 payload variants, 0/56
-       false positives on prose. It **replaced** four literal SQLi rules,
-       including one that was an active false positive on "the union selected a
-       new representative". Next: XSS, then shell, path traversal, SSTI, NoSQL,
-       LDAP.
+       false positives on prose. `detect/xss` reads markup structure in
+       *position* — an "onerror" adjacent to "=" inside a tag is a handler, the
+       same bytes in prose are a word: 53/53 payloads, 0/78 false positives.
+       Together they **replaced seven literal rules**, two of which were active
+       false positives ("the union selected a new representative", "the onerror
+       callback fires"). Next: shell, path traversal, SSTI, NoSQL, LDAP.
 5. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
 6. [ ] **SecLang parser** (pulled forward — gateon's DB requires it)
 7. [ ] Core ruleset with **calibrated** confidence

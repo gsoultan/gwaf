@@ -17,6 +17,7 @@ package core
 
 import (
 	"github.com/gsoultan/gwaf/detect/sqli"
+	"github.com/gsoultan/gwaf/detect/xss"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
 	"github.com/gsoultan/gwaf/rules/transform"
@@ -49,13 +50,20 @@ const (
 	// The IDs are retired, not reused. They appear in audit logs and any
 	// exception someone already wrote, and silently rebinding them to different
 	// behaviour would invalidate both.
-	IDXSSScriptTag      types.RuleID = 3001
-	IDXSSEventHandler   types.RuleID = 3002
-	IDXSSJavaScriptURI  types.RuleID = 3003
+	// 3001-3003 were literal XSS rules: script tags, event-handler attributes,
+	// and script URI schemes. All three are superseded by IDXSSSemantic, which
+	// recognises the same structures *in position* — an "onerror" inside a tag
+	// rather than anywhere in the value — and therefore also covers the
+	// variants a literal list cannot, such as "<svg/onload=" and
+	// "java\tscript:".
+	//
+	// Retired, not reused: the IDs appear in audit logs and in any exception
+	// already written against them.
 	IDRCEShellMetachars types.RuleID = 4001
 	IDRCECommonBinaries types.RuleID = 4002
 	IDLFIPHPWrapper     types.RuleID = 4003
 	IDSQLiSemantic      types.RuleID = 2010
+	IDXSSSemantic       types.RuleID = 3010
 	IDScannerUserAgent  types.RuleID = 5001
 )
 
@@ -190,41 +198,23 @@ func requestRules() rules.Set {
 		},
 
 		// ---- Cross-site scripting ------------------------------------------
+
+		// ---- Cross-site scripting -------------------------------------------
 		{
-			ID:         IDXSSScriptTag,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny("<script", "</script", "<svg/onload", "<iframesrc"),
+			ID:      IDXSSSemantic,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// Percent-decoding only. The detector reads markup structure, so
+			// stripping whitespace or folding case here would destroy the very
+			// positions it depends on: "onerror" adjacent to "=" inside a tag
+			// is a handler, and the same bytes elsewhere are a word.
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op:         xss.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
-			Msg:        "XSS script tag injection",
-			Tags:       []string{"xss", "owasp-a03"},
-		},
-		{
-			ID:         IDXSSEventHandler,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny("onerror=", "onload=", "onmouseover=", "onfocus=", "onclick="),
-			Actions:    []rules.Action{rules.Score},
-			Severity:   types.SeverityError,
-			Confidence: types.High,
-			Msg:        "XSS event handler attribute",
-			Tags:       []string{"xss", "owasp-a03"},
-		},
-		{
-			ID:         IDXSSJavaScriptURI,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny("javascript:", "vbscript:", "data:text/html"),
-			Actions:    []rules.Action{rules.Score},
-			Severity:   types.SeverityError,
-			Confidence: types.High,
-			Msg:        "Script URI scheme in input",
-			Tags:       []string{"xss", "owasp-a03"},
+			Msg:        "Cross-site scripting (structural)",
+			Tags:       []string{"xss", "owasp-a03", "semantic"},
 		},
 
 		// ---- Command injection and inclusion --------------------------------

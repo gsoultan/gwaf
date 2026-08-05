@@ -90,6 +90,7 @@ fuzz:
 	$(GO) test -run=XXX -fuzz=FuzzBuild -fuzztime=$(FUZZTIME) ./internal/interpret/
 	$(GO) test -run=XXX -fuzz=FuzzValidateInert -fuzztime=$(FUZZTIME) ./schema/
 	$(GO) test -run=XXX -fuzz=FuzzAnalyze -fuzztime=$(FUZZTIME) ./detect/sqli/
+	$(GO) test -run=XXX -fuzz=FuzzAnalyze -fuzztime=$(FUZZTIME) ./detect/xss/
 
 ## vuln: check dependencies and stdlib for known vulnerabilities.
 .PHONY: vuln

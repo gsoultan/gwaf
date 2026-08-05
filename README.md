@@ -33,14 +33,14 @@ Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
 
 | Workload | Latency | Allocations |
 |---|---|---|
-| Benign `GET` | **1.67 µs** | **0** |
-| Benign `POST`, 1 KiB JSON | 17.6 µs | **0** |
+| Benign `GET` | **2.00 µs** | **0** |
+| Benign `POST`, 1 KiB JSON | 22.2 µs | **0** |
 | Attack (blocked at header phase) | **1.40 µs** | 1 |
 
-The JSON figure is the honest cost of inspecting a whole 1 KiB body with a
-structural SQL parser. gwaf does not yet parse JSON into fields, so the body is
-tokenized as one value; field-level parsing will cut it substantially. It is
-still well inside the p99 < 100 µs budget.
+The JSON figure is the honest cost of inspecting a whole 1 KiB body with two
+structural parsers. gwaf does not yet parse JSON into fields, so the entire body
+is analysed as one value; field-level parsing is the next optimization and will
+cut it substantially. It is still well inside the p99 < 100 µs budget.
 
 **Detection, on a corpus of real bypass techniques:**
 
@@ -49,12 +49,18 @@ still well inside the p99 < 100 µs budget.
 | Evasion corpus | **76/76 blocked (100%)** |
 | Benign corpus | **0/72 false positives (0.00%)** |
 
-SQL injection is detected **structurally**: the value is tokenized and scored on
-grammar, so `1'/*!50000OR*/1=1--`, `1' XOR 1=1--`, and `1'OR'1'='1` are all
-caught without a rule being written for any of them — while "the union selected
-a new representative" is not, because the keywords are not adjacent in the
-grammar. That prose was a *false positive* under the literal rules this
+**SQL injection and XSS are detected structurally**, by grammar rather than by
+signature.
+
+`1'/*!50000OR*/1=1--`, `1' XOR 1=1--`, `<svg/onload=alert(1)>`, `java\tscript:`,
+and `x" onerror="alert(1)` are all caught with no rule written for any of them.
+Meanwhile *"the union selected a new representative"* and *"the onerror callback
+fires when loading fails"* are not — the keywords are present but the grammar is
+not. Both of those were **false positives** under the literal rules this
 replaced.
+
+Seven literal rules were deleted and two structural detectors added. Detection
+stayed at 76/76 and two real false positives went away.
 
 The evasion corpus covers case variation, whitespace splitting, single and
 double percent-encoding, overlong UTF-8, NUL truncation, backslash separators,
