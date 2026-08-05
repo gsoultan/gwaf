@@ -237,9 +237,9 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 	tx.addValue(types.Target{Kind: types.TargetRequestURI}, "", target)
 	tx.addValue(types.Target{Kind: types.TargetRequestProtocol}, "", proto)
 
-	path := target
+	path, query := target, ""
 	if i := indexByte(target, '?'); i >= 0 {
-		path = target[:i]
+		path, query = target[:i], target[i+1:]
 	}
 	tx.addValue(types.Target{Kind: types.TargetRequestPath}, "", path)
 
@@ -250,6 +250,56 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 			tx.op = op
 		}
 	}
+
+	tx.addQueryArguments(query)
+}
+
+// addQueryArguments records each query-string pair as an argument.
+//
+// This lives here rather than in the middleware because an embedder that hands
+// gwaf a request line has already told it everything needed, and a library that
+// silently inspects less than it was given is the worst kind of firewall. The
+// asymmetry was real: rules reading argument *values* also read REQUEST_URI and
+// so caught query payloads anyway, while rules reading argument *names* — the
+// NoSQL ones — saw nothing at all unless the embedder happened to call
+// AddArgument itself. They would have compiled, linted clean, and never fired.
+//
+// Pairs are split but not decoded. Decoding belongs to the transform chain and
+// to internal/interpret, which evaluate every plausible reading rather than
+// committing to one; decoding here would pick a single interpretation and throw
+// the others away, which is the shape of CVE-2026-21876.
+//
+// ';' separates pairs alongside '&' because several server-side parsers still
+// accept it, and a payload hidden behind a separator the origin honours is one
+// gwaf must honour too.
+func (tx *Transaction) addQueryArguments(query string) {
+	for len(query) > 0 {
+		pair := query
+		if i := indexAny(query, '&', ';'); i >= 0 {
+			pair, query = query[:i], query[i+1:]
+		} else {
+			query = ""
+		}
+		if pair == "" {
+			continue
+		}
+
+		name, value := pair, ""
+		if i := indexByte(pair, '='); i >= 0 {
+			name, value = pair[:i], pair[i+1:]
+		}
+		tx.AddArgument(name, value)
+	}
+}
+
+// indexAny returns the first index of either byte, or -1.
+func indexAny(s string, a, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == a || s[i] == b {
+			return i
+		}
+	}
+	return -1
 }
 
 // SetRemoteAddr records the client address.
@@ -477,7 +527,35 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 			return
 		}
 	case body.ContentForm:
+		// A form-encoded body never starts with '{' or '['. When one does, the
+		// declared type is not describing these bytes, and whichever decoder
+		// the origin runs is what decides — so the JSON reading is tried first.
+		if body.SniffJSON(b) && tx.parseStructuredBody(b, true) {
+			return
+		}
 		if tx.parseStructuredBody(b, false) {
+			return
+		}
+	default:
+		// Content-Type is attacker-controlled, so believing it is committing to
+		// one interpretation of the body — the mistake behind CVE-2026-21876.
+		// The declared type is a claim about the bytes, not a fact.
+		//
+		// It matters most in Go, where the ubiquitous idiom
+		//
+		//	json.NewDecoder(r.Body).Decode(&v)
+		//
+		// never looks at the header at all. Express with type:'*/*' and Flask
+		// with force=True do the same. Against any of them, sending a JSON body
+		// labelled text/plain left every object key unparsed: a value-position
+		// payload was still caught in the raw body, but a key-position one --
+		// {"password":{"$ne":null}} -- became invisible.
+		//
+		// So a body that looks like JSON is parsed as JSON whatever it claims
+		// to be. This is an *additional* reading rather than a replacement, in
+		// the same spirit as SniffGzip: gwaf does not know which parser the
+		// origin runs, so it evaluates the plausible ones.
+		if body.SniffJSON(b) && tx.parseStructuredBody(b, true) {
 			return
 		}
 	}

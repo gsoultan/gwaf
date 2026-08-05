@@ -159,6 +159,34 @@ Two lessons worth keeping:
 
 ---
 
+## Detection coverage (measured, not claimed)
+
+The evasion corpus is **class × technique**. It used to be technique-only, which
+cannot see a missing attack class: seventeen encoding techniques applied to SQL
+injection and XSS reported 76/76 while template injection, NoSQL injection, and
+LDAP injection each scored 0/0 — and 0/0 does not appear in a percentage.
+`declaredClasses` now fails the build when a class gwaf claims to detect has too
+few cases behind the claim.
+
+| Class | Detector | Corpus | Confidence |
+|---|---|---|---|
+| SQL injection | `detect/sqli` structural | 21/21 | Certain |
+| Cross-site scripting | `detect/xss` structural | 20/20 | Certain |
+| Command injection | `detect/shelli` structural | 16/16 | Certain |
+| Path traversal | canonicalization + literals | 14/14 | Certain |
+| Local file inclusion | literals | 14/14 | Certain |
+| Template injection | `detect/ssti` structural | 14/14 | High |
+| NoSQL injection | `detect/nosqli` structural | 12/12 | Certain / High |
+| Scanners | literals | 3/3 | High |
+
+Detection 118/118, false positives 0/114. Neither number means anything alone.
+
+Still literal-only, and therefore still on the wrong side of the thesis: LFI
+wrappers, sensitive-file access, and scanner detection. LDAP injection has no
+detector and no corpus, and is deliberately not in `declaredClasses` yet —
+claiming a class without cases behind it is the failure this table exists to
+prevent.
+
 ## M3 — Schema + integration (weeks 14–24)
 
 **Framing correction.** gwaf is a library for *any* embedder — an API service, a

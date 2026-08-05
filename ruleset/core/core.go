@@ -16,7 +16,10 @@
 package core
 
 import (
+	"github.com/gsoultan/gwaf/detect/nosqli"
+	"github.com/gsoultan/gwaf/detect/shelli"
 	"github.com/gsoultan/gwaf/detect/sqli"
+	"github.com/gsoultan/gwaf/detect/ssti"
 	"github.com/gsoultan/gwaf/detect/xss"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
@@ -31,6 +34,15 @@ import (
 //	3,000–3,999  cross-site scripting
 //	4,000–4,999  command injection and local file inclusion
 //	5,000–5,999  scanners and known-hostile clients
+//	6,000–6,999  response-side disclosure
+//	7,000–7,999  NoSQL injection
+//	8,000–8,999  server-side template injection
+//
+// An authored ID must end below 100 within its band, because the generated
+// body-phase counterpart is the ID plus 900 (see bodyPhaseOffset) and has to
+// land in the same band. 2,501 would mirror to 3,401 — an ID an operator would
+// reasonably look up as cross-site scripting. TestMirrorIDsStayInBand enforces
+// this; it is not a convention anyone has to remember.
 const (
 	IDTraversalEncoded  types.RuleID = 1001
 	IDTraversalRaw      types.RuleID = 1002
@@ -60,19 +72,43 @@ const (
 	//
 	// Retired, not reused: the IDs appear in audit logs and in any exception
 	// already written against them.
-	IDRCEShellMetachars types.RuleID = 4001
-	IDRCECommonBinaries types.RuleID = 4002
-	IDLFIPHPWrapper     types.RuleID = 4003
-	IDPHPCodeUpload     types.RuleID = 4004
-	IDXMLEntity         types.RuleID = 4005
-	IDSQLiSemantic      types.RuleID = 2010
-	IDXSSSemantic       types.RuleID = 3010
-	IDScannerUserAgent  types.RuleID = 5001
+	// 4001 and 4002 were literal command injection rules: a list of command
+	// names glued to separators, and a list of shell binary paths. Both are
+	// superseded by IDShelliSemantic, which reads shell *structure* -- a name
+	// in command position, after unquoting -- and therefore also covers the
+	// forms no literal list can reach.
+	//
+	// Four payloads walked through them, each a technique in use for years:
+	// glob obfuscation (/???/c?t), encode-and-pipe (echo …|base64 -d|sh),
+	// fetch-and-pipe (curl …|sh), and substring expansion (${PATH:0:1}). None
+	// contains the literal it would have to match.
+	//
+	// 4001 was also an active false positive: "`id`" was a literal, and that
+	// is how everyone writes inline code in Markdown, so "use the `id` field"
+	// was blocked. The structural detector does not report a bare backtick
+	// substitution, for exactly that reason.
+	//
+	// Retired, not reused: the IDs appear in audit logs and in any exception
+	// already written against them.
+	IDLFIPHPWrapper    types.RuleID = 4003
+	IDPHPCodeUpload    types.RuleID = 4004
+	IDXMLEntity        types.RuleID = 4005
+	IDShelliSemantic   types.RuleID = 4010
+	IDSQLiSemantic     types.RuleID = 2010
+	IDXSSSemantic      types.RuleID = 3010
+	IDScannerUserAgent types.RuleID = 5001
 
 	// 6,000-6,999: response-phase leak detection.
 	IDLeakPrivateKey types.RuleID = 6001
 	IDLeakStackTrace types.RuleID = 6002
 	IDLeakSQLError   types.RuleID = 6003
+
+	// 7,000-7,999: NoSQL injection.
+	IDNoSQLiEval     types.RuleID = 7001
+	IDNoSQLiOperator types.RuleID = 7002
+
+	// 8,000-8,999: server-side template injection.
+	IDSSTIExpression types.RuleID = 8001
 )
 
 // argTargets are the request values an injection rule inspects. Header values
@@ -87,6 +123,16 @@ var argTargets = []types.Target{
 	{Kind: types.TargetArgNames},
 	{Kind: types.TargetRequestURI},
 	{Kind: types.TargetRequestHeaders},
+}
+
+// nameTargets are parameter *names* alone.
+//
+// Scoped this narrowly on purpose: an operator token in a name is an injected
+// query operator, while the same bytes in a value are somebody typing about
+// MongoDB. Reading values here produced exactly that false positive against
+// {"note":"use $ne to negate"}.
+var nameTargets = []types.Target{
+	{Kind: types.TargetArgNames},
 }
 
 // bodyTargets extend argTargets to the parsed body, for phase-2 rules.
@@ -248,7 +294,70 @@ func requestRules() rules.Set {
 			Tags:       []string{"sqli", "owasp-a03", "semantic"},
 		},
 
-		// ---- Cross-site scripting ------------------------------------------
+		// ---- NoSQL injection ------------------------------------------------
+		//
+		// Two rules rather than one, because the evidence is not equally
+		// certain and a rule carries a single confidence.
+		//
+		// Both read parameter *names*. That is the whole attack: in
+		// {"password":{"$ne":null}} nothing dangerous appears in any value, so
+		// a value-scanning detector finds nothing at all. See detect/nosqli.
+		{
+			ID:      IDNoSQLiEval,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: nameTargets,
+			// Percent-decoding only, and no case folding: MongoDB rejects
+			// "$NE", so folding would widen the rule onto strings the database
+			// would never honour.
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op:         nosqli.Operator(nosqli.SignalEvalOperator),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "NoSQL injection: database code execution operator",
+			Tags:       []string{"nosqli", "rce", "owasp-a03", "semantic"},
+		},
+		{
+			ID:         IDNoSQLiOperator,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    nameTargets,
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op: nosqli.Operator(nosqli.SignalQueryOperator |
+				nosqli.SignalUpdateOperator | nosqli.SignalAmbiguousOperator),
+			Actions:  []rules.Action{rules.Block},
+			Severity: types.SeverityCritical,
+			// High rather than Certain: a few frameworks expose MongoDB
+			// operators as their published filter DSL, so "?price[$gt]=100" is
+			// a documented feature somewhere. Such an application is a NoSQL
+			// injection surface by design and reporting it is right — but that
+			// is not the same as being certain it is an attack.
+			Confidence: types.High,
+			Msg:        "NoSQL injection: query operator in parameter name",
+			Tags:       []string{"nosqli", "owasp-a03", "semantic"},
+		},
+
+		// ---- Server-side template injection ---------------------------------
+		{
+			ID:      IDSSTIExpression,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// Percent-decoding only. The detector reads what sits inside a
+			// template expression, so the delimiters, dots, and parentheses it
+			// keys on must survive: folding case or stripping whitespace would
+			// destroy the very structure being read.
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op:         ssti.Operator(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			// High, not Certain, and the reason is worth stating plainly: an
+			// application whose users legitimately author Jinja or Liquid
+			// templates will send "{{ config.x }}" on purpose. That application
+			// needs a scoped exception. Reporting the finding is right;
+			// claiming certainty about it would not be.
+			Confidence: types.High,
+			Msg:        "Server-side template injection",
+			Tags:       []string{"ssti", "rce", "owasp-a03", "semantic"},
+		},
 
 		// ---- Cross-site scripting -------------------------------------------
 		{
@@ -270,43 +379,20 @@ func requestRules() rules.Set {
 
 		// ---- Command injection and inclusion --------------------------------
 		{
-			ID:         IDRCEShellMetachars,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			// Every literal here names a *command*, not merely a metacharacter.
-			//
-			// "$(" alone was here and was wrong at Certain confidence. Two bytes
-			// is not evidence: it is jQuery, it is a Makefile, it is a shell
-			// snippet someone pasted into a bug report -- and in binary content
-			// it appears by chance about once per hundred requests, which
-			// calibration measured as a 1.2% false-positive rate on gRPC
-			// traffic. Command substitution is dangerous when it substitutes a
-			// command, so the literal must include one.
-			Op: op.ContainsAny(
-				";cat/", "|cat/", "&&cat/", ";wget", ";curl", "|nc-",
-				";rm-rf", "&&rm-rf", ";chmod", "|sh-", ";bash-",
-				"$(cat", "$(curl", "$(wget", "$(id", "$(whoami", "$(uname",
-				"$(nc", "$(sh", "$(bash", "$(python", "$(perl",
-				"`cat", "`curl", "`wget", "`id`", "`whoami", "`uname",
-			),
+			ID:      IDShelliSemantic,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// Percent-decoding only. The detector reads separators, quoting,
+			// and expansion structure, so stripping whitespace or folding case
+			// would destroy the positions it depends on: "cat" after a ';' is a
+			// command, and the same three bytes elsewhere are a word.
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op:         shelli.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
-			Msg:        "Shell command injection",
-			Tags:       []string{"rce", "owasp-a03"},
-		},
-		{
-			ID:         IDRCECommonBinaries,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			Op:         op.ContainsAny("/bin/sh", "/bin/bash", "cmd.exe", "powershell-e"),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "Shell binary referenced in input",
-			Tags:       []string{"rce", "owasp-a03"},
+			Msg:        "Command injection (structural)",
+			Tags:       []string{"rce", "shelli", "owasp-a03", "semantic"},
 		},
 		{
 			ID:         IDLFIPHPWrapper,
@@ -481,9 +567,48 @@ func mirrorToBody(r rules.Rule) rules.Rule {
 	m := r
 	m.ID = r.ID + bodyPhaseOffset
 	m.Phase = types.PhaseRequestBody
-	m.Targets = bodyTargets
+	m.Targets = bodyTargetsFor(r.Targets)
 	m.Msg = r.Msg + " (body)"
 	return m
+}
+
+// bodyTargetsFor derives the body-phase targets from what the original rule
+// actually read.
+//
+// This used to assign bodyTargets unconditionally, which silently *widened*
+// every mirrored rule to inspect argument values, argument names, and the raw
+// body — whatever the original had been scoped to. That is harmless while every
+// rule reads everything, and wrong the moment one does not: the NoSQL rules read
+// parameter names only, because "$ne" in a name is an injected query operator
+// while the same bytes in a value are somebody typing about MongoDB. Widening
+// them produced exactly that false positive.
+//
+// A mirror must inspect the body-phase equivalent of its original, never more.
+func bodyTargetsFor(src []types.Target) []types.Target {
+	var readsValues, readsNames bool
+	for _, t := range src {
+		switch t.Kind {
+		case types.TargetArgs:
+			if t.Name == "" {
+				readsValues = true
+			}
+		case types.TargetArgNames:
+			readsNames = true
+		}
+	}
+
+	out := make([]types.Target, 0, len(bodyTargets))
+	if readsValues {
+		// ARGS at phase 2 carries query and body arguments merged; the raw body
+		// covers formats the argument parsers do not decompose.
+		out = append(out,
+			types.Target{Kind: types.TargetArgs},
+			types.Target{Kind: types.TargetRequestBody})
+	}
+	if readsNames {
+		out = append(out, types.Target{Kind: types.TargetArgNames})
+	}
+	return out
 }
 
 // withBodyPhase returns set plus a request-body counterpart for every rule that
@@ -550,11 +675,22 @@ func withResponsePhase(set rules.Set) rules.Set {
 	return out
 }
 
-// readsArgs reports whether a rule inspects attacker-supplied argument values,
-// which is what makes a body counterpart meaningful.
+// readsArgs reports whether a rule inspects attacker-supplied arguments —
+// their values, their names, or both — which is what makes a body counterpart
+// meaningful.
+//
+// Names count. A JSON object key arrives only at the body phase, so a rule that
+// reads names and is not mirrored inspects query-string names and nothing else:
+// it would catch "?password[$ne]=1" and miss {"password":{"$ne":null}}, which
+// is the far more common form of the same attack.
 func readsArgs(r rules.Rule) bool {
 	for _, t := range r.Targets {
-		if t.Kind == types.TargetArgs && t.Name == "" {
+		switch t.Kind {
+		case types.TargetArgs:
+			if t.Name == "" {
+				return true
+			}
+		case types.TargetArgNames:
 			return true
 		}
 	}

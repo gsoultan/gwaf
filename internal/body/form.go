@@ -142,6 +142,34 @@ func DetectContent(contentType string) ContentKind {
 	}
 }
 
+// SniffJSON reports whether data looks like a JSON document.
+//
+// Content-Type is attacker-controlled, and several widely used decoders never
+// consult it: json.NewDecoder(r.Body).Decode(&v) is the ordinary Go idiom and
+// ignores the header entirely, as do Express with type:'*/*' and Flask with
+// force=True. Trusting the declared type against any of them leaves a JSON body
+// labelled text/plain completely unparsed.
+//
+// Used as an *additional* reading rather than a replacement, exactly like
+// SniffGzip. The check is deliberately shallow — a leading '{' or '[' — because
+// its job is to decide whether the JSON parser is worth running, and that
+// parser is strict enough to reject what is not JSON. A document the parser
+// refuses falls back to whole-body inspection, so a wrong guess here costs a
+// parse attempt and never coverage.
+func SniffJSON(data []byte) bool {
+	for _, c := range data {
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{', '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
 func indexByteStr(s string, c byte) int {
 	for i := range len(s) {
 		if s[i] == c {

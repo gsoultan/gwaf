@@ -404,3 +404,118 @@ mistake generation removes.
 is log it. Includes `interpretation`, because a payload found only under an
 alternative decoding is the most confusing thing to see in a log — the bytes on
 the wire look harmless and the firewall appears to have malfunctioned.
+
+## FINDING: 76/76 was a decoding score, not a detection score
+The evasion corpus was organised by **technique** only — 17 encoding classes
+(case, whitespace, percent, double, overlong UTF-8, NUL, UTF-7, entities...)
+applied almost entirely to SQLi and XSS payloads. It reported 100% while five
+attack classes had **zero cases**, and 0/0 does not appear in a percentage.
+
+Probing by hand found: SSTI 0/8, NoSQL 0/5, LDAP 0/3, shell 10/14.
+
+The corpus is now **class × technique**, and `declaredClasses` fails the build
+when a class gwaf claims to detect has too few cases. A gap has to be visible in
+CI rather than found by probing the firewall by hand.
+
+## SHIPPED: detect/nosqli — the attack is a key, not a value
+Nothing dangerous appears in any *value* of `{"password":{"$ne":null}}`. The
+payload is a key in a position that expected a scalar, so a value-scanning
+detector finds nothing. `ARGS_NAMES` + `KindKey` already existed, so the
+detector reads a *name* and the prefilter gates on operator tokens normally —
+no engine change was needed.
+
+Enumerating the *grammar's keywords* is bounded (the vendor publishes them),
+unlike enumerating payload variants. Collisions resolved toward benign:
+`$comment` (JSON Schema), and the whole OData `$filter`/`$search`/`$top` family
+— a published standard with a large installed base. Losing recall on a
+low-value operator beats blocking every OData client.
+
+Two rules, because evidence is not equally certain and a rule carries one
+confidence: `$where`/`$function` (code execution in the DB) is **Certain**;
+`$ne`/`$gt` is **High**, because a few frameworks expose Mongo operators as
+their published filter DSL. Splitting also narrows the eval rule's literals from
+50 to 4 — a far more selective automaton.
+
+## Three bugs the NoSQL rule exposed, none of them in the detector
+1. **`mirrorToBody` widened every mirrored rule.** It assigned a fixed target
+   list, so a name-only rule silently gained value inspection at phase 2 —
+   which blocked `{"note":"use $ne to negate"}`. Invisible while every rule
+   reads everything. Now derives targets from what the original read.
+2. **`readsArgs` ignored `ARGS_NAMES`.** A name-reading rule got no body
+   counterpart, so it would catch `?password[$ne]=1` and miss the far more
+   common `{"password":{"$ne":null}}`.
+3. **ID band collision.** 2501 + `bodyPhaseOffset` (900) = 3401, inside the XSS
+   band — an ID an operator would look up as XSS. Now enforced by
+   `TestMirrorIDsStayInBand`, not by remembering.
+
+## FINDING: Content-Type was trusted, and that was a total bypass for key attacks
+`json.NewDecoder(r.Body).Decode(&v)` — the ordinary Go idiom — never reads
+Content-Type. Neither does Express with `type:'*/*'` or Flask with `force=True`.
+gwaf did: a JSON body labelled `text/plain` was never parsed, so object keys
+were never inspected.
+
+Value-position payloads still matched against the raw body, which is exactly why
+nothing failed for so long — the corpus had no key-position attack in it until
+NoSQL detection arrived.
+
+`SniffJSON` is now an *additional* reading, same reasoning as `SniffGzip`. Also
+applied when the declared type is form-encoded, since a form body never starts
+with `{`.
+
+## Query parsing moved from middleware into SetRequestLine
+`SetRequestLine` recorded the target but never parsed its query string; only the
+`net/http` middleware called `AddArgument`. Rules reading argument *values* also
+read `REQUEST_URI`, so they caught query payloads anyway — but rules reading
+argument *names* saw nothing unless the embedder happened to parse it. The
+NoSQL rules would have been inert for every non-middleware embedder.
+
+Pairs are split but **not decoded**: decoding belongs to the transform chain and
+`internal/interpret`, which evaluate every plausible reading. Decoding at parse
+time would commit to one, which is the shape of CVE-2026-21876.
+
+## SHIPPED: detect/ssti — delimiters are not the attack
+`{{ user.name }}` is Vue, Angular, Handlebars, Jinja, and Liquid. `${var.region}`
+is Terraform. `${{ matrix.os }}` is GitHub Actions. A detector keying on `{{`
+blocks every CMS, docs tool, and issue tracker — and is most wrong precisely
+where template content is the application's whole point.
+
+So `SignalTemplateContext` is weighted **zero**. The verdict comes from what is
+*evaluated* inside: Python dunder traversal, app-object access, JVM class
+access, Ruby execution, Smarty/Velocity directives. Ships at **High**, because
+an app whose users author templates legitimately will send `{{ config.x }}`.
+
+`{{7*7}}` scores 2 and cannot fire alone — `{{ 2*count }}` is a real template.
+`self` was dropped from the app-object list: `#{self.name}` is idiomatic Ruby.
+
+## SHIPPED: detect/shelli — position, not presence
+The literal command list missed four techniques that contain no literal to
+match: glob obfuscation (`/???/c?t`), encode-and-pipe (`echo …|base64 -d|sh`),
+fetch-and-pipe (`curl …|sh`), substring expansion (`${PATH:0:1}`). It was also
+an active FP: `` `id` `` was a literal, so "use the `id` field" was blocked.
+
+Command names are ordinary English — id, less, who, find, sort, head, at, env —
+so the list is only consulted in **command position**, right after a separator.
+"first; second; third" is prose; "1.1.1.1; cat /etc/passwd" is not. Tokens are
+unquoted first, so `c'a't` and `c\at` read as `cat`.
+
+**Documented limit:** a bare backtick substitution is not reported. `` `id` ``
+is command substitution and also Markdown inline code, and blocking it makes the
+firewall an obstacle to whoever documents the system. `$(id)` has no such benign
+reading and is reported.
+
+## Two bugs in shelli, both found by harnesses rather than review
+1. **Literals `/` and `{` broke the zero-rules SLO.** Every request path has a
+   `/` and every JSON body opens with `{`, so both made all benign traffic a
+   candidate. Fixed structurally: brace expansion is read as a command position
+   (drops `{`), and interpreter paths are named specifically (drops `/`).
+2. **`globToken` returned early at a separator, skipping its own validation.**
+   An ordinary Accept header — `…;q=0.9,image/avif,*/*;q=0.8` — scored as a
+   glob command. Restructured to a single validated exit.
+3. **Fuzz found `0/nC`**: detected as an interpreter path with no literal
+   covering it, so the prefilter would have dropped it. Interpreter paths are
+   now matched case-sensitively, which is also simply correct — `/bin/SH` does
+   not resolve on a case-sensitive filesystem.
+
+## Open: BenignPOSTJSON is 18.5us against a 15us SLO
+Pre-existing, not a regression (HEAD measured 18.7us before this work). Recorded
+so it is not mistaken for new.

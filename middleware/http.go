@@ -36,8 +36,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
-	"strings"
 
 	"github.com/gsoultan/gwaf"
 )
@@ -223,41 +221,10 @@ func populateRequest(tx *gwaf.Transaction, r *http.Request) {
 		tx.AddRequestHeader("Host", r.Host)
 	}
 
-	addQueryArgs(tx, r.URL)
-}
-
-// addQueryArgs parses the query string and records each argument.
-//
-// url.ParseQuery is not used: it drops pairs it considers malformed, and a pair
-// an attacker deliberately malformed is exactly the one worth inspecting. The
-// origin's own parser may well accept it.
-func addQueryArgs(tx *gwaf.Transaction, u *url.URL) {
-	q := u.RawQuery
-	for len(q) > 0 {
-		var pair string
-		if i := strings.IndexAny(q, "&;"); i >= 0 {
-			pair, q = q[:i], q[i+1:]
-		} else {
-			pair, q = q, ""
-		}
-		if pair == "" {
-			continue
-		}
-
-		name, value := pair, ""
-		if i := strings.IndexByte(pair, '='); i >= 0 {
-			name, value = pair[:i], pair[i+1:]
-		}
-
-		// Decoding failures keep the raw form rather than dropping the pair.
-		if dec, err := url.QueryUnescape(name); err == nil {
-			name = dec
-		}
-		if dec, err := url.QueryUnescape(value); err == nil {
-			value = dec
-		}
-		tx.AddArgument(name, value)
-	}
+	// Query arguments are not added here. SetRequestLine derives them from the
+	// request target, so every embedder gets them and not only this one -- and
+	// one implementation means one set of anti-evasion decisions rather than
+	// two that can drift.
 }
 
 // captureBody reads the request body for inspection and puts it back.

