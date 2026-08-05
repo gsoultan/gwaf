@@ -243,10 +243,11 @@ and the framework adapters belong.
        as the Content-Encoding one, where a payload the origin will act on is
        opaque to the detectors.
 
-       Still open: protobuf *descriptor*-driven positive security (`schema/grpc`),
-       which would give gRPC what `schema/openapi` now gives REST — field types,
-       and therefore provably inert fields. GraphQL depth/complexity/
-       introspection also remains.
+       **`schema/grpc` shipped**: a FileDescriptorSet compiles to
+       `schema.Operation`, one per RPC, with fields named by number path so they
+       match what the wire parser emits. Declared int32/bool/enum fields are
+       provably inert and skipped. Still open: GraphQL depth, complexity, and
+       introspection control.
 5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation
 6. [~] Framework adapters shipped as separate modules: `adapters/gin`,
        `adapters/echo`, `adapters/fiber`. `Explain()` shipped.

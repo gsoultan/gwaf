@@ -873,3 +873,60 @@ architecture nobody built. A third party writing a semantic detector implements
 
 Claiming five and shipping four is the same class of gap as claiming a
 confidence tier the corpus cannot measure: the doc was the thing that was wrong.
+
+## SHIPPED: protobuf wire parsing + schema/grpc
+### The premise, verified before building
+Printable-run extraction drops runs below `minTextRun` (8). That floor is right
+for a JPEG and wrong for a document made of fields. Measured:
+
+    "1' OR 1=1"  (9 bytes)  detected
+    "'OR 1=1"    (7 bytes)  MISSED
+
+Both are SQL injection. The second was invisible only because a heuristic for
+unstructured binary was applied to a structured document.
+
+`internal/body/protobuf.go` parses the wire format with **no descriptor** — it
+is self-describing enough to walk — and emits length-delimited fields under
+their number path ("3", "4.1"). Varints and fixed-width fields are numbers and
+are skipped: no sequence of digits is an injection.
+
+**The one ambiguity:** wire type 2 does not distinguish a string from a nested
+message. Both readings are taken when both are plausible (parses cleanly →
+recurse; not binary → also emit), which is the rule internal/interpret follows
+for ambiguous encodings.
+
+Zero allocations, 367ns/op, linear scaling to 64 KiB.
+
+### schema/grpc
+Compiles a FileDescriptorSet (what `protoc --descriptor_set_out` already emits)
+into `schema.Operation`, one per RPC, path `/pkg.Service/Method`. Fields are
+named by number path so they match exactly what the wire parser emits — that
+alignment is the whole trick, and it means the core never needs a descriptor.
+
+int32/bool/enum → provably inert, skipped entirely. **bytes is deliberately NOT
+inert**: the declared type says nothing about the content, and an upload, a
+sub-document, and a base64 blob all arrive as bytes.
+
+Strict mode matters more here than for JSON, because proto3 *preserves* unknown
+fields by design — a service will accept and forward a field nobody declared.
+
+### Two mistakes, both mine, both caught by tooling
+1. **My test helper encoded a protobuf tag as a single byte.** Field 99's tag is
+   794, which truncates to 26 — field 3, a field the schema declares. So a
+   strict-mode test "passed" an undeclared field that was never undeclared. The
+   helper was wrong, not the implementation.
+2. **`go vet` caught `append(x)` with no values** in a test. Caught only because
+   the full gate runs vet across every module.
+
+### A fuzzing lesson worth keeping
+`FuzzParseProtobuf` appeared to hang: workers froze at 0 exec/sec. It was **not**
+a parser hang — all corpus entries replay in 0.28s, and a 10-second per-exec
+timeout never fired across 39.1M executions.
+
+The real bug was in the harness: **`t.Fatal` called from inside the parser's
+emit callback**. `t.Fatal` is `runtime.Goexit`, and unwinding out of a recursive
+callback wedges a fuzz worker instead of reporting a failure. Collect findings
+in the callback and assert after it returns.
+
+The residual 0/sec readings are fuzzer bookkeeping plus machine contention —
+the same noise that produced a nonsense +136% benchmark earlier in this session.

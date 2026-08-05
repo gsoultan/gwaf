@@ -56,6 +56,15 @@ semver, and the four extension interfaces are frozen hard.
   the embedder — and that boundary only works if the results of the embedder's
   work have a way back in. Until now they did not.
 
+- **`schema/grpc`** — compiles a protobuf FileDescriptorSet into a gwaf schema
+  (separate module). Every RPC becomes a route, and declared int32/bool/enum
+  fields are provably inert, so the engine skips them. `bytes` is deliberately
+  not inert: the declared type says nothing about the content.
+- **Protobuf wire parsing** (`internal/body/protobuf.go`). Printable-run
+  extraction has a length floor that is right for a JPEG and wrong for a
+  document made of fields: a 7-byte SQL injection in a protobuf string field was
+  missed and a 9-byte one was not. Fields are now named by number path, which is
+  also what lets a descriptor type them without the core ever needing one.
 - gRPC message unframing, per-message decompression via `grpc-encoding`, and
   whole-body base64 decoding for `grpc-web-text` (`internal/body/grpc.go`). Two
   bypasses of the same class as the Content-Encoding one: a payload the origin

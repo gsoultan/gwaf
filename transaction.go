@@ -778,6 +778,12 @@ func (tx *Transaction) recordText(frame int, b []byte) {
 	// than by whether a NUL byte happens to appear is what keeps a protobuf
 	// payload out of the text detectors.
 	//
+	// Parsing the wire format is better still, because it removes an arbitrary
+	// floor: printable-run extraction drops runs shorter than minTextRun, which
+	// is right for a JPEG and wrong for a document made of fields. Measured, a
+	// 7-byte SQL injection in a protobuf string field was invisible and a 9-byte
+	// one was not.
+	//
 	// Consulting IsBinary here was a measured regression. Framing removal takes
 	// the header with it, and the header's first byte is the compression flag —
 	// zero for an uncompressed message. That NUL was what made IsBinary fire on
@@ -801,6 +807,33 @@ func (tx *Transaction) recordText(frame int, b []byte) {
 		MaxValueLen:  tx.waf.cfg.limits.MaxValueLen,
 		MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
 	})
+
+	// A gRPC message is protobuf, and parsing the wire format beats extracting
+	// printable runs from it: every field is inspected whatever its length, and
+	// each carries a stable name that a descriptor can type (schema/grpc).
+	//
+	// Falls through to run extraction when the bytes do not parse, because a
+	// message gwaf could not read is not a message it may ignore.
+	if frame >= 0 {
+		// Named by field-number path alone -- "3", "4.1" -- rather than by
+		// frame. A schema declares field 3 of the request message once, and a
+		// streaming call sends that same message many times, so folding the
+		// frame index into the name would make the schema unmatchable and say
+		// nothing an operator can act on.
+		parsed := tx.bodyParser.ParseProtobuf(nil, b, func(n, v []byte, _ body.Kind) bool {
+			inert := tx.checkBodySchema(n, v)
+			tx.recordFieldBytes(types.TargetArgs, n, v, inert)
+			return true
+		})
+		if parsed {
+			return
+		}
+		tx.bodyParser.Reset(body.Limits{
+			MaxFields:    tx.waf.cfg.limits.MaxArgs,
+			MaxValueLen:  tx.waf.cfg.limits.MaxValueLen,
+			MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
+		})
+	}
 	tx.bodyParser.ExtractText(name, b, func(name, value []byte, _ body.Kind) bool {
 		tx.recordValueBytes(types.TargetRequestBody, name, value, false)
 		return true
