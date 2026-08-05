@@ -400,6 +400,34 @@ whom is profile #1.
 
 ---
 
+## 5b. Knowledge tooling — check before reading
+
+Three layers exist so that orienting in this repo does not mean reading it. Use
+them **before** a broad file sweep; that is what they are for. Details in
+`.serena/memories/knowledge_tooling.md`.
+
+| Layer | Where | Use for |
+|---|---|---|
+| **Serena memories** | `.serena/memories/` | Architectural context, and **what was already tried and rejected** |
+| **Graphify** | `graphify-out/` (gitignored) | `graphify query`, `explain`, `path`, `affected` — 804 nodes |
+| **Obsidian** | `~/Documents/ObsidianVault/gwaf` | Linked reading; `Memories/` and `Docs/` are symlinks, always current |
+
+**Read `.serena/memories/decisions.md` before proposing an optimization.**
+Transducers, the decode lattice, and a bytecode VM were each built or specified
+and then rejected *with measurements*. Rebuilding one is the most likely way to
+waste a week here.
+
+Refresh after significant architectural change:
+
+```bash
+graphify update .                                   # no LLM, no cost
+rtk graphify export obsidian --dir ~/Documents/ObsidianVault/gwaf
+```
+
+Write a memory when a decision cost real work — especially a rejection.
+
+---
+
 ## 6. Working agreements
 
 - Ship the evasion corpus and benchmark harness **before** the detectors they measure. Metrics
@@ -408,3 +436,10 @@ whom is profile #1.
 - When a bypass is found: failing test first, then fix, then a note in the code citing the technique.
 - Publish reproducible benchmarks. Coraza's benchmark page has been "under renovation" since
   April 2026 — that vacuum is ours to fill, and only if our numbers are honest and re-runnable.
+- **Test the premise, not only the implementation.** Before building an optimization, verify the
+  cost it targets still exists. The transducer was correct and still wrong, because the allocation
+  it eliminated had already been removed by simpler means.
+- **Enforce claims, do not assert them.** `Field.Inert()` is backed by a fuzz harness that fails the
+  build if the claim is ever false. When that harness disagrees with the code, tighten the code —
+  it found that RFC 3339 permits a space separator, and the grammar was narrowed rather than the
+  invariant weakened.

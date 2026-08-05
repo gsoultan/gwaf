@@ -1,0 +1,13 @@
+# the name by which the project can be referenced within Serena
+project_name: "gwaf"
+
+language: go
+
+ignore_all_files_in_gitignore: true
+ignored_paths:
+  - "bench"
+  - "graphify-out"
+
+read_only: false
+excluded_tools: []
+initial_prompt: ""
