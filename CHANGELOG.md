@@ -82,7 +82,12 @@ semver, and the four extension interfaces are frozen hard.
   outcome.
 - `detect/nosqli`, `detect/ssti`, `detect/shelli`, `detect/ldapi`.
 - `schema/openapi` — OpenAPI 3.x frontend (separate module).
-- `seclang` — SecLang/CRS bridge with RE2 literal extraction (separate module).
+- `seclang` — SecLang/CRS bridge with RE2 literal extraction (separate module),
+  plus `gwaf-seclang report|convert`. `convert` emits Go source rather than a
+  runtime loader: the point of migrating is to stop having a second
+  configuration language, and generated Go is compiler-checked, diffable, and
+  costed by `gwaf lint`. Everything untranslatable is a comment in the generated
+  file rather than a line in a log nobody kept.
 - `adapters/gin`, `adapters/echo`, `adapters/fiber` (separate modules). chi,
   gorilla/mux, connect-go, and `net/http` need no adapter.
 - Response phase: `SetResponseStatus`, `AddResponseHeader`,

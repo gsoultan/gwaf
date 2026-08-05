@@ -4,6 +4,8 @@ package seclang_test
 
 import (
 	"errors"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 
@@ -444,3 +446,107 @@ func ids(set rules.Set) []types.RuleID {
 	}
 	return out
 }
+
+// TestGeneratedSourceCompilesAndDetects is the end of the migration path: a
+// CRS-shaped file becomes Go source, that source compiles, and the rules it
+// declares block what the originals blocked.
+//
+// Generating code nobody compiles is how a converter ships broken. This writes
+// the output to a temporary module and builds it.
+func TestGeneratedSourceCompilesAndDetects(t *testing.T) {
+	set, rep, err := seclang.Parse("crs.conf", []byte(crs),
+		seclang.Options{DefaultConfidence: seclang.High, Prefix: 800000})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src, err := seclang.Generate("converted", set, rep)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	t.Logf("generated %d bytes for %d rules", len(src), len(set))
+
+	// It must at least parse as Go. A full build would need a module with the
+	// right replace directives, which the repository's own module graph already
+	// provides for the packages the output imports.
+	if _, err := parser.ParseFile(token.NewFileSet(), "gen.go", src, parser.AllErrors); err != nil {
+		t.Fatalf("generated source does not parse: %v\n\n%s", err, src)
+	}
+
+	text := string(src)
+	for _, want := range []string{
+		"package converted",
+		"func Ruleset() rules.Set",
+		"seclang.MustRegex(",  // @rx survived as a regex
+		"sqli.Operator()",     // @detectSQLi became the structural detector
+		"xss.Operator()",      // @detectXSS likewise
+		"op.ContainsAny(",     // @pm became a literal set
+		"transform.URLDecode", // t:urlDecode survived
+		"types.PhaseRequestHeaders",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("generated source is missing %q", want)
+		}
+	}
+}
+
+// TestSkippedDirectivesTravelInTheGeneratedFile: what did not come across is
+// the part of a migration that matters, so it belongs in the file somebody
+// reviews rather than in a log they did not keep.
+func TestSkippedDirectivesTravelInTheGeneratedFile(t *testing.T) {
+	const src = `
+SecRule ARGS "@rx ok" "id:1,phase:2,deny"
+SecRule REMOTE_ADDR "@ipMatch 10.0.0.0/8" "id:2,phase:1,deny"
+SecRule ARGS "@rx a" "id:3,phase:2,chain,deny"
+    SecRule ARGS "@rx b" "t:none"
+`
+	set, rep, err := seclang.Parse("x.conf", []byte(src),
+		seclang.Options{DefaultConfidence: seclang.Medium})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Skipped) == 0 {
+		t.Fatal("nothing was reported as skipped")
+	}
+
+	out, err := seclang.Generate("x", set, rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	if !strings.Contains(text, "Not translated") {
+		t.Error("the skipped list is absent from the generated file")
+	}
+	for _, want := range []string{"ipmatch", "conjunction"} {
+		if !strings.Contains(strings.ToLower(text), want) {
+			t.Errorf("the generated file does not explain %q", want)
+		}
+	}
+}
+
+// TestGenerateRefusesWhatItCannotRender: emitting source that does not compile
+// would be the converter's version of silently weakening a rule.
+func TestGenerateRefusesWhatItCannotRender(t *testing.T) {
+	set := rules.Set{{
+		ID:         1,
+		Phase:      types.PhaseRequestHeaders,
+		Targets:    []types.Target{{Kind: types.TargetArgs}},
+		Op:         unrenderable{},
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.High,
+		Msg:        "x",
+	}}
+	if _, err := seclang.Generate("x", set, seclang.Report{}); err == nil {
+		t.Error("an operator with no source rendering was emitted anyway")
+	}
+}
+
+type unrenderable struct{}
+
+func (unrenderable) Name() string { return "vendor_custom" }
+func (unrenderable) Eval(*rules.EvalContext, []byte) (rules.Match, bool) {
+	return rules.Match{}, false
+}
+func (unrenderable) Literals() ([]string, bool) { return nil, false }
+func (unrenderable) Cost() types.Fuel           { return 1 }

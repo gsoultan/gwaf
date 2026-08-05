@@ -1017,3 +1017,38 @@ every structural count comes back zero.
 
 **Lesson: a scripted edit that does not match is a silent no-op.** Verify by
 reading the file back, not by the absence of an error.
+
+## SHIPPED: gwaf-seclang report|convert
+The in-repo half of adoption. `report` first, deliberately: the number worth
+knowing before a migration is not how many rules arrive but which ones do not,
+and why. A conversion that silently drops a third of a ruleset is worse than
+none, because the operator believes they migrated.
+
+`convert` emits **Go source**, not a runtime .conf loader. The point of
+migrating is to stop having a second configuration language: generated Go is
+compiler-checked, `git diff`-able, reviewable, and costed by `gwaf lint`, and a
+typo in a target name is a build failure rather than a rule that silently never
+fires. That is the "typed, compile-checked config" axis.
+
+Output goes through `go/format`, which orders imports *and* fails on invalid Go
+— so a converter bug is an error at conversion time rather than a build failure
+in somebody else's repository with a file they did not write.
+
+An operator with no source rendering is an **error**, not an omission: emitting
+code that does not compile would be the converter's version of silently
+weakening a rule.
+
+## The same silent-no-op mistake, twice in one session
+A scripted string replace failed to match because **gofmt had realigned the
+code** between writing it and editing it. First time it left the GraphQL
+introspection rule with no transform chain (invisible except over GET). Second
+time it left a stale test assertion.
+
+**Use the Edit tool for anchored edits — it errors on mismatch. A python
+`str.replace` that does not match is a silent no-op.**
+
+## Item 5 (adoption) is where I stopped, on purpose
+The gateon `wafengine` adapter and shadow mode mean modifying a *different
+repository*. That is an outward-facing change the user has to authorise, and
+they have already corrected me once for drifting gateon-specific. The in-repo
+enabler is done; the cross-repo step is theirs to start.

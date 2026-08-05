@@ -281,7 +281,16 @@ The most important milestone. A WAF library with no adopter is a benchmark, not 
 1. [ ] gateon `wafengine` adapter
 2. [ ] **Shadow mode in gateon production** — Coraza authoritative, gwaf observing
 3. [ ] `gwaf learn` (CONCEPT.md §12)
-4. [~] `gwaf explain` shipped. `seclang` shipped as a module: a real lexer
+4. [~] `gwaf explain` shipped, and `gwaf-seclang` now does the converting:
+       `report` prints what would and would not come across, `convert` emits Go
+       source. Source rather than a runtime loader, because the point of
+       migrating is to stop having a second configuration language — generated
+       Go is compiler-checked, diffable, reviewable, and costed by `gwaf lint`.
+       Output goes through `go/format`, so a converter bug is an error at
+       conversion time rather than a build failure in somebody else's repository.
+       `gwaf doctor` remains.
+
+       Earlier note: `seclang` shipped as a module: a real lexer
        (quoting, continuations, '#' inside quotes), operator/variable/action
        translation, and an RE2 operator with sound literal extraction so
        imported regex rules stay prefilterable. A rule that cannot be translated

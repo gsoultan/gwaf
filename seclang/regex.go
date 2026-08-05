@@ -210,3 +210,27 @@ func longest(ss []string) string {
 	}
 	return best
 }
+
+// Regex returns an @rx operator for a pattern, for code the converter emits.
+//
+// Exported so a generated ruleset can reconstruct the operator it was compiled
+// from. That dependency is honest rather than incidental: running a Core Rule
+// Set means running its regexes, and a regex needs an engine. An embedder who
+// converts CRS keeps this module; one who does not, never links it.
+//
+// RE2, so the imported patterns are linear-time and ReDoS-impossible. A pattern
+// using backreferences or lookaround does not compile, which is the property
+// that makes importing a stranger's regexes defensible at all.
+func Regex(pattern string) (rules.Operator, error) {
+	return newRegexOperator(pattern, false)
+}
+
+// MustRegex is Regex for generated code, where the pattern was already
+// validated by the converter that emitted it.
+func MustRegex(pattern string) rules.Operator {
+	o, err := Regex(pattern)
+	if err != nil {
+		panic("seclang: generated pattern does not compile: " + err.Error())
+	}
+	return o
+}
