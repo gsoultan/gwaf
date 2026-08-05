@@ -127,6 +127,31 @@ attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
 | [GATEON-MIGRATION.md](docs/GATEON-MIGRATION.md) | First adopter: replacing Coraza |
 | [CLAUDE.md](CLAUDE.md) | Project guidelines, structure, standards |
 
+## Framework integration
+
+```go
+waf, _ := gwaf.New()                       // blocking, core ruleset, no config
+
+http.Handle("/", middleware.HTTP(waf)(mux))          // net/http, chi, gorilla
+r.Use(gwafgin.Middleware(waf))                       // gin
+e.Use(gwafecho.Middleware(waf))                      // echo
+app.Use(gwaffiber.Middleware(waf))                   // fiber
+```
+
+chi, gorilla/mux, connect-go, and the standard library need **no adapter**:
+`middleware.HTTP` is already a `func(http.Handler) http.Handler`.
+
+Everything beyond core lives in its own module, so importing gwaf pulls in
+nothing you did not ask for — **the core module has zero third-party
+dependencies**, and that is the one property no competing WAF library offers.
+
+| Module | Why it is separate |
+|---|---|
+| `middleware` | so a framework adapter never reaches core |
+| `adapters/{gin,echo,fiber}` | your router is your choice, not gwaf's |
+| `schema/openapi` | YAML needs a parser core will not carry |
+| `seclang` | CRS migration links a regex engine |
+
 ## Scope
 
 gwaf analyzes **one request in isolation, with no memory**, and answers one

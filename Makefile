@@ -8,7 +8,8 @@ FUZZTIME ?= 30s
 # (CLAUDE.md §3). Every target that walks the tree has to walk all of them, or
 # the split silently stops being checked -- which is worse than not splitting,
 # because the invariant then only appears to hold.
-MODULES ?= . ./middleware ./examples ./schema/openapi ./seclang
+MODULES ?= . ./middleware ./examples ./schema/openapi ./seclang \
+           ./adapters/gin ./adapters/echo ./adapters/fiber
 
 .DEFAULT_GOAL := check
 

@@ -239,7 +239,19 @@ and the framework adapters belong.
 4. [ ] **Context-aware confidence from schema** (§9)
 4. [ ] GraphQL depth/complexity/introspection; gRPC frame + protobuf
 5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation
-6. [ ] Framework adapters (separate modules), transaction API, `rules.Overlay`, `Explain()`
+6. [~] Framework adapters shipped as separate modules: `adapters/gin`,
+       `adapters/echo`, `adapters/fiber`. `Explain()` shipped.
+       `rules.Overlay` remains.
+
+       **chi, gorilla/mux, connect-go, and net/http need no adapter at all** —
+       `middleware.HTTP` is already a `func(http.Handler) http.Handler`.
+       Shipping a package for each would be duplication dressed as integration.
+
+       Gin and Echo are ten lines each, because both carry an
+       `http.ResponseWriter` and an `*http.Request` underneath. Fiber is real
+       code: fasthttp has no net/http types, so the adapter drives the
+       transaction API directly — which is what that API is for, and is the
+       evidence it supports a non-net/http server cleanly.
 
 **Gates:**
 - Specialized plan measurably cheaper than general, **detection coverage provably identical**
