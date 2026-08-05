@@ -145,3 +145,32 @@ stored in the arena as spans, `engine.Value.Key` becoming `[]byte`,
 `Target.MatchesBytes`, and separate string/bytes record paths. Also discovered
 `Value.Target.Name` was dead — rule matching compares the *rule's* target name
 against the value's key, so the per-value name was never read.
+
+## SHIPPED: multipart parsing (`internal/body/multipart.go`)
+**This is the CVE-2026-21876 regression test.** That flaw (CVSS 9.3, Jan 2026)
+broke CRS across ModSecurity v2, v3, *and* Coraza because the multipart charset
+was captured once and evaluated once — only the **final** part was really
+checked. gwaf emits every part; `TestMultipartEveryPartIsInspected` places the
+payload at each position in turn and requires detection at all of them.
+
+Also inspected, because each is attacker-controlled and was previously invisible:
+- **Filenames** (traversal, double extension) — emitted as `<name>.filename`
+- **Field names**
+- **Each part's Content-Type and charset**
+
+**Rule 1005 (encoded NUL) is the interesting one.** `shell.php%00.jpg` passes a
+suffix check that sees `.jpg`, and a C-backed handler truncates and saves
+`shell.php`. The payload is the *disagreement between readings*, so the NUL is
+what to detect — not the extension, which is legitimate on its own. Matched
+**before** percent-decoding on purpose: decoded, a NUL is indistinguishable from
+the NULs filling ordinary binary uploads; encoded, it has no legitimate use.
+
+**Stated coverage decision:** file part content is inspected up to 8 KiB.
+Tokenizing the rest of a multi-megabyte upload as SQL costs real time and finds
+nothing; payloads that matter live in the first few KB. Content scanning beyond
+that belongs out of band (antivirus), which is the embedder's job per the
+stateless boundary.
+
+Delimiters only count at a line start, so a body containing the boundary string
+mid-line is not split there — otherwise the parts gwaf sees and the parts the
+origin sees would differ. Bare LF is accepted because lenient origins accept it.

@@ -826,3 +826,195 @@ func TestMalformedBodyFallsBackToWholeInspection(t *testing.T) {
 		t.Error("body parse failure was not reported")
 	}
 }
+
+// multipartBody builds a multipart request body with CRLF endings.
+func multipartBody(boundary string, parts ...string) string {
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString("--" + boundary + "\r\n")
+		b.WriteString(p)
+		b.WriteString("\r\n")
+	}
+	b.WriteString("--" + boundary + "--\r\n")
+	return b.String()
+}
+
+func runMultipart(t *testing.T, w *gwaf.WAF, boundary, body string) (gwaf.Decision, *gwaf.Transaction) {
+	t.Helper()
+	tx := w.NewTransaction()
+
+	tx.SetRequestLine("POST", "/upload", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "multipart/form-data; boundary="+boundary)
+	if d := tx.ProcessRequestHeaders(); d.Blocked() {
+		return d, tx
+	}
+	tx.SetRequestBody([]byte(body))
+	return tx.ProcessRequestBody(), tx
+}
+
+// TestMultipartEveryPartIsInspected is the CVE-2026-21876 regression test at
+// the request level.
+//
+// That flaw (CVSS 9.3, January 2026) broke the OWASP Core Rule Set across
+// ModSecurity v2, v3, *and* Coraza because the multipart charset was captured
+// once and evaluated once — so only the final part was really checked. A
+// payload in any earlier part passed unexamined.
+//
+// The property here is positional: a payload must be caught wherever it sits.
+func TestMultipartEveryPartIsInspected(t *testing.T) {
+	w := newWAF(t)
+
+	const parts = 8
+	payload := "Content-Disposition: form-data; name=\"evil\"\r\n\r\n<script>alert(1)</script>"
+
+	for pos := range parts {
+		t.Run(fmt.Sprintf("payload_at_part_%d_of_%d", pos, parts), func(t *testing.T) {
+			ps := make([]string, 0, parts)
+			for i := range parts {
+				if i == pos {
+					ps = append(ps, payload)
+					continue
+				}
+				ps = append(ps, fmt.Sprintf(
+					"Content-Disposition: form-data; name=\"f%d\"\r\n\r\nordinary value %d", i, i))
+			}
+
+			d, tx := runMultipart(t, w, "BNDRY", multipartBody("BNDRY", ps...))
+			tx.Close()
+
+			if !d.Blocked() {
+				t.Errorf("payload in part %d of %d was not detected — "+
+					"inspecting only some parts is exactly CVE-2026-21876", pos, parts)
+			}
+		})
+	}
+}
+
+// TestMultipartUTF7Charset covers the exact vector: a part declaring UTF-7 with
+// a payload that is inert as bytes and executable once decoded.
+func TestMultipartUTF7Charset(t *testing.T) {
+	w := newWAF(t)
+
+	body := multipartBody("B",
+		"Content-Disposition: form-data; name=\"a\"\r\n\r\nordinary",
+		"Content-Disposition: form-data; name=\"b\"\r\n"+
+			"Content-Type: text/plain; charset=utf-7\r\n\r\n+ADw-script+AD4-alert(1)+ADw-/script+AD4-",
+		"Content-Disposition: form-data; name=\"c\"\r\n\r\nalso ordinary",
+	)
+
+	d, tx := runMultipart(t, w, "B", body)
+	defer tx.Close()
+
+	if !d.Blocked() {
+		t.Fatal("UTF-7 payload in a non-final multipart part was not detected")
+	}
+	if got := d.Interpretation(); !strings.Contains(got, "utf7") {
+		t.Errorf("Interpretation() = %q, want it to name utf7", got)
+	}
+}
+
+// TestMultipartFilenameIsInspected covers the most attacker-controlled field in
+// an upload. Treating a filename as metadata rather than as a value is how
+// traversal and double-extension payloads get through.
+func TestMultipartFilenameIsInspected(t *testing.T) {
+	w := newWAF(t)
+
+	for _, fn := range []string{
+		"../../etc/passwd",
+		"..%2f..%2fetc%2fpasswd",
+		`..\..\windows\system32\config`,
+		"shell.php%00.jpg",
+		"<script>alert(1)</script>.png",
+	} {
+		t.Run(fn, func(t *testing.T) {
+			body := multipartBody("B",
+				"Content-Disposition: form-data; name=\"up\"; filename=\""+fn+"\"\r\n"+
+					"Content-Type: application/octet-stream\r\n\r\nbinary content here")
+
+			d, tx := runMultipart(t, w, "B", body)
+			defer tx.Close()
+
+			if !d.Blocked() {
+				t.Errorf("hostile filename %q was not inspected", fn)
+			}
+		})
+	}
+}
+
+func TestMultipartPayloadInFieldName(t *testing.T) {
+	w := newWAF(t)
+
+	body := multipartBody("B",
+		"Content-Disposition: form-data; name=\"<script>alert(1)</script>\"\r\n\r\nvalue")
+
+	d, tx := runMultipart(t, w, "B", body)
+	defer tx.Close()
+
+	if !d.Blocked() {
+		t.Error("payload in a multipart field name was not inspected")
+	}
+}
+
+// TestBenignMultipartPasses is the counterweight: ordinary uploads must not be
+// blocked, or the feature gets switched off.
+func TestBenignMultipartPasses(t *testing.T) {
+	w := newWAF(t)
+
+	bodies := []struct{ name, body string }{
+		{"simple form", multipartBody("B",
+			"Content-Disposition: form-data; name=\"user\"\r\n\r\nAlice",
+			"Content-Disposition: form-data; name=\"email\"\r\n\r\nalice@example.com")},
+		{"file upload", multipartBody("B",
+			"Content-Disposition: form-data; name=\"avatar\"; filename=\"photo.jpg\"\r\n"+
+				"Content-Type: image/jpeg\r\n\r\n\xff\xd8\xff\xe0binary image data")},
+		{"text file", multipartBody("B",
+			"Content-Disposition: form-data; name=\"doc\"; filename=\"report.2026.final.pdf\"\r\n"+
+				"Content-Type: application/pdf\r\n\r\n%PDF-1.4 content")},
+		{"comment with markup", multipartBody("B",
+			"Content-Disposition: form-data; name=\"comment\"\r\n\r\nuse the <b>bold</b> tag")},
+		{"utf8 filename", multipartBody("B",
+			"Content-Disposition: form-data; name=\"f\"; filename=\"résumé.pdf\"\r\n\r\ncontent")},
+		{"code snippet field", multipartBody("B",
+			"Content-Disposition: form-data; name=\"snippet\"\r\n\r\nif (a < b) { return a; }")},
+		{"prose with sql words", multipartBody("B",
+			"Content-Disposition: form-data; name=\"note\"\r\n\r\nthe union selected a leader")},
+		{"charset utf-8", multipartBody("B",
+			"Content-Disposition: form-data; name=\"a\"\r\n"+
+				"Content-Type: text/plain; charset=utf-8\r\n\r\nplain text")},
+	}
+
+	for _, b := range bodies {
+		t.Run(b.name, func(t *testing.T) {
+			d, tx := runMultipart(t, w, "B", b.body)
+			defer tx.Close()
+
+			if d.Blocked() {
+				t.Errorf("false positive: rule=%d msg=%q key=%q interpretation=%s",
+					d.RuleID(), d.Message(), d.Key(), d.Interpretation())
+			}
+		})
+	}
+}
+
+// TestMultipartWithoutBoundaryIsReported checks the safe direction: a multipart
+// type gwaf cannot split is inspected whole and the failure is surfaced, rather
+// than the body being quietly treated as structured.
+func TestMultipartWithoutBoundaryIsReported(t *testing.T) {
+	w := newWAF(t)
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("POST", "/upload", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "multipart/form-data")
+	tx.ProcessRequestHeaders()
+	tx.SetRequestBody([]byte("--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n<script>x</script>\r\n--B--"))
+
+	d := tx.ProcessRequestBody()
+	if !d.Blocked() {
+		t.Error("payload in an unsplittable multipart body was not inspected")
+	}
+	if tx.BodyParseError() == "" {
+		t.Error("missing boundary was not reported")
+	}
+}

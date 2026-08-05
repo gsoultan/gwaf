@@ -110,7 +110,14 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        `{"c":"\u003cscript\u003e"}` is inert on the wire and `<script>` to the
        application. Object keys are inspected too. A body that fails to parse
        falls back to whole-document inspection and the failure is reported.
-6. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
+6. [x] **Multipart parsing.** Every part is emitted, which is the direct
+       regression test for CVE-2026-21876 — the Core Rule Set checked only the
+       final part's charset, so a payload in any earlier one passed unexamined.
+       Filenames are inspected as values (traversal, double extension), field
+       names too, and each part's declared charset is reported. Added rule 1005
+       for encoded NUL bytes: the double-extension payload is the *disagreement*
+       between readings, so the NUL is what to detect, not the extension.
+7. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
 6. [ ] **SecLang parser** (pulled forward — gateon's DB requires it)
 7. [ ] Core ruleset with **calibrated** confidence
 

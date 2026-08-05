@@ -35,6 +35,7 @@ const (
 	IDTraversalEncoded  types.RuleID = 1001
 	IDTraversalRaw      types.RuleID = 1002
 	IDSensitiveFile     types.RuleID = 1003
+	IDNullByteInjection types.RuleID = 1005
 	IDTraversalRepeated types.RuleID = 1004
 	// 2001-2004 were literal SQL injection rules: tautology, UNION SELECT,
 	// comment sequences, and stacked statements. All four are superseded by
@@ -179,6 +180,28 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "Repeated path traversal segment",
 			Tags:       []string{"traversal", "owasp-a01"},
+		},
+		{
+			ID:      IDNullByteInjection,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// Matched *before* percent-decoding, on purpose. Decoded, a NUL is
+			// indistinguishable from the NULs that fill ordinary binary upload
+			// content; encoded, it is a deliberate act with no legitimate use.
+			// No client, library, or browser emits "%00" in a parameter.
+			//
+			// This is the double-extension vector: "shell.php%00.jpg" passes a
+			// suffix check that sees .jpg, and a C-backed handler truncates at
+			// the NUL and saves shell.php. The payload is the disagreement
+			// between the two readings, so the NUL itself is what to detect --
+			// not the extension, which is legitimate on its own.
+			Transforms: []rules.Transform{transform.Lowercase},
+			Op:         op.ContainsAny("%00", "%u0000", "\\x00"),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Encoded null byte in input",
+			Tags:       []string{"traversal", "lfi", "owasp-a01"},
 		},
 
 		// ---- SQL injection --------------------------------------------------

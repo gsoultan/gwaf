@@ -261,6 +261,22 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 		return
 	}
 
+	// A multipart body is checked first, because its Content-Type carries the
+	// boundary rather than naming a structure.
+	if boundary, isMultipart := body.Boundary(tx.contentType); isMultipart {
+		if len(boundary) > 0 && tx.parseMultipartBody(b, boundary) {
+			return
+		}
+		// A multipart type with no boundary, or one that will not split, is
+		// malformed rather than merely unstructured: the origin cannot parse it
+		// either. Record why, then inspect it whole.
+		if len(boundary) == 0 && tx.bodyErr == nil {
+			tx.bodyErr = body.ErrNoBoundary
+		}
+		tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", b)
+		return
+	}
+
 	switch body.DetectContent(tx.contentType) {
 	case body.ContentJSON:
 		if tx.parseStructuredBody(b, true) {
@@ -310,6 +326,53 @@ func (tx *Transaction) parseStructuredBody(b []byte, isJSON bool) bool {
 		err = tx.bodyParser.ParseForm(b, emit)
 	}
 	if err != nil {
+		tx.bodyErr = err
+		return false
+	}
+	return true
+}
+
+// parseMultipartBody extracts every part of a multipart body.
+//
+// Every part is emitted, not merely the first or the last. That is the whole
+// defence against the CVE-2026-21876 class, in which the Core Rule Set checked
+// only the final part's charset and a payload in any earlier one passed
+// unexamined.
+func (tx *Transaction) parseMultipartBody(b, boundary []byte) bool {
+	tx.bodyParser.Reset(body.Limits{
+		MaxFields:    tx.waf.cfg.limits.MaxArgs,
+		MaxValueLen:  tx.waf.cfg.limits.MaxValueLen,
+		MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
+	})
+
+	onPart := func(info body.PartInfo) bool {
+		// A part's declared Content-Type and charset are attacker-controlled
+		// and are inspected in their own right. A charset that re-interprets
+		// content -- UTF-7 above all -- is the CVE-2026-21876 vector, and the
+		// value itself goes through the same multi-interpretation pipeline as
+		// everything else.
+		if len(info.ContentType) > 0 {
+			tx.recordFieldBytes(types.TargetRequestHeaders,
+				[]byte("content-type"), info.ContentType, false)
+		}
+		if len(info.Charset) > 0 {
+			tx.recordFieldBytes(types.TargetRequestHeaders,
+				[]byte("charset"), info.Charset, false)
+		}
+		return true
+	}
+
+	emit := func(name, value []byte, kind body.Kind) bool {
+		if kind == body.KindKey {
+			tx.recordFieldBytes(types.TargetArgNames, name, value, false)
+			return true
+		}
+		inert := tx.checkBodySchema(name, value)
+		tx.recordFieldBytes(types.TargetArgs, name, value, inert)
+		return true
+	}
+
+	if err := tx.bodyParser.ParseMultipart(b, boundary, onPart, emit); err != nil {
 		tx.bodyErr = err
 		return false
 	}
