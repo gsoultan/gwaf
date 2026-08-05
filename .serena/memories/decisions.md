@@ -237,3 +237,36 @@ runs), and unmetered fuel.
 Also added `Transaction.Matches()` — every rule that fired, not just the
 terminal one. Calibration needs the full set, and so does any control plane
 explaining a decision (the "no UI but expose everything" corollary).
+
+## The calibration gate found a real false positive on its first real run
+Grew the corpus from 71 to **1,330 distinct requests** built from gateon's real
+API surface — UI fetch paths, protobuf field names, Connect method names, real
+query parameters (`page`, `pageSize`, `search`), realistic header sets.
+
+**Provenance is stated, not implied.** The *shapes* are real; the *values* are
+plausible, not observed. gateon has no production access logs. That is why the
+corpus is produced by a reviewable generator (`testdata/corpus/gen`) rather than
+a hand-typed blob — a reviewer can check the model against the real surface.
+
+**The finding.** gateon stores WAF rules as SecLang directives, so its own admin
+API legitimately POSTs strings containing `<script` inside a regex. The
+structural XSS detector fired. A firewall that stops an operator from saving a
+WAF rule mentioning `<script` is the classic "WAF blocks the security team"
+failure, and it would have shipped.
+
+**Fixed the detector, not the ceiling.** A tag name alone is not a tag: to be
+markup an element must be *completed* by `>` or *elaborated* by a `name=value`
+attribute. Text that merely names a tag is neither.
+
+First attempt was too loose — I counted any bare word after the tag name as an
+attribute, and the words *inside* the SecLang directive satisfied it. An
+attribute needs `name=value`.
+
+**Deliberately over-represent admin-console traffic.** A gateway's own config
+API is the hardest benign traffic a firewall ever sees: file paths, regexes, TLS
+material, CIDR blocks, SecLang. If a ruleset produces false positives anywhere,
+it produces them there first — and it did.
+
+**Power is still bounded.** 1,330 requests validate `High` (1 in 1,000) but not
+`Certain` (1 in 10,000). Only production traffic closes that, and `gwaf
+calibrate` says so on every run.

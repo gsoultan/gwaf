@@ -282,11 +282,26 @@ func scanMarkup(src []byte) Signal {
 				continue
 			}
 
-			if executingTags[name] {
+			// A tag name alone is not a tag. To be markup the element must be
+			// either *completed* by a '>' or *elaborated* by attributes; text
+			// that merely names a tag is neither.
+			//
+			// This distinction was found by calibration, not by reasoning: the
+			// benign corpus contains gateon's own SecLang WAF rules, whose
+			// regexes legitimately contain "<script" inside a quoted string
+			// with no '>' anywhere after it. A firewall that blocks an operator
+			// from saving a rule mentioning <script is the classic failure
+			// where the WAF blocks the security team.
+			//
+			// The narrow cost is an executing tag left unclosed and carrying no
+			// name=value attribute, relying on surrounding markup to complete
+			// it. Such a payload still needs an attribute or a handler to do
+			// anything, and both are detected independently.
+			completed, attrSigs := scanTag(src, j)
+			if executingTags[name] && completed {
 				sigs |= SignalExecutingTag
 			}
-			// Scan this tag's attributes for handlers and executing schemes.
-			sigs |= scanTag(src, j)
+			sigs |= attrSigs
 			i = j - 1
 
 		case 'j', 'J', 'v', 'V', 'l', 'L', 'm', 'M', 'd', 'D':
@@ -335,8 +350,12 @@ func scanMarkup(src []byte) Signal {
 //
 // Position is what matters. "onerror" as a word in prose is nothing; "onerror="
 // between a tag name and its '>' is a handler the browser will run.
-func scanTag(src []byte, i int) Signal {
-	var sigs Signal
+//
+// The first result reports whether this is markup at all: a tag is markup when
+// it is completed by '>' or carries at least one attribute. A bare name
+// followed by a quote, with no '>' after it, is text about a tag.
+func scanTag(src []byte, i int) (completed bool, sigs Signal) {
+	sawAttr := false
 
 	for i < len(src) && src[i] != '>' {
 		// Attribute names may be separated by whitespace or, in browsers, by
@@ -362,6 +381,11 @@ func scanTag(src []byte, i int) Signal {
 			j++
 		}
 		if j < len(src) && src[j] == '=' {
+			// A real attribute is name=value. A bare word is not: the text
+			// following an unclosed tag name is full of words, and counting
+			// those as attributes is what let a SecLang directive
+			// ("...msg:'possible xss'...") read as markup.
+			sawAttr = true
 			j++
 			for j < len(src) && isSpace(src[j]) {
 				j++
@@ -387,7 +411,7 @@ func scanTag(src []byte, i int) Signal {
 		// reported: "<div onerror>" does nothing.
 		i = j
 	}
-	return sigs
+	return i < len(src) || sawAttr, sigs
 }
 
 // scanBreakout looks for a quote that closes an attribute followed by what

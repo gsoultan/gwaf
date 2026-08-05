@@ -123,9 +123,15 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        benign corpus and gated in CI, which was the largest doc/code gap: it was
        cited as a gate in CLAUDE.md and CONCEPT.md §8 while being a claim rather
        than a tool. It also reports **what the corpus cannot measure**: 71
-       requests can only observe rates above 1.4%, so a `Certain` claim of
-       1-in-10,000 is currently unfalsifiable. The fix is always more corpus,
-       never a looser ceiling.
+       requests could only observe rates above 1.4%. The corpus is now **1,330
+       distinct requests** generated from gateon's real API surface, which
+       validates `High` (1 in 1,000) but still not `Certain` (1 in 10,000) —
+       only production traffic closes that, and the tool says so every run.
+
+       **It found a real false positive on its first real run.** gateon stores
+       WAF rules as SecLang directives, so its admin API legitimately POSTs
+       strings containing `<script`. The structural XSS detector fired. Fixed
+       the detector, not the ceiling: a tag name alone is not a tag.
 8. [x] **`gwaf lint`** — prefilter coverage and the per-request cost of
        unconditional rules (RULES.md §5), also gated.
 

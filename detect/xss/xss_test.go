@@ -422,3 +422,57 @@ func BenchmarkAnalyzeAttack(b *testing.B) {
 		d.Analyze(v)
 	}
 }
+
+// TestTagNameInTextIsNotMarkup is a regression test for a false positive that
+// calibration found, not reasoning.
+//
+// gateon — gwaf's first adopter — stores WAF rules as SecLang directives, which
+// are strings whose regexes legitimately contain "<script". Running the
+// structural detector against a corpus built from gateon's real admin API
+// surfaced it immediately: a firewall that stops an operator saving a WAF rule
+// mentioning <script is the classic case of the WAF blocking the security team.
+//
+// The distinction is that a tag name alone is not a tag. To be markup an
+// element must be *completed* by '>' or *elaborated* by a name=value attribute.
+// Text that merely names a tag is neither.
+func TestTagNameInTextIsNotMarkup(t *testing.T) {
+	d := New()
+
+	notMarkup := []string{
+		// The exact payload calibration flagged.
+		`SecRule ARGS "@rx (?i)<script" "id:100004,phase:2,log,pass,msg:'possible xss'"`,
+		`SecRule REQUEST_URI "@rx <iframe" "id:100010,phase:1,deny"`,
+		`{"directive":"SecRule ARGS \"@rx (?i)<script\" \"id:1,phase:2,pass\""}`,
+		// Documentation and discussion.
+		`the <script tag must be closed`,
+		`match on "<iframe" in the body`,
+		`grep -r '<object' ./templates`,
+		`regex: ^<svg`,
+		`escape < and > before storing`,
+	}
+	for _, s := range notMarkup {
+		t.Run(s[:min(len(s), 32)], func(t *testing.T) {
+			if v := d.Analyze([]byte(s)); v.Detected() {
+				t.Errorf("text naming a tag was flagged as markup: signals=%s\n  %q",
+					v.Signals, s)
+			}
+		})
+	}
+
+	// The counterweight: completed or elaborated tags are still markup.
+	stillMarkup := []string{
+		"<script>alert(1)</script>",
+		"<script src=//evil.com/x.js>",
+		`<iframe src="//evil.com">`,
+		"<svg/onload=alert(1)>",
+		"<script >",
+	}
+	for _, s := range stillMarkup {
+		t.Run(s[:min(len(s), 32)], func(t *testing.T) {
+			if v := d.Analyze([]byte(s)); !v.Detected() {
+				t.Errorf("real markup was not detected: signals=%s score=%d\n  %q",
+					v.Signals, v.Score, s)
+			}
+		})
+	}
+}
