@@ -208,9 +208,15 @@ and the framework adapters belong.
        (`schema` package, zero deps). Validation, route matching including
        templates, strict mode, and `NoBody`. Measured: 29% faster, 56% less
        work, evasion coverage unchanged, false positives still zero.
-2. [ ] **OpenAPI 3.1 frontend** — a separate module, since YAML needs a
-       dependency the core will not carry. Compiles down to `schema.Operation`,
-       exactly as rule frontends compile to one IR.
+2. [x] **OpenAPI 3.1 frontend** — shipped as `schema/openapi`, a separate
+       module since YAML needs a dependency the core will not carry. Compiles
+       down to `schema.Operation` and stops: no validation, no matching, no
+       detection, exactly as a rule frontend compiles to the rules IR.
+       Handles 3.0 and 3.1 (including `type: [string, "null"]`, which a
+       string-only parser drops silently), `$ref` with cycle bounds, `allOf`
+       merging, and JSON as well as YAML. `Report` names everything the
+       document declared that gwaf could not use — a schema that quietly
+       constrains less than the operator believes is worse than none.
 3. [ ] **Compile-time per-route plan pruning** — the other half of §6, and now
        the measured route to the one unmet SLO. Benign POST with a 1 KiB JSON
        body sits at ~17µs against a 15µs target; transform-prefix reuse took
