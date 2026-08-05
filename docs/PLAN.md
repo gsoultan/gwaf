@@ -255,7 +255,13 @@ The most important milestone. A WAF library with no adopter is a benchmark, not 
 1. [ ] gateon `wafengine` adapter
 2. [ ] **Shadow mode in gateon production** — Coraza authoritative, gwaf observing
 3. [ ] `gwaf learn` (CONCEPT.md §12)
-4. [ ] `gwaf convert --from seclang`, `gwaf explain`, `gwaf doctor`
+4. [~] `gwaf explain` shipped. `seclang` shipped as a module: a real lexer
+       (quoting, continuations, '#' inside quotes), operator/variable/action
+       translation, and an RE2 operator with sound literal extraction so
+       imported regex rules stay prefilterable. A rule that cannot be translated
+       faithfully is **reported, never approximated** — a silently weakened rule
+       is worse than an absent one. `gwaf convert --from seclang` and
+       `gwaf doctor` remain.
 5. [ ] CRS v4.25 LTS conformance
 6. [ ] Second adopter — **do not skip.** One adopter shapes the API around one use case.
 
