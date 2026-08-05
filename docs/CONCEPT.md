@@ -78,27 +78,50 @@ This is what wasmtime and wazero do, and the properties are exactly what a secur
 Wall-clock remains as a coarse backstop for the pathological case (a custom operator blocking on
 I/O it shouldn't be doing). Fuel is the primary mechanism.
 
-### 3. Transduce, don't materialize
+### 3. ~~Transduce, don't materialize~~ — BUILT, MEASURED, REJECTED
 
-The single biggest allocation source in every WAF is materializing transformed copies:
-`lowercase(urlDecode(arg))` allocates a new buffer, per rule, per argument.
+> **Status: rejected on evidence.** Implemented, proven correct against the materialized oracle by
+> 38.6M differential fuzz executions, then measured **1.3–2.0× slower in every case** and removed.
+> Raw numbers: [`bench/transducer-experiment.txt`](../bench/transducer-experiment.txt).
 
-**Don't produce the transformed bytes at all.** Fold streamable transforms into the matcher's
-transition function — a transducer. The automaton matches `sqlmap` against `SQL%4dAP` by
-case-folding and URL-decoding *during state transition*, reading the original buffer, writing
-nothing.
+The original claim: materializing `lowercase(urlDecode(arg))` is the biggest allocation source in a
+WAF, so fold streamable transforms into the matcher's transition function and read normalized bytes
+straight from the request buffer, writing nothing.
 
-```
-classic:   [raw] → alloc → [urldecoded] → alloc → [lowercased] → match
-gwaf:      [raw] ────────── transducing automaton ──────────────► match
-```
+It was wrong, for two reasons that only showed up once both paths existed side by side.
 
-Not every transform is streamable — base64 and HTML-entity decoding change lengths and need
-lookahead. The compiler classifies them: streamable ones fold into the automaton, the rest
-materialize into the arena once and are shared by every rule that needs them (concept 1's CSE).
+**The allocation it was meant to eliminate was already gone.** The materialized path reuses a
+per-transaction scratch buffer and short-circuits when a transform changes nothing. Benign traffic
+is already lowercase and already unencoded, so it performs *zero copies* and *zero allocations*
+without any of this. The stated payoff had already been delivered by simpler means — the theory was
+formed before the baseline existed.
 
-Typical rulesets are dominated by streamable transforms. This is where "zero allocations on benign
-traffic" actually comes from.
+**Per-byte pull costs more than the copy it avoids.** Materializing runs a tight, vectorizable loop
+per transform and then hands the automaton a contiguous slice to `range` over. Transducing replaces
+that with a function call and a per-step branch for every byte, and neither the transform loop nor
+the scan can vectorize. In Go the copy is nearly free and the dispatch is not.
+
+| Case | Materialized | Transduced | |
+|---|---|---|---|
+| benign, already normal | 112 ns | 212 ns | 1.89× slower |
+| benign, mixed case | 115 ns | 211 ns | 1.84× slower |
+| percent-encoded | 96 ns | 121 ns | 1.26× slower |
+| attack payload | 160 ns | 268 ns | 1.68× slower |
+| 4 KiB clean | 8.4 µs | 16.8 µs | 2.01× slower |
+
+**What survives.** Concept 1's common-subexpression elimination — grouping rules by transform chain
+so each chain is applied once per value rather than once per rule — is where the real win was, and
+it shipped. The differential harness pattern (assert byte equality *and* identical prefilter
+candidate sets against a deliberately simple oracle) is reusable and is the gate every future
+transform optimization should pass.
+
+**What would have to change to revisit this.** A transducer only wins if the transform is fused into
+the automaton's own scan loop rather than pulled through a function call — one specialized loop per
+chain shape. That is a large amount of hand-written, hard-to-audit code for, at best, parity with a
+path that already allocates nothing. Not worth it.
+
+This entry stays in the document rather than being deleted. The idea is attractive enough that
+someone will propose it again, and the useful artifact of the experiment is the measurement.
 
 ### 4. Multi-interpretation as a lattice, not a loop
 
@@ -281,7 +304,7 @@ and a human approves every suppression.
 |---|---|---|
 | Rules evaluated / benign request | ~200 | **0** |
 | Regex executions / request | ~4,000 | **0–3** |
-| Transform allocations / request | ~40 | **0** |
+| Transform allocations / request | ~40 | **0** (via chain CSE, not transducers — §3) |
 | Budget enforcement | wall clock, nondeterministic | **fuel, deterministic** |
 | Multi-interpretation cost | N× (so: not shipped) | **~1×** |
 | GC pressure from tx state | proportional to traffic | **~0 (pointer-free)** |
@@ -311,7 +334,7 @@ Target SLOs, all CI-gated:
 |---|---|---|
 | 1. Closure plan | Closure-threading may not beat a naive loop until the ruleset is large | Benchmark both at 10/100/1k rules in Phase 1. Keep the IR; the executor is swappable. |
 | 2. Fuel | Static cost estimates drift from reality | Calibrate costs from benchmarks; CI asserts fuel↔wall-clock correlation |
-| 3. Transducers | Genuinely hard. Composing decode + case-fold in one transition table is subtle, and subtle is where bypasses live | Ship the 5 most common transforms only. Differential-fuzz transducer vs. materialized path — they must agree on 100% of inputs. |
+| ~~3. Transducers~~ | **Resolved: rejected.** Correct (38.6M fuzz execs agreed) but 1.3–2.0× slower. The harness caught it before it shipped. | Materialized transforms + chain CSE, already in production |
 | 4. Decode lattice | State explosion on adversarial input | Hard bound on simultaneous interpretations; exceeding it is an explicit decision |
 | 5. Pointer-free | Ergonomic cost — `Span` is less pleasant than `[]byte` | Confine to `internal/`; the public API speaks `[]byte` |
 | 6. Schema specialization | Only helps specified APIs; a wrong schema prunes real coverage | Fall back to the full plan when unspecified. Schema changes force recompile; never trust a runtime-supplied schema. |
@@ -327,18 +350,20 @@ against the materialized path is not optional — it is the feature.
 
 Sequenced so each step is independently valuable and de-risks the next.
 
-1. **IR + closure plan + fuel** (concepts 1–2). No optimizations yet. Establishes the compile→execute
-   split and deterministic budgets. Everything else is a pass over this.
-2. **Prefilter + target-grouped plan.** The first order of magnitude. Materialized transforms — slow
-   but obviously correct, and it becomes the differential-fuzz oracle for step 4.
-3. **Arena + Span** (concept 5). Allocations to zero.
-4. **Transducers** (concept 3), fuzzed against step 2's oracle.
-5. **Decode lattice** (concept 4). Ship semantic detectors on top.
+1. ~~**IR + closure plan + fuel**~~ (concepts 1–2). **Done.** Compile→execute split, deterministic
+   budgets.
+2. ~~**Prefilter + chain-grouped plan.**~~ **Done** — the first order of magnitude. 10 → 10,000 rules
+   costs the same. Materialized transforms kept deliberately: slow but obviously correct, and the
+   oracle step 4 was measured against.
+3. ~~**Arena + Span**~~ (concept 5). **Done.** Zero allocations on benign traffic.
+4. ~~**Transducers**~~ (concept 3). **Rejected on measurement** — see §3. The step-2 oracle did its
+   job.
+5. **Decode lattice** (concept 4). Ship semantic detectors on top. ← next
 6. **Schema specialization** (concept 6), once OpenAPI validation exists.
 7. **mmap artifacts** (concept 7). Pure win, no dependents — last.
 
-Steps 1–3 deliver most of the performance. Steps 4–6 are what makes gwaf categorically different
-rather than incrementally faster.
+Steps 1–3 delivered most of the performance and are done. Steps 5–6 are what make gwaf
+categorically different rather than incrementally faster; step 6 is the one to prioritize.
 
 ---
 

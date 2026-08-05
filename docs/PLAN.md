@@ -84,10 +84,13 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
 
 ## M2 — Detection (weeks 8–18)
 
-1. [ ] **Differential fuzz harness** — transducer vs. materialized path. *Build before transducers.*
-2. [ ] Transducing transforms — **5 only** (lowercase, urlDecode, removeWhitespace, normalizePath,
-       htmlEntityDecode)
-3. [ ] Decode lattice + NFA simulation, bounded interpretations
+1. [x] **Differential fuzz harness** — transducer vs. materialized path. *Built before transducers,
+       exactly as sequenced, and it earned its keep on the first use.*
+2. [x] ~~Transducing transforms~~ — **built, proven correct, measured 1.3–2.0× slower, removed.**
+       Kill criterion invoked on performance rather than correctness. See CONCEPT.md §3 and
+       `bench/transducer-experiment.txt`. The materialized path plus chain-level CSE already
+       delivers the zero-allocation result the transducer was supposed to buy.
+3. [ ] Decode lattice + NFA simulation, bounded interpretations ← **next**
 4. [ ] Semantic detectors: **SQLi → XSS** first, then shell, path traversal, SSTI, NoSQL, LDAP
 5. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
 6. [ ] **SecLang parser** (pulled forward — gateon's DB requires it)
@@ -98,9 +101,21 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
 - Transducer and materialized paths agree on **100%** of fuzz inputs
 - `gwaf calibrate` passes on the core ruleset
 
-**Kill criterion:** if transducers can't reach 100% differential agreement in 3 weeks, **ship
-materialized transforms and move on.** You lose ~30% of the allocation win and keep the correctness.
-This is the project's highest-risk concept; a plausible-but-wrong transducer is a bypass.
+**Kill criterion — invoked.** The stated trigger was "no 100% differential agreement in 3 weeks."
+Agreement was actually reached (38.6M fuzz executions, byte-for-byte and candidate-set identical),
+but the benchmarks then showed the transducer 1.3–2.0× *slower* than the path it replaced, so it was
+removed on that basis instead.
+
+Two lessons worth keeping:
+
+- **The kill criterion was aimed at the wrong risk.** It anticipated a correctness failure. The
+  actual failure was that the premise had already been satisfied by simpler means: the materialized
+  path reached zero allocations via buffer reuse and a no-change fast path, so the transducer was
+  optimizing something that no longer cost anything. Future criteria should test the *premise*, not
+  only the implementation.
+- **Sequencing the harness first was what made this cheap.** The oracle existed before the
+  optimization, so the answer arrived in one session rather than after the optimization had been
+  wired into the engine and depended on.
 
 ---
 

@@ -1,0 +1,14 @@
+Transducer vs materialized transform — measured, then rejected.
+Apple M5 Pro, Go 1.26.5, count=5, median ns/op. Chain: url_decode|lowercase|remove_whitespace.
+Both paths: identical prefilter automaton, identical candidate sets (38.6M fuzz execs agreed).
+
+case                materialized   transduced   ratio
+------------------  ------------   ----------   -----
+benign_clean             112.3         212.2    1.89x slower
+benign_mixedcase         115.0         211.1    1.84x slower
+encoded                   95.9         120.5    1.26x slower
+attack                   159.8         268.4    1.68x slower
+large_clean             8385          16840     2.01x slower
+large_mixed             8918          16691     1.87x slower
+
+Conclusion: rejected. See docs/CONCEPT.md §3.
