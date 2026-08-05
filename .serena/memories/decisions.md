@@ -626,3 +626,62 @@ than cheaper ones.
 Recorded in CLAUDE.md §2, bench/baseline.txt, and PLAN.md rather than quietly
 rebaselined. A benchmark file that ratchets to whatever the code currently does
 is not a gate.
+
+## SHIPPED: corpus 1,435 -> 10,386 across 11 archetypes, and it found five FPs
+The calibration tool had been saying this itself: "cannot validate a claim at
+certain -- needs ~10001 benign requests." 24 rules claimed Certain and the
+corpus could not measure the tier at all. It was also 100% gateon-derived with
+values that were *plausible rather than observed*.
+
+Now 10,386 distinct requests across gateon, commerce, cms, graphql, grpcweb,
+odata, jsonapi, saas, webhooks, mobile, and cicd. Each archetype was chosen to
+be **adversarial to a specific detector**, not to be representative of the web.
+Power is 0.0096% (1 in 10,386): the Certain tier is validatable for the first
+time.
+
+The generator is per-archetype files so a reviewer can see which surface each
+models. Dedup key is (method, target, body, args) — **headers are not in it**,
+so header-only variants collapse and inflate nothing.
+
+### It found five false positives immediately
+
+1. **detect/shelli on REQUEST_URI: 20.4%, 800/3923.** A category error. A query
+   string uses '&' as *its own* separator, so "?q=x&sort=price" reads as a
+   command boundary followed by "sort" — and sort, head, find, id, env, host,
+   last, less, more, and w are all ordinary parameter names. Every faceted
+   search was blocked. A raw URI is a different language that merely shares
+   punctuation; only argument *values* get interpolated into a shell.
+2. **detect/shelli on stored command lines.** A CI pipeline API receives
+   "cat VERSION | tr -d" in a `run` field because running it is the product.
+   Fixed by a real discriminator: injection means a *separator* introduced a
+   command into a field that already held something else, so when the **first
+   token is itself a command or an interpreter path**, the value is a stored
+   command line and its internal separators stop being evidence. Loses nothing:
+   an injected payload virtually never begins with a bare command name, and a
+   value that is only "cat /etc/passwd" still reports via the sensitive path.
+   Rule also dropped Certain -> High.
+3. **detect/ldapi on balanced filters.** "(&(uid=*)(!(accountStatus=disabled)))"
+   is a directory-sync config an admin saved. ")(" is how a well-formed filter
+   separates clauses; only an *unbalanced* one escapes. Always-true dropped
+   2 -> 1 so it can no longer complete the threshold by itself.
+4. **XSS via the HTML-entity reading.** "Use the <code>&lt;script&gt;</code>
+   tag" is how every documentation page writes about script tags, and decoding
+   the entities turned correct escaping into a block — the ruleset was punishing
+   people for doing the right thing. The entity reading is now skipped when the
+   value **already contains raw markup**, because that combination is a
+   deliberate author rather than an encoding trick. Uniformly entity-encoded
+   payloads (all four evasion cases) still enumerate.
+5. **Encoded traversal on a media path.** My own corpus entry was mislabelled:
+   "../" arriving in a media endpoint's path parameter is the LFI vector, not
+   benign traffic. Removed the entry rather than loosening the rule.
+
+Two corpus entries were corrected rather than the rules loosened, and both are
+documented in place with the reasoning — a corpus entry can be wrong, and saying
+so is different from moving a ceiling.
+
+### The general lesson
+Four of these five were invisible to a single-application corpus. #1 in
+particular would have blocked roughly one in five requests of any faceted search
+on the internet, and gateon never triggered it because gateon uses
+page/pageSize/q as parameter names. **A detector can only be shown safe against
+traffic shapes it has actually met.**

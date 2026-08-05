@@ -138,11 +138,6 @@ func (r *Result) Reset() {
 type Evaluator struct {
 	candidates bitset.Set
 
-	// scratch and alt are the transform ping-pong buffers: a chain alternates
-	// between them rather than allocating per step.
-	scratch []byte
-	alt     []byte
-
 	// readings holds the plausible interpretations of the value under
 	// evaluation. It owns reusable buffers, so enumerating alternatives costs
 	// no allocation after warm-up.
@@ -371,46 +366,6 @@ func (e *Evaluator) evalRule(
 		}
 	}
 	return true
-}
-
-// applyChain runs a transform chain over src.
-//
-// Buffers ping-pong between scratch and alt rather than allocating per step,
-// and a transform reporting no change is skipped entirely — the common case for
-// already-normal traffic, and the reason a benign request performs no copies.
-func (e *Evaluator) applyChain(chain []rules.Transform, src []byte, meter *budget.Meter) ([]byte, bool, bool) {
-	if len(chain) == 0 {
-		return src, false, true
-	}
-
-	cur := src
-	transformed := false
-	useScratch := true
-
-	for _, t := range chain {
-		need := t.MaxOutputLen(len(cur))
-
-		var dst []byte
-		if useScratch {
-			e.scratch = growTo(e.scratch, need)
-			dst = e.scratch
-		} else {
-			e.alt = growTo(e.alt, need)
-			dst = e.alt
-		}
-
-		next, changed := t.Apply(dst[:0], cur)
-		if !changed {
-			continue
-		}
-		if !meter.Spend(budget.Fuel(len(next)) * budget.CostPerByteTransformed) {
-			return nil, false, false
-		}
-		cur = next
-		transformed = true
-		useScratch = !useScratch
-	}
-	return cur, transformed, true
 }
 
 // growTo returns a buffer with at least n capacity, reusing b when possible.

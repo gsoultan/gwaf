@@ -108,9 +108,16 @@ const Threshold = 5
 // wildcards, and ampersands are all ordinary in text; only their *combination*
 // in filter position is evidence.
 //
-// The weights are chosen so that **reaching the threshold always requires an
-// injected clause or a NUL byte**, which is what makes the declared literals
-// exhaustive. An earlier version priced imbalance and the always-true filter at
+// The weights are chosen so that reaching the threshold requires **an injected
+// clause together with unbalanced parentheses**, or a NUL byte. Both halves
+// matter, and calibration proved why: ")(" on its own is how a well-formed
+// filter separates clauses, so "(&(uid=*)(!(accountStatus=disabled)))" -- a
+// directory-sync configuration an administrator saved on purpose -- scored 5
+// when the always-true signal could complete the total by itself. A balanced
+// filter escapes nothing; only an unbalanced one does.
+//
+// It also keeps the declared literals exhaustive, since an injected clause is
+// always one of the declared pairs. An earlier version priced imbalance and the always-true filter at
 // 3 and 2, and the fuzz harness immediately found "*)" — score 5, no literal
 // covering it, so the prefilter would have dropped the value and the rule could
 // never have fired on it. The weights were wrong, not the harness.
@@ -120,8 +127,10 @@ func weightOf(s Signal) int {
 		return 5
 	case SignalInjectedClause:
 		return 3
-	case SignalUnbalancedParen, SignalAlwaysTrueFilter:
+	case SignalUnbalancedParen:
 		return 2
+	case SignalAlwaysTrueFilter:
+		return 1
 	default:
 		return 0
 	}

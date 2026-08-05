@@ -130,6 +130,23 @@ var argTargets = []types.Target{
 	{Kind: types.TargetRequestHeaders},
 }
 
+// shellTargets are what a command-injection rule may read.
+//
+// REQUEST_URI is deliberately absent, and leaving it in was a category error
+// that calibration measured at a 20% false-positive rate. A query string uses
+// '&' as *its own* separator, so "?q=x&sort=price" reads as a command boundary
+// followed by "sort" -- and sort, head, find, id, env, host, last, less, more,
+// and w are all ordinary parameter names as well as commands. Every faceted
+// search on the corpus was blocked.
+//
+// Individual argument values are what an application interpolates into a shell;
+// the raw URI is a different language that merely shares punctuation.
+var shellTargets = []types.Target{
+	{Kind: types.TargetArgs},
+	{Kind: types.TargetArgNames},
+	{Kind: types.TargetRequestHeaders},
+}
+
 // nameTargets are parameter *names* alone.
 //
 // Scoped this narrowly on purpose: an operator token in a name is an injected
@@ -405,7 +422,7 @@ func requestRules() rules.Set {
 		{
 			ID:      IDShelliSemantic,
 			Phase:   types.PhaseRequestHeaders,
-			Targets: argTargets,
+			Targets: shellTargets,
 			// Percent-decoding only. The detector reads separators, quoting,
 			// and expansion structure, so stripping whitespace or folding case
 			// would destroy the positions it depends on: "cat" after a ';' is a
@@ -414,7 +431,14 @@ func requestRules() rules.Set {
 			Op:         shelli.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
+			// High rather than Certain, and calibration is what decided it.
+			// CI/CD and automation platforms carry shell commands as *data* --
+			// a pipeline API receives "cat VERSION | tr -d" in a `run` field
+			// because running it is the product -- and gwaf cannot tell that
+			// from injection using one request. Those applications need a
+			// scoped exception on the field that carries commands; reporting
+			// the finding is right, and certainty about it is not available.
+			Confidence: types.High,
 			Msg:        "Command injection (structural)",
 			Tags:       []string{"rce", "shelli", "owasp-a03", "semantic"},
 		},

@@ -37,6 +37,26 @@
 // wildcards. Command-position tokens are unquoted before matching, so "c'a't"
 // and "c\at" are read as what the shell will run.
 //
+// # A whole value that is a command line is not an injected one
+//
+// Injection means a *separator* introduced a command into a field that already
+// held something else: a hostname, an ID, a filename. The value starts as data
+// and turns into a command partway through.
+//
+// A field whose value is a command line from its first byte is a different
+// thing. A CI pipeline API receives "cat VERSION | tr -d" in a run field
+// because running it is the product; an automation platform stores
+// "base64 -d < k.b64 && chmod 600 k" the same way. Calibration measured the
+// cost of ignoring the distinction at one benign request in a hundred and
+// forty.
+//
+// So when the first token is itself a command — or an interpreter path — the
+// value is read as a stored command line and its internal separators stop
+// being evidence. Nothing is lost: an injected payload virtually never begins
+// with a bare command name, because the field held legitimate data first. A
+// value that *is* only "cat /etc/passwd" still reports, because the sensitive
+// path corroborates on its own.
+//
 // # A limit worth stating
 //
 // Backtick substitution around a single bare word is not reported. "`id`" is
@@ -268,8 +288,16 @@ func (d *Detector) Analyze(value []byte) Verdict {
 	}
 
 	scanExpansions(src, mark)
-	scanCommandPositions(src, mark)
 	scanPaths(src, mark)
+
+	// Separators inside a value that is already a command line are that
+	// command's own syntax, not an injection point. Paths are still read above:
+	// "/bin/sh -c id" arriving in a request value is the most conclusive RCE
+	// shape there is, and an application that stores one on purpose needs a
+	// scoped exception rather than a quieter detector.
+	if !isStoredCommandLine(src) {
+		scanCommandPositions(src, mark)
+	}
 
 	total := 0
 	for bit := Signal(1); bit != 0; bit <<= 1 {
@@ -483,6 +511,48 @@ scan:
 	default:
 		return i, wildcards
 	}
+}
+
+// isStoredCommandLine reports whether the value is a command line from its
+// first byte, rather than data that a separator turned into one.
+//
+// Only the first token is consulted. "cat VERSION | tr" is a pipeline someone
+// saved; "1.1.1.1; cat /etc/passwd" is a hostname field with a command appended
+// to it, and the difference is entirely in what comes first.
+func isStoredCommandLine(src []byte) bool {
+	i := 0
+	for i < len(src) && isSpace(src[i]) {
+		i++
+	}
+	if i >= len(src) {
+		return false
+	}
+
+	// An absolute interpreter path: "/bin/sh -c ...", "/usr/bin/python x.py".
+	if src[i] == '/' {
+		j := i
+		for j < len(src) && !isSpace(src[j]) {
+			j++
+		}
+		seg := src[i:j]
+		for k := len(seg) - 1; k >= 0; k-- {
+			if seg[k] == '/' {
+				return interpreters[plainWord(seg[k+1:])]
+			}
+		}
+		return false
+	}
+
+	end, word := commandWord(src, i)
+	if end == i || word == "" {
+		return false
+	}
+	// It must be a bare invocation, not a value that happens to start with a
+	// command name followed by punctuation: "cat," and "id=5" are not commands.
+	if end < len(src) && !isSpace(src[end]) {
+		return false
+	}
+	return commands[word]
 }
 
 // scanPaths looks for interpreter paths and sensitive files.

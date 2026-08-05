@@ -285,9 +285,45 @@ func (s *Set) Build(src []byte, classes Class) {
 	if classes.Has(ClassUTF7) {
 		s.addDecoded(src, ClassUTF7, decodeUTF7Into)
 	}
-	if classes.Has(ClassHTMLEntity) {
+	// The entity reading exists for origins that decode "&lt;script&gt;" and
+	// then reflect the result into HTML -- a real double-decoding bug class.
+	//
+	// It is skipped when the value already contains raw markup, because that
+	// combination is an author escaping deliberately rather than an encoding
+	// trick. "Use the <code>&lt;script&gt;</code> tag" is how every
+	// documentation page in existence writes about script tags, and decoding
+	// the entities turns correct escaping into a blocked request. Calibration
+	// found it in a CMS corpus; the ruleset had been punishing people for doing
+	// the right thing.
+	//
+	// The cost is narrow and worth stating: an attacker who prefixes a benign
+	// raw tag to an entity-encoded payload suppresses this reading. What they
+	// gain still requires the origin to double-decode, and the raw tag they
+	// added is itself inspected verbatim.
+	if classes.Has(ClassHTMLEntity) && !hasRawMarkup(src) {
 		s.addDecoded(src, ClassHTMLEntity, decodeEntitiesInto)
 	}
+}
+
+// hasRawMarkup reports whether src contains a tag written literally, rather
+// than one spelled out in entities.
+//
+// The same "'<' followed by a name" test detect/xss uses, and for the same
+// reason: "if (a < b)" is arithmetic and "<code>" is markup.
+func hasRawMarkup(src []byte) bool {
+	for i := 0; i+1 < len(src); i++ {
+		if src[i] != '<' {
+			continue
+		}
+		c := src[i+1]
+		if c == '/' && i+2 < len(src) {
+			c = src[i+2]
+		}
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			return true
+		}
+	}
+	return false
 }
 
 // addDecoded appends a reading produced by fn, unless it duplicates one already
