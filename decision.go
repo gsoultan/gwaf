@@ -3,6 +3,10 @@
 package gwaf
 
 import (
+	"log/slog"
+	"strconv"
+	"strings"
+
 	"github.com/gsoultan/gwaf/internal/interpret"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
@@ -208,6 +212,81 @@ func (d Decision) Detail() string { return d.detail }
 
 // RulesEvaluated returns how many operators actually ran.
 func (d Decision) RulesEvaluated() int { return d.rulesEvaluated }
+
+// String returns a compact, greppable summary.
+//
+// Deliberately one line and stable in shape, because the first thing anyone
+// does with a Decision is print it while working out why a request was blocked.
+func (d Decision) String() string {
+	var b strings.Builder
+	b.WriteString(d.verdict.String())
+	b.WriteString(" reason=")
+	b.WriteString(d.reason.String())
+
+	if id := d.RuleID(); id != 0 {
+		b.WriteString(" rule=")
+		b.WriteString(id.String())
+	}
+	if d.score != 0 {
+		b.WriteString(" score=")
+		b.WriteString(strconv.Itoa(d.score))
+	}
+	if d.reading != 0 {
+		b.WriteString(" via=")
+		b.WriteString(d.reading.String())
+	}
+	if d.rule != nil && d.rule.Rule.Msg != "" {
+		b.WriteString(" msg=")
+		b.WriteString(strconv.Quote(d.rule.Rule.Msg))
+	}
+	if d.detail != "" {
+		b.WriteString(" detail=")
+		b.WriteString(strconv.Quote(d.detail))
+	}
+	return b.String()
+}
+
+// LogValue implements slog.LogValuer, so a Decision logs as structured fields
+// rather than as a formatted string.
+//
+//	slog.Warn("request blocked", "waf", d)
+//
+// Every field an operator needs to triage is present, and the interpretation is
+// included because a payload found only under an alternative decoding is the
+// single most confusing thing to see in a log: the bytes on the wire look
+// harmless, and without this field the firewall appears to have malfunctioned.
+func (d Decision) LogValue() slog.Value {
+	attrs := make([]slog.Attr, 0, 8)
+	attrs = append(attrs,
+		slog.String("verdict", d.verdict.String()),
+		slog.String("reason", d.reason.String()),
+	)
+	if id := d.RuleID(); id != 0 {
+		attrs = append(attrs,
+			slog.String("rule", id.String()),
+			slog.String("msg", d.rule.Rule.Msg),
+			slog.String("severity", d.rule.Rule.Severity.String()),
+			slog.String("confidence", d.rule.Rule.Confidence.String()),
+		)
+	}
+	if d.score != 0 {
+		attrs = append(attrs, slog.Int("score", d.score))
+	}
+	if d.target.Kind != types.TargetInvalid {
+		attrs = append(attrs, slog.String("target", d.target.String()))
+	}
+	if d.key != "" {
+		attrs = append(attrs, slog.String("field", d.key))
+	}
+	if d.reading != 0 {
+		attrs = append(attrs, slog.String("interpretation", d.reading.String()))
+	}
+	if d.detail != "" {
+		attrs = append(attrs, slog.String("detail", d.detail))
+	}
+	attrs = append(attrs, slog.Int("rules_evaluated", d.rulesEvaluated))
+	return slog.GroupValue(attrs...)
+}
 
 // allow returns a permitting decision.
 func allow(reason Reason, score, evaluated int) Decision {

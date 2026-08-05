@@ -80,6 +80,13 @@ type Transaction struct {
 	// was never really inspected.
 	undecodable string
 
+	// Response-phase state. responseStart is the index in values where response
+	// data begins, so response phases do not re-walk the request.
+	responseStart int
+	respBodySpan  types.Span
+	respBodyLen   int
+	respTruncated bool
+
 	// Framing state for desync detection. See noteFraming.
 	contentLengths  int
 	firstLength     string
@@ -131,6 +138,10 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.framingConflict = ""
 	tx.oversizeKey = ""
 	tx.oversizeLen = 0
+	tx.responseStart = -1
+	tx.respBodySpan = types.Span{}
+	tx.respBodyLen = 0
+	tx.respTruncated = false
 }
 
 // Close returns the transaction to its pool. It is safe to call more than once.
@@ -713,6 +724,116 @@ func (tx *Transaction) schemaViolation() (Decision, bool) {
 	return tx.finish(d), true
 }
 
+// ---- response phase --------------------------------------------------------
+//
+// The response API mirrors the request API deliberately: an embedder who has
+// learned one has learned the other.
+//
+// gwaf never buffers. Buffering a response breaks streaming, server-sent
+// events, and time-to-first-byte, and only whoever owns the connection can
+// weigh that trade — so the decision belongs to the embedder, not to a library
+// they imported. Feed gwaf what you choose to feed it; feed it nothing and it
+// says so rather than reporting the response clean.
+
+// SetResponseStatus records the upstream status code.
+func (tx *Transaction) SetResponseStatus(status int) {
+	var buf [8]byte
+	tx.recordString(types.Target{Kind: types.TargetResponseStatus}, "",
+		string(itoaBytes(buf[:0], status)), false)
+}
+
+// AddResponseHeader records one response header.
+func (tx *Transaction) AddResponseHeader(name, value string) {
+	tx.markResponse()
+	tx.addValue(types.Target{Kind: types.TargetResponseHeaders, Name: name}, name, value)
+	tx.addValue(types.Target{Kind: types.TargetResponseHeaderNames}, name, name)
+}
+
+// ProcessResponseHeaders evaluates the response-headers phase.
+//
+// Call it after the upstream status and headers are known and before the body
+// is written, so a leak detectable from headers alone stops the response before
+// any of it reaches the client.
+func (tx *Transaction) ProcessResponseHeaders() Decision {
+	tx.markResponse()
+	return tx.runPhase(types.PhaseResponseHeaders)
+}
+
+// WriteResponseBody hands gwaf a chunk of the response body.
+//
+// It may be called repeatedly, which is how an embedder that streams feeds gwaf
+// without buffering the whole response itself. Chunks accumulate into the
+// transaction arena up to MaxBodySize; past that the response is reported as
+// exceeding the inspection limit rather than being partly inspected and called
+// clean.
+//
+// The returned Decision is terminal only when a limit was breached. Content
+// analysis happens in ProcessResponseBody, once the body is complete.
+func (tx *Transaction) WriteResponseBody(chunk []byte) Decision {
+	tx.markResponse()
+	if len(chunk) == 0 {
+		return tx.Decision()
+	}
+
+	tx.respBodyLen += len(chunk)
+	if tx.respBodyLen > tx.waf.cfg.limits.MaxBodySize {
+		tx.respTruncated = true
+		return tx.limitExceeded("response body size")
+	}
+
+	span, ok := tx.arena.Append(chunk)
+	if !ok {
+		tx.respTruncated = true
+		return tx.limitExceeded("response body size")
+	}
+	if tx.respBodySpan.Len == 0 {
+		tx.respBodySpan = span
+	} else {
+		// Chunks are contiguous in the arena, so the accumulated body is one
+		// span growing rather than a list to stitch together later.
+		tx.respBodySpan.Len += span.Len
+	}
+	return tx.Decision()
+}
+
+// ProcessResponseBody evaluates the response-body phase over everything
+// WriteResponseBody was given.
+func (tx *Transaction) ProcessResponseBody() Decision {
+	tx.markResponse()
+
+	if tx.respTruncated {
+		return tx.limitExceeded("response body size")
+	}
+	if tx.respBodySpan.Len > 0 {
+		body := tx.arena.Resolve(tx.respBodySpan)
+		tx.recordFieldBytes(types.TargetResponseBody, []byte("body"), body, false)
+	}
+	return tx.runPhase(types.PhaseResponseBody)
+}
+
+// markResponse records where response values begin, so the response phases
+// evaluate response data rather than re-walking the whole request.
+func (tx *Transaction) markResponse() {
+	if tx.responseStart < 0 {
+		tx.responseStart = len(tx.values)
+	}
+}
+
+// itoaBytes writes a non-negative int without allocating.
+func itoaBytes(dst []byte, n int) []byte {
+	if n <= 0 {
+		return append(dst, '0')
+	}
+	var tmp [20]byte
+	i := len(tmp)
+	for n > 0 {
+		i--
+		tmp[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return append(dst, tmp[i:]...)
+}
+
 // ProcessRequestBody evaluates the request-body phase.
 func (tx *Transaction) ProcessRequestBody() Decision {
 	if tx.bodyLen > tx.waf.cfg.limits.MaxBodySize {
@@ -902,8 +1023,15 @@ func (tx *Transaction) runPhase(phase types.Phase) Decision {
 	// the slices cut from them are not.
 	tx.refreshValues()
 
+	values := tx.values
+	if phase >= types.PhaseResponseHeaders && tx.responseStart >= 0 {
+		// Response rules target response collections, so request values could
+		// never match them — walking those again would be pure cost.
+		values = tx.values[tx.responseStart:]
+	}
+
 	tx.result.Reset()
-	tx.eval.Eval(tx.rs, phase, tx.values, &tx.meter, &tx.result)
+	tx.eval.Eval(tx.rs, phase, values, &tx.meter, &tx.result)
 
 	tx.score += tx.result.Score
 	tx.evaluated += tx.result.RulesEvaluated

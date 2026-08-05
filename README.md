@@ -129,9 +129,33 @@ attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
 
 ## Scope
 
-gwaf analyzes **one request in isolation, with no memory**. Anything requiring state, identity, time,
-or infrastructure — rate limiting, IP reputation, bot scoring, eBPF — belongs to the embedder and
-arrives as a `Resolver` input.
+gwaf analyzes **one request in isolation, with no memory**, and answers one
+question: is this an attack? Anything needing state, connection ownership,
+privilege, or policy belongs to the embedder — rate limiting, reputation, bot
+scoring, eBPF, and the decision of what to *do* about a finding.
+
+**gwaf never buffers.** Holding a response breaks streaming and
+time-to-first-byte, and only whoever owns the connection can weigh that. Feed it
+what you choose; feed it nothing and it says so rather than calling the response
+clean.
+
+```go
+// Response inspection: what leaves, not what arrives.
+tx.SetResponseStatus(200)
+tx.AddResponseHeader("Content-Type", "application/json")
+if d := tx.ProcessResponseHeaders(); d.Blocked() {
+    return   // before the first byte — the only moment it can be stopped
+}
+tx.WriteResponseBody(chunk)      // as many times as you like
+d := tx.ProcessResponseBody()
+
+slog.Warn("blocked", "waf", d)   // Decision implements slog.LogValuer
+```
+
+Ownership is decided by five tests in [CLAUDE.md](CLAUDE.md#1-positioning-read-this-before-proposing-a-feature).
+The last one — *needs a dependency the embedder did not choose* — is why SecLang,
+OpenAPI-YAML, brotli, and framework adapters live in their own modules, and why
+**core carries zero third-party dependencies**.
 
 ## License
 

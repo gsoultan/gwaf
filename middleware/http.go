@@ -83,14 +83,21 @@ func OnDecision(fn func(*http.Request, gwaf.Decision)) Option {
 
 // WithResponseInspection enables response-phase analysis.
 //
-// It is off by default because it is the expensive choice and the one that
-// changes behaviour: inspecting a response body means buffering it, which
-// defeats streaming and delays time-to-first-byte. Deployments that need
-// data-leakage detection opt in knowingly; everyone else should not pay for it.
+// This is what catches what *leaves*: a private key, a stack trace, a database
+// error that confirms an injection landed. It is a different question from the
+// request side — not "is this an attack" but "did the origin just disclose
+// something".
 //
-// Bodies larger than maxBytes are passed through uninspected rather than
-// buffered without limit. That is a coverage decision and it is reported
-// through OnDecision, not hidden.
+// It is off by default because it changes behaviour, not merely cost.
+// Inspecting a body means holding it until it is complete, which defeats
+// streaming and delays time-to-first-byte. gwaf itself never buffers; that
+// decision belongs to whoever owns the connection, and this option is the
+// middleware making one reasonable choice on your behalf, explicitly.
+//
+// Response *headers* are inspected regardless of size, before anything is
+// written, which is the only moment a leaking response can still be stopped.
+// Bodies larger than maxBytes stream through uninspected rather than being
+// buffered without bound — reported through OnDecision, not hidden.
 func WithResponseInspection(maxBytes int) Option {
 	return func(c *config) {
 		c.inspectResp = true
@@ -169,9 +176,15 @@ func serve(waf *gwaf.WAF, cfg *config, next http.Handler, w http.ResponseWriter,
 		return
 	}
 
-	rw := &responseWriter{ResponseWriter: w, limit: cfg.maxRespBytes}
+	rw := &responseWriter{
+		ResponseWriter: w,
+		limit:          cfg.maxRespBytes,
+		tx:             tx,
+		cfg:            cfg,
+		req:            r,
+	}
 	next.ServeHTTP(rw, r)
-	rw.flushBuffered()
+	rw.finish()
 	report(cfg, r, tx.Decision())
 }
 
@@ -285,9 +298,17 @@ func captureBody(tx *gwaf.Transaction, r *http.Request) (restore func(), ok bool
 type responseWriter struct {
 	http.ResponseWriter
 
+	tx  *gwaf.Transaction
+	cfg *config
+	req *http.Request
+
 	buf    bytes.Buffer
 	limit  int
 	status int
+
+	// blocked records that gwaf rejected the response. Once set, nothing more
+	// reaches the client.
+	blocked bool
 
 	wroteHeader bool
 	// passthrough is set once buffering is abandoned, either because the
@@ -301,17 +322,55 @@ type responseWriter struct {
 func (w *responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *responseWriter) WriteHeader(status int) {
-	if w.wroteHeader {
+	if w.wroteHeader || w.blocked {
 		return
 	}
 	w.wroteHeader = true
 	w.status = status
+
+	// The response-headers phase runs here, before anything is written, which
+	// is the only moment a leaking response can still be stopped. Once bytes
+	// are on the wire there is no taking them back.
+	w.tx.SetResponseStatus(status)
+	for name, values := range w.Header() {
+		for _, v := range values {
+			w.tx.AddResponseHeader(name, v)
+		}
+	}
+	if d := w.tx.ProcessResponseHeaders(); d.Blocked() {
+		w.block(d)
+		return
+	}
+
 	if w.passthrough {
 		w.ResponseWriter.WriteHeader(status)
 	}
 }
 
+// block replaces the response with the configured block response.
+//
+// Only possible because nothing has been written yet. A leak found after the
+// first byte is reported, not prevented — which is exactly why the header phase
+// runs before the write rather than after it.
+func (w *responseWriter) block(d gwaf.Decision) {
+	w.blocked = true
+	w.buf.Reset()
+	report(w.cfg, w.req, d)
+	w.cfg.onBlock(w.ResponseWriter, w.req, d)
+}
+
 func (w *responseWriter) Write(p []byte) (int, error) {
+	if w.blocked {
+		// Report success so the handler completes normally; the client already
+		// received the block response.
+		return len(p), nil
+	}
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+		if w.blocked {
+			return len(p), nil
+		}
+	}
 	if w.passthrough {
 		return w.ResponseWriter.Write(p)
 	}
@@ -326,8 +385,14 @@ func (w *responseWriter) Write(p []byte) (int, error) {
 }
 
 // startPassthrough flushes what was buffered and stops buffering.
+//
+// Once this runs the response can no longer be stopped, so any body the caller
+// still wants inspected must be handed over first. Flush, Hijack, and ReadFrom
+// all reach here because each means the handler wants bytes on the wire now —
+// and honouring that is more important than inspecting them, since the
+// alternative is silently breaking streaming.
 func (w *responseWriter) startPassthrough() {
-	if w.passthrough {
+	if w.passthrough || w.blocked {
 		return
 	}
 	w.passthrough = true
@@ -340,19 +405,35 @@ func (w *responseWriter) startPassthrough() {
 	}
 }
 
-// flushBuffered writes whatever is still held.
-func (w *responseWriter) flushBuffered() {
-	if w.passthrough {
+// finish runs the response-body phase over what was buffered, then releases it.
+//
+// This is the point of buffering at all: an option that buffered and inspected
+// nothing was pure cost, which is what this used to be.
+func (w *responseWriter) finish() {
+	if w.blocked {
 		return
 	}
-	w.passthrough = true
-	if w.status != 0 {
-		w.ResponseWriter.WriteHeader(w.status)
+
+	if !w.passthrough && w.buf.Len() > 0 {
+		// Hand the body to gwaf before writing it, so a leak found here still
+		// stops the response.
+		if d := w.tx.WriteResponseBody(w.buf.Bytes()); d.Blocked() {
+			w.block(d)
+			return
+		}
+		if d := w.tx.ProcessResponseBody(); d.Blocked() {
+			w.block(d)
+			return
+		}
 	}
-	if w.buf.Len() > 0 {
-		_, _ = w.ResponseWriter.Write(w.buf.Bytes())
-		w.buf.Reset()
+
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+		if w.blocked {
+			return
+		}
 	}
+	w.startPassthrough()
 }
 
 // Flush implements http.Flusher.

@@ -373,3 +373,34 @@ of mistake. That also silently fixed traversal rules, which had the same gap:
 Added rule 4005 for XML entity declarations (XXE + billion laughs). SOAP, plain
 XML, DOCTYPE-without-entities, GraphQL queries/subscriptions/introspection, and
 all four protocol versions pass.
+
+## SHIPPED: response phase — and a no-op I had shipped
+`WithResponseInspection` **buffered the entire response and inspected nothing**.
+`Transaction` had no `ProcessResponseHeaders`/`ProcessResponseBody` at all — the
+phases existed in `types`, the engine could evaluate them, and there was no
+public API to drive them. So the option cost streaming and time-to-first-byte
+and returned nothing. Not a missing feature: a cost with no benefit.
+
+**gwaf never buffers** (ownership test). `WriteResponseBody` accepts chunks the
+embedder chooses to give; give it nothing and it reports it saw nothing rather
+than that the response was clean. The middleware offers buffering **opt-in**,
+because an integration layer may make one reasonable choice and the core may not.
+
+Header phase runs **before the first byte is written** — the only moment a
+leaking response can still be stopped. Body phase catches what was in the body
+all along.
+
+Rules 6001-6003 (private key, stack trace, database error), all **High not
+Certain**: a paste bin, an error-tracking API, and a database console each
+legitimately return one of them.
+
+Response mirrors are **generated** (`withResponsePhase`), symmetric with
+`withBodyPhase`, for the same reason — the validator rejected hand-written
+rules targeting RESPONSE_BODY at the header phase, which is the class of
+mistake generation removes.
+
+## DX: Decision is loggable in one line
+`slog.LogValuer` + `String()`. The first thing any embedder does with a Decision
+is log it. Includes `interpretation`, because a payload found only under an
+alternative decoding is the most confusing thing to see in a log — the bytes on
+the wire look harmless and the firewall appears to have malfunctioned.

@@ -161,6 +161,14 @@ Two lessons worth keeping:
 
 ## M3 — Schema + integration (weeks 14–24)
 
+**Framing correction.** gwaf is a library for *any* embedder — an API service, a
+Lambda, a CLI, a gateway. gateon is one adopter and a case study, not the design
+target. Ownership between gwaf and an embedder is decided by the five tests in
+CLAUDE.md §1; anything failing test 5 (needs a dependency the embedder did not
+choose) goes in a separate module, which is where SecLang, OpenAPI-YAML, brotli,
+and the framework adapters belong.
+
+
 1. [x] **Schema validation and specialization** — the typed core shipped
        (`schema` package, zero deps). Validation, route matching including
        templates, strict mode, and `NoBody`. Measured: 29% faster, 56% less

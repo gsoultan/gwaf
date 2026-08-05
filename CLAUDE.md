@@ -31,6 +31,44 @@ Two facts drive every design decision:
 
 **A feature proposal must state which axis it strengthens.** If it strengthens none, it does not ship.
 
+### Who owns what: gwaf and the embedder
+
+gwaf is a library for **any** application — an API service, a Lambda, a CLI, a
+gateway. gateon is one embedder and a useful case study; it is not the design
+target. A decision that only makes sense for a gateway is a decision made in the
+wrong place.
+
+gwaf answers exactly one question: **is this request an attack?** — about one
+request, using only that request. Five tests decide everything else, and they
+have to hold for every kind of embedder:
+
+| Test | If yes, it belongs to the embedder |
+|---|---|
+| **Memory** | Needs state across requests — rate limits, reputation, bot scores, anomaly baselines |
+| **Ownership** | Owns the socket, the connection, or the lifecycle — buffering, streaming, timeouts, retries |
+| **Environment** | Needs privilege, hardware, a daemon, or a network call — eBPF, TLS fingerprints, antivirus, threat feeds |
+| **Policy** | Decides what to *do* rather than what is *true* — block, challenge, redact, log, ban |
+| **Dependency** | Needs a library the embedder did not choose — separate module, **never** core |
+
+Two consequences worth stating outright:
+
+**gwaf produces findings; the embedder produces outcomes.** A `Decision` is a
+recommendation derived from policy the embedder configured. What happens next is
+theirs.
+
+**gwaf never buffers.** Holding a response breaks streaming, server-sent events,
+and time-to-first-byte, and only whoever owns the connection can weigh that.
+`WriteResponseBody` accepts what an embedder chooses to give; give it nothing and
+it reports that it saw nothing rather than that the response was clean. The
+`net/http` middleware offers buffering as an explicit opt-in, because an
+integration layer may make one reasonable choice — the core may not.
+
+The fifth test is what keeps the library embeddable anywhere. Everything in core
+is a dependency an embedder inherits without consent, which is why SecLang,
+OpenAPI-YAML, brotli, and the framework adapters live in their own modules.
+**Zero third-party dependencies in core is the invariant**, and it is the one
+property no competing WAF library offers.
+
 ### The scope line: stateless per-request
 
 > **gwaf analyzes one request in isolation, with no memory.**

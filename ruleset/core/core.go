@@ -68,6 +68,11 @@ const (
 	IDSQLiSemantic      types.RuleID = 2010
 	IDXSSSemantic       types.RuleID = 3010
 	IDScannerUserAgent  types.RuleID = 5001
+
+	// 6,000-6,999: response-phase leak detection.
+	IDLeakPrivateKey types.RuleID = 6001
+	IDLeakStackTrace types.RuleID = 6002
+	IDLeakSQLError   types.RuleID = 6003
 )
 
 // argTargets are the request values an injection rule inspects. Header values
@@ -89,6 +94,21 @@ var bodyTargets = []types.Target{
 	{Kind: types.TargetArgs},
 	{Kind: types.TargetArgNames},
 	{Kind: types.TargetRequestBody},
+}
+
+// responseTargets are what a leak rule inspects. Header values matter as much
+// as the body: a framework version or an internal hostname leaks just as
+// effectively from a header.
+// responseTargets is what a leak rule inspects at the response-headers phase.
+// The body-phase counterpart is generated; see withResponsePhase.
+var responseTargets = []types.Target{
+	{Kind: types.TargetResponseHeaders},
+}
+
+// responseBodyTargets extends a leak rule to the body once it is available.
+var responseBodyTargets = []types.Target{
+	{Kind: types.TargetResponseHeaders},
+	{Kind: types.TargetResponseBody},
 }
 
 // decodeChain is the normalization applied before injection matching. Order
@@ -113,7 +133,7 @@ var pathChain = []rules.Transform{
 // every rule that inspects attacker-supplied content, so a payload blocked in a
 // query string is blocked identically in a JSON or form body.
 func Default() rules.Set {
-	return withBodyPhase(requestRules())
+	return withResponsePhase(withBodyPhase(requestRules()))
 }
 
 // requestRules returns the rules authored for the request-headers phase.
@@ -346,6 +366,83 @@ func requestRules() rules.Set {
 			Tags:       []string{"xxe", "dos", "owasp-a05"},
 		},
 
+		// ---- Response leaks --------------------------------------------------
+		//
+		// These are the reason a response phase exists. They detect what leaves
+		// rather than what arrives, which is a different question: not "is this
+		// an attack" but "did the origin just disclose something".
+		//
+		// All three are High rather than Certain. Each has a narrow class of
+		// application for which the content is the product — a paste bin, an
+		// error-tracking API, a database console — and those deployments should
+		// scope an exception rather than have the tier lowered for everyone.
+		{
+			ID:         IDLeakPrivateKey,
+			Phase:      types.PhaseResponseHeaders,
+			Targets:    responseTargets,
+			Transforms: []rules.Transform{transform.Lowercase},
+			// A certificate is public and appears in responses legitimately; a
+			// private key is the opposite of public and appears in one only by
+			// mistake.
+			Op: op.ContainsAny(
+				"-----begin rsa private key", "-----begin dsa private key",
+				"-----begin ec private key", "-----begin openssh private key",
+				"-----begin pgp private key", "-----begin private key",
+				"-----begin encrypted private key",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "Private key in response",
+			Tags:       []string{"leak", "response", "owasp-a02"},
+		},
+		{
+			ID:         IDLeakStackTrace,
+			Phase:      types.PhaseResponseHeaders,
+			Targets:    responseTargets,
+			Transforms: []rules.Transform{transform.Lowercase},
+			// A stack trace hands an attacker the framework, the version, the
+			// filesystem layout, and often the query that failed. Each literal
+			// pairs a marker with its context so the word alone does not match:
+			// "panic:" is a word, "panic:" beside "goroutine" is Go leaking.
+			Op: op.ContainsAny(
+				"goroutine 1 [running]", "\npanic: runtime error",
+				"traceback (most recent call last)",
+				"at java.lang.", "at org.springframework.",
+				"system.nullreferenceexception", "at system.web.",
+				"fatal error: uncaught", "stack trace:\n#0",
+				"activerecord::", "django.core.exceptions",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.High,
+			Msg:        "Stack trace in response",
+			Tags:       []string{"leak", "response", "owasp-a05"},
+		},
+		{
+			ID:         IDLeakSQLError,
+			Phase:      types.PhaseResponseHeaders,
+			Targets:    responseTargets,
+			Transforms: []rules.Transform{transform.Lowercase},
+			// A database error in a response is how an attacker confirms an
+			// injection landed and then reads the schema back one message at a
+			// time. It is the feedback channel that makes blind injection
+			// unnecessary.
+			Op: op.ContainsAny(
+				"you have an error in your sql syntax",
+				"warning: mysql_", "unclosed quotation mark after",
+				"quoted string not properly terminated",
+				"pg::syntaxerror", "sqlstate[", "ora-0", "ora-1",
+				"microsoft ole db provider for sql server",
+				"sqlite3::sqlexception", "psycopg2.errors",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "Database error in response",
+			Tags:       []string{"leak", "response", "sqli", "owasp-a03"},
+		},
+
 		// ---- Hostile clients -------------------------------------------------
 		{
 			ID:         IDScannerUserAgent,
@@ -416,6 +513,39 @@ func withBodyPhase(set rules.Set) rules.Set {
 			continue
 		}
 		out = append(out, mirrorToBody(r))
+	}
+	return out
+}
+
+// responsePhaseOffset derives a response-body rule's ID from its header-phase
+// original, mirroring bodyPhaseOffset on the request side.
+const responsePhaseOffset types.RuleID = 100
+
+// withResponsePhase returns set plus a response-body counterpart for every
+// response-headers rule.
+//
+// Symmetric with withBodyPhase, and for the same reason. A leak rule wants to
+// read both the headers and the body, but the body does not exist yet at the
+// header phase — so the header-phase rule reads headers, and a generated
+// counterpart reads both once the body is available.
+//
+// The header-phase version is what lets an embedder stop a leaking response
+// before any of it is written. The body-phase version is what catches the
+// leak that was in the body all along.
+func withResponsePhase(set rules.Set) rules.Set {
+	out := make(rules.Set, 0, len(set)+8)
+	out = append(out, set...)
+
+	for _, r := range set {
+		if r.Phase != types.PhaseResponseHeaders {
+			continue
+		}
+		m := r
+		m.ID = r.ID + responsePhaseOffset
+		m.Phase = types.PhaseResponseBody
+		m.Targets = responseBodyTargets
+		m.Msg = r.Msg + " (body)"
+		out = append(out, m)
 	}
 	return out
 }
