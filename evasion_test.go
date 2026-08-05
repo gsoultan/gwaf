@@ -318,6 +318,61 @@ var evasions = []evasion{
 	{name: "ldapi/nul truncate", technique: "null-truncate", arg: `admin\00`},
 	{name: "ldapi/encoded clause", technique: "single-encode", arg: "%2a%29%28uid%3d%2a"},
 	{name: "ldapi/body", technique: "none", body: `{"user":"*)(uid=*))(|(uid=*"}`},
+
+	// ---- gRPC wrappers -----------------------------------------------------
+	//
+	// Three layers can sit between the bytes on the wire and the bytes the origin
+	// acts on, and each one hid a payload until it was measured: message framing,
+	// per-message compression (which Content-Encoding does not describe), and
+	// whole-body base64 for grpc-web-text.
+	{name: "grpc/framed", technique: "grpc-framing",
+		header: [2]string{"Content-Type", "application/grpc"},
+		body:   grpcAttack(false, false)},
+	{name: "grpc/framed multi", technique: "grpc-framing",
+		header: [2]string{"Content-Type", "application/grpc"},
+		body: string(grpcFrame(grpcField("orders-svc"))) +
+			string(grpcFrame(grpcField("1' OR 1=1--")))},
+	{name: "grpc/per-frame gzip", technique: "grpc-framing",
+		header: [2]string{"Grpc-Encoding", "gzip"},
+		body:   grpcAttack(true, false)},
+	{name: "grpc/web-text base64", technique: "grpc-framing",
+		header: [2]string{"Content-Type", "application/grpc-web-text"},
+		body:   grpcAttack(false, true)},
+	{name: "grpc/web-text gzip", technique: "grpc-framing",
+		header: [2]string{"Grpc-Encoding", "gzip"},
+		body:   grpcAttack(true, true)},
+}
+
+// grpcField encodes a protobuf length-delimited string in field 3, which is
+// where an attacker-controlled value lives.
+func grpcField(s string) []byte {
+	return append([]byte{0x1a, byte(len(s))}, s...)
+}
+
+// grpcAttack builds a framed SQL injection payload, optionally compressed per
+// message and optionally base64-wrapped as grpc-web-text does.
+func grpcAttack(compressed, webText bool) string {
+	payload := grpcField("1' OR 1=1--")
+	if compressed {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		_, _ = zw.Write(payload)
+		_ = zw.Close()
+		payload = buf.Bytes()
+	}
+
+	f := make([]byte, 5+len(payload))
+	if compressed {
+		f[0] = 1
+	}
+	f[3] = byte(len(payload) >> 8)
+	f[4] = byte(len(payload))
+	copy(f[5:], payload)
+
+	if webText {
+		return base64.StdEncoding.EncodeToString(f)
+	}
+	return string(f)
 }
 
 // ---- the benign corpus -----------------------------------------------------
@@ -602,6 +657,7 @@ var declaredClasses = map[string]int{
 	"shelli":    8,
 	"scanner":   1,
 	"ldapi":     8,
+	"grpc":      4,
 }
 
 // classOf returns the attack class a case belongs to, taken from its name.

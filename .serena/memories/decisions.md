@@ -731,3 +731,52 @@ The first A/B of prefix reuse reported nonsense (+136% for a change that
 strictly removes work) because the machine went busy mid-run. Interleaving A/B
 and taking minima is the method that works here. Recorded because I have now
 been caught by it twice.
+
+## FINDING: gRPC hid a payload in three wrappers, two of them unhandled
+Probing gRPC compatibility found two live bypasses. Binary framing already
+worked; the other two layers did not.
+
+**grpc-web-text.** Browsers that cannot send binary framing base64-encode the
+*entire body*. Base64 is printable, so IsBinary said "not binary"; it has no
+grammar, so nothing matched. The payload was simply invisible. Base64 decoding
+existed but only per *parsed field* — and here there are no fields, the whole
+body is one run. `minBase64Run` is 64 so that a token inside a field is not
+mistaken for encoded content; a whole body that is nothing but base64 alphabet
+is not a token, so `IsBase64Body` uses a floor of 8 (the smallest gRPC frame).
+
+**Per-frame compression.** gRPC compresses *per message*, inside the frame,
+named by `grpc-encoding`. That is a different mechanism from Content-Encoding
+and invisible to it, so the decompression added earlier never saw it. Same
+bypass class, same shape: DEFLATE has no grammar, nothing matches, the origin
+decompresses and acts on the payload.
+
+`internal/body/grpc.go` unframes and decompresses. `IsGRPCFramed` is strict on
+purpose — every frame well formed, last ending exactly at the body's end —
+because a loose check would slice payloads out of the middle of a JPEG and
+inspect the pieces as messages. An undecodable codec (snappy, zstd) sets
+`undecodable` and reaches `undecodableBody()`, never passing silently.
+
+### The regression this caused, and why it is instructive
+Unframing reintroduced the **1.2% chance-match failure at 1.85%**, and the cause
+was subtle: stripping the frame header removes its first byte, the compression
+flag, which is **zero for an uncompressed message**. That NUL was what made
+`IsBinary` fire on the whole frame. Without it, a 256-byte protobuf payload
+containing no NUL of its own reads as *text* and goes to the detectors whole.
+
+So the original protection had been resting on an accident. The fix decides by
+*type* rather than by content: an unframed gRPC message is protobuf unless it
+sniffs as JSON (Connect frames JSON in streaming mode), and `IsBinary` is not
+consulted for frame payloads at all.
+
+The test that caught it asserts a ceiling of **zero**, which is why a 1.85%
+regression failed loudly instead of looking like noise.
+
+### Buffer aliasing, caught by reading rather than running
+The first version passed `tx.inflateBuf` as the frame scratch. A
+Content-Encoding-compressed body is decompressed *into* that buffer and then
+arrives at the unframer as its input — so it would have overwritten itself
+mid-parse. Separate `tx.frameBuf` now. Found while the Bash tooling was
+unavailable and the only option was re-reading the diff.
+
+18.7M fuzz executions against `UnframeGRPC` with forged lengths, no panic.
+Detection 132/132, false positives 0/124, all SLOs still met.

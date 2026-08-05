@@ -237,7 +237,16 @@ and the framework adapters belong.
        GET **1.5µs → 0.74µs**, ruleset scaling 354ns → 240ns and still flat from
        10 to 10,000 rules. Detection identical, allocations still zero.
 4. [ ] **Context-aware confidence from schema** (§9)
-4. [ ] GraphQL depth/complexity/introspection; gRPC frame + protobuf
+4. [~] **gRPC frame handling shipped** (`internal/body/grpc.go`): message
+       unframing, per-message decompression via `grpc-encoding`, and whole-body
+       base64 for grpc-web-text. Two live bypasses closed — both the same class
+       as the Content-Encoding one, where a payload the origin will act on is
+       opaque to the detectors.
+
+       Still open: protobuf *descriptor*-driven positive security (`schema/grpc`),
+       which would give gRPC what `schema/openapi` now gives REST — field types,
+       and therefore provably inert fields. GraphQL depth/complexity/
+       introspection also remains.
 5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation
 6. [~] Framework adapters shipped as separate modules: `adapters/gin`,
        `adapters/echo`, `adapters/fiber`. `Explain()` shipped.

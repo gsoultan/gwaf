@@ -178,7 +178,38 @@ func IsBase64(data []byte) bool {
 	if len(data) < minBase64Run {
 		return false
 	}
+	return isBase64Alphabet(data)
+}
 
+// minBase64Body is the shortest *whole body* treated as encoded content.
+//
+// Much lower than minBase64Run because the context is different. The
+// 64-character floor exists so that an identifier or a token inside a field is
+// not mistaken for encoded content; a whole request body that is nothing but
+// base64 alphabet is not an identifier.
+//
+// grpc-web-text is exactly this case — a browser that cannot send binary
+// framing base64-encodes the entire body — and a short gRPC message encodes to
+// well under sixty-four characters, which is why the payload was invisible.
+//
+// Not zero either: eight characters is the smallest gRPC frame, a five-byte
+// header and nothing else, once encoded.
+const minBase64Body = 8
+
+// IsBase64Body reports whether an entire body is one base64 run.
+//
+// Separate from IsBase64 only in its length floor; the alphabet and padding
+// rules are identical, and both accept the URL-safe alphabet because an origin
+// decoding either will produce content.
+func IsBase64Body(data []byte) bool {
+	if len(data) < minBase64Body {
+		return false
+	}
+	return isBase64Alphabet(data)
+}
+
+// isBase64Alphabet reports whether data is entirely base64, padding aside.
+func isBase64Alphabet(data []byte) bool {
 	body := data
 	// Padding only ever appears at the end, and only ever one or two bytes.
 	for len(body) > 0 && body[len(body)-1] == '=' {
@@ -187,7 +218,7 @@ func IsBase64(data []byte) bool {
 			return false
 		}
 	}
-	if len(body) < minBase64Run {
+	if len(body) == 0 {
 		return false
 	}
 

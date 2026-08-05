@@ -57,6 +57,7 @@ type Transaction struct {
 	bodyLen         int
 	contentType     string
 	contentEncoding string
+	grpcEncoding    string
 
 	// op is the schema operation matched for this request, or nil when no
 	// schema is configured or the route is not described.
@@ -78,8 +79,13 @@ type Transaction struct {
 	// decodeBuf backs base64 decoding, reused across values.
 	decodeBuf []byte
 
-	// inflateBuf backs decompression, reused across requests.
+	// inflateBuf backs Content-Encoding decompression, reused across requests.
 	inflateBuf []byte
+
+	// frameBuf backs per-message gRPC decompression. Distinct from inflateBuf
+	// because a Content-Encoding-compressed body is decompressed into that one
+	// and then unframed out of it, and one buffer cannot be both.
+	frameBuf []byte
 
 	// undecodable records a content encoding gwaf could not undo, so the body
 	// was never really inspected.
@@ -143,6 +149,7 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.reqPath = ""
 	tx.contentType = ""
 	tx.contentEncoding = ""
+	tx.grpcEncoding = ""
 	tx.undecodable = ""
 	tx.contentLengths = 0
 	tx.firstLength = ""
@@ -336,6 +343,12 @@ func (tx *Transaction) AddRequestHeader(name, value string) {
 	}
 	if len(tx.contentEncoding) == 0 && equalFoldASCII(name, "content-encoding") {
 		tx.contentEncoding = value
+	}
+	// gRPC compresses per message rather than per body, so it names its codec in
+	// a header of its own. Content-Encoding does not describe it, which is
+	// exactly why a compressed frame was passing uninspected.
+	if len(tx.grpcEncoding) == 0 && equalFoldASCII(name, "grpc-encoding") {
+		tx.grpcEncoding = value
 	}
 	tx.noteFraming(name, value)
 	tx.addValue(types.Target{Kind: types.TargetRequestHeaders, Name: name}, name, value)
@@ -665,20 +678,111 @@ func (tx *Transaction) decompress(b []byte) []byte {
 
 // recordBody records an unstructured body for inspection.
 //
-// Binary content is not handed to text detectors as one value. Doing so
-// produces matches by chance: the shell rule's "$(" is two bytes, and in a few
-// hundred random bytes it turns up about one time in a hundred. Measured
-// against random protobuf payloads that was 1.2% of gRPC requests blocked with
-// no attacker involved.
+// Three wrappers can sit between the bytes on the wire and the bytes the origin
+// acts on, and each one hid a payload until it was measured: whole-body base64
+// (grpc-web-text), gRPC message framing, and per-message compression. They are
+// peeled here in that order, because that is the order a client applies them.
+func (tx *Transaction) recordBody(b []byte) {
+	// grpc-web-text base64-encodes the entire body, which browsers send when
+	// binary framing is unavailable. It is printable, so it is not "binary" and
+	// it has no grammar, so nothing matches — the payload was simply invisible.
+	// Decoded here rather than in the field-level base64 path, because there are
+	// no fields: the whole body is one run.
+	if body.IsBase64Body(b) {
+		if decoded, ok := body.DecodeBase64(tx.decodeBuf, b); ok && len(decoded) > 0 {
+			tx.recordUnframed(decoded)
+			// Retained only after the decoded bytes have been consumed, since
+			// decoded[:0] shares their backing array.
+			tx.decodeBuf = decoded[:0]
+			// The encoded form is recorded too. An origin that never decodes
+			// still sees these bytes, and evaluating both readings is the same
+			// rule followed everywhere else here.
+			tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", b)
+			return
+		}
+	}
+	tx.recordUnframed(b)
+}
+
+// recordUnframed inspects a body that is not base64-wrapped, unframing gRPC
+// messages when it finds them.
+func (tx *Transaction) recordUnframed(b []byte) {
+	// gRPC compresses *per message*, inside the frame, which is a different
+	// mechanism from Content-Encoding and invisible to it. A compressed frame
+	// inspected as-is is opaque exactly as a gzipped body is: no grammar in a
+	// DEFLATE stream, nothing matches, request reported clean, origin
+	// decompresses and acts on the payload.
+	//
+	// Unframing also removes the five header bytes between messages, which a
+	// text detector has no business reading as a sentence.
+	if body.IsGRPCFramed(b) {
+		enc := body.DetectGRPCEncoding(tx.grpcEncoding)
+		// frameBuf, not inflateBuf. A Content-Encoding-compressed body is
+		// decompressed *into* inflateBuf and then arrives here as b, so reusing
+		// that buffer as the frame scratch would overwrite the input while
+		// parsing it — the decompressed body corrupting itself mid-scan.
+		frames, scratch, err := body.UnframeGRPC(tx.frameBuf, b, enc,
+			tx.waf.cfg.limits.MaxBodySize)
+		tx.frameBuf = scratch
+		if err != nil && tx.undecodable == "" {
+			// A message nobody could read has not been shown to be clean.
+			tx.undecodable = "grpc-encoding " + enc.String() + ": " + err.Error()
+		}
+		if len(frames) > 0 {
+			for i := range frames {
+				if frames[i].Payload == nil {
+					continue
+				}
+				tx.recordText(i, frames[i].Payload)
+			}
+			return
+		}
+	}
+	tx.recordText(-1, b)
+}
+
+// recordText inspects one payload, extracting printable runs when it is binary.
+//
+// Binary content is not handed to text detectors as one value. Doing so produces
+// matches by chance: the shell rule's "$(" is two bytes, and in a few hundred
+// random bytes it turns up about one time in a hundred. Measured against random
+// protobuf payloads that was 1.2% of gRPC requests blocked with no attacker
+// involved.
 //
 // Instead the printable runs are extracted and inspected individually — a
 // protobuf string field, a filename inside an archive, a comment in an image —
 // while the framing bytes between them are never presented as if they were
 // text. See internal/body/binary.go.
-func (tx *Transaction) recordBody(b []byte) {
-	if !body.IsBinary(b) {
-		tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", b)
-		return
+func (tx *Transaction) recordText(frame int, b []byte) {
+	switch {
+	case frame < 0:
+		// An unframed body: decide by content, as before.
+		if !body.IsBinary(b) {
+			tx.addValueBytes(types.Target{Kind: types.TargetRequestBody}, "", b)
+			return
+		}
+
+	// An unframed gRPC message is protobuf unless it is JSON, and Connect's
+	// streaming mode does frame JSON documents. Deciding that by *type* rather
+	// than by whether a NUL byte happens to appear is what keeps a protobuf
+	// payload out of the text detectors.
+	//
+	// Consulting IsBinary here was a measured regression. Framing removal takes
+	// the header with it, and the header's first byte is the compression flag —
+	// zero for an uncompressed message. That NUL was what made IsBinary fire on
+	// the whole frame; without it, a 256-byte protobuf payload containing no NUL
+	// of its own reads as text, and 1.85% of random protobuf was blocked. The
+	// same failure as the original 1.2%, reintroduced by removing the accident
+	// that had been masking it.
+	case body.SniffJSON(b):
+		if tx.parseStructuredBody(b, true) {
+			return
+		}
+	}
+
+	name := []byte("body")
+	if frame >= 0 {
+		name = itoaBytes(append(name, '#'), frame)
 	}
 
 	tx.bodyParser.Reset(body.Limits{
@@ -686,7 +790,7 @@ func (tx *Transaction) recordBody(b []byte) {
 		MaxValueLen:  tx.waf.cfg.limits.MaxValueLen,
 		MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
 	})
-	tx.bodyParser.ExtractText([]byte("body"), b, func(name, value []byte, _ body.Kind) bool {
+	tx.bodyParser.ExtractText(name, b, func(name, value []byte, _ body.Kind) bool {
 		tx.recordValueBytes(types.TargetRequestBody, name, value, false)
 		return true
 	})
