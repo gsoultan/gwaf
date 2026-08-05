@@ -108,12 +108,23 @@ vuln:
 ##
 ## The dependency count of the core module is a tracked KPI (CLAUDE.md §4):
 ## anything an embedder inherits from gwaf is a supply-chain liability they did
-## not choose. Integrations live in their own modules for this reason.
+## not choose. Integrations that need a dependency live in their own modules.
+##
+## Two checks, because either alone can be fooled. go.mod is the declaration;
+## the package walk is what actually gets linked. The walk uses `.Standard`
+## rather than matching import paths, because the standard library vendors
+## packages under paths like `vendor/golang.org/x/net/...` that look
+## third-party and are not -- net/http pulls several in.
 .PHONY: deps
 deps:
-	@deps=$$($(GO) list -deps ./... | grep -v '^github.com/gsoultan/gwaf' | grep '\.' | grep -v '^golang.org/x/' || true); \
-	if [ -n "$$deps" ]; then \
-		echo "core module gained third-party dependencies:"; echo "$$deps"; exit 1; \
+	@reqs=$$($(GO) list -m -f '{{if not .Main}}{{.Path}}{{end}}' all | grep -v '^$$' || true); \
+	if [ -n "$$reqs" ]; then \
+		echo "core module declares third-party modules:"; echo "$$reqs"; exit 1; \
+	fi
+	@pkgs=$$($(GO) list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... \
+		| grep -v '^github.com/gsoultan/gwaf' || true); \
+	if [ -n "$$pkgs" ]; then \
+		echo "core module links non-standard packages:"; echo "$$pkgs"; exit 1; \
 	fi; \
 	echo "core module dependencies: 0 third-party"
 

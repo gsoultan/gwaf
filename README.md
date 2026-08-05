@@ -15,17 +15,16 @@ fuel rather than wall-clock.
 ```go
 waf, _ := gwaf.New()          // working, blocking firewall — no configuration
 
-tx := waf.NewTransaction()
-defer tx.Close()
+mux := http.NewServeMux()
+mux.HandleFunc("GET /api/orders", handleOrders)
 
-tx.SetRequestLine(r.Method, r.RequestURI, r.Proto)
-tx.AddRequestHeader("User-Agent", r.UserAgent())
-
-if d := tx.ProcessRequestHeaders(); d.Blocked() {
-    http.Error(w, "forbidden", d.Status())   // d.RuleID(), d.MatchedSpan() explain why
-    return
-}
+http.ListenAndServe(":8080", middleware.HTTP(waf)(mux))
 ```
+
+That is the whole integration. See [`examples/basic`](examples/basic) for one
+with an API schema and decision logging, and
+[INTEGRATION.md](docs/INTEGRATION.md) for the transaction API when you are
+embedding into something that is not `net/http`.
 
 ## Measured, not claimed
 

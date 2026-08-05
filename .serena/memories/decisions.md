@@ -174,3 +174,37 @@ stateless boundary.
 Delimiters only count at a line start, so a body containing the boundary string
 mid-line is not split there — otherwise the parts gwaf sees and the parts the
 origin sees would differ. Bare LF is accepted because lenient origins accept it.
+
+## SHIPPED: net/http middleware (`middleware`)
+Integration profile A: `middleware.HTTP(waf)(mux)`. In the **core module**
+because net/http is stdlib; framework adapters (chi, echo, gin) need their own
+deps and therefore their own modules.
+
+Both documented traps are handled **and tested**, because both fail silently:
+- **Body double-read** — read once into a buffer, restore `r.Body` and
+  `ContentLength`. Without it the handler gets an empty body and it looks like
+  an application bug.
+- **ResponseWriter interface loss** — the wrapper implements `Unwrap()` for
+  `http.ResponseController` *and* delegates Flusher/Hijacker/Pusher/ReaderFrom
+  for code that type-asserts. Losing these silently breaks SSE, WebSocket
+  upgrades, and sendfile weeks after the middleware was added.
+
+Deliberate choices:
+- **Not `url.ParseQuery`** — it drops pairs it considers malformed, and a pair
+  an attacker deliberately malformed is the one worth inspecting.
+- **`r.RequestURI` over `r.URL`** — parsing normalizes, and a normalized view
+  can differ from what the origin receives.
+- **Host is added explicitly** — it lives on the struct, not in Header, so it
+  would otherwise never be inspected despite reaching routing and cache keys.
+- **Response inspection is opt-in** — buffering defeats streaming and delays
+  time-to-first-byte. Oversized responses pass through intact rather than being
+  truncated.
+- **Default block response says nothing** — telling a client which rule fired
+  is telling an attacker what to work around.
+
+## FIXED: the `make deps` check was wrong
+It walked import paths and excluded `^golang.org/x/`. Importing net/http broke
+it, because the standard library **vendors** packages under
+`vendor/golang.org/x/net/...` which look third-party and are not. Now checks
+both `go list -m` (the declaration) and `.Standard` on the package walk (what
+actually links). Stronger than before.
