@@ -150,3 +150,200 @@ func run(t *testing.T, w *gwaf.WAF, target string, args map[string]string) gwaf.
 	}
 	return tx.ProcessRequestBody()
 }
+
+// TestVendorResolverSuppliesASignal is the mechanism behind the scope line in
+// CLAUDE.md §1. gwaf analyses one request with no memory, so a reputation score
+// is the embedder's to compute — and this is how the result reaches a rule.
+func TestVendorResolverSuppliesASignal(t *testing.T) {
+	calls := 0
+
+	set := rules.Set{{
+		ID:         5000004,
+		Phase:      types.PhaseRequestHeaders,
+		Targets:    []types.Target{{Kind: types.TargetResolved, Name: "reputation"}},
+		Op:         vendor.NewOperator("99"),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.Certain,
+		Msg:        "reputation score above threshold",
+	}}
+
+	w, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A bad score blocks.
+	tx := w.NewTransaction()
+	tx.AddResolver(vendor.Resolver{Score: "99", ASN: "AS64496", Calls: &calls})
+	tx.SetRequestLine("GET", "/x", "HTTP/1.1")
+	d := tx.ProcessRequestHeaders()
+	tx.Close()
+	if !d.Blocked() {
+		t.Errorf("a resolved signal did not reach the rule: reason=%v", d.Reason())
+	}
+	if calls != 1 {
+		t.Errorf("resolver called %d times, want 1", calls)
+	}
+
+	// A good score does not.
+	calls = 0
+	tx = w.NewTransaction()
+	tx.AddResolver(vendor.Resolver{Score: "3", ASN: "AS64496", Calls: &calls})
+	tx.SetRequestLine("GET", "/x", "HTTP/1.1")
+	d = tx.ProcessRequestHeaders()
+	tx.Close()
+	if d.Blocked() {
+		t.Errorf("a good score blocked: rule=%d", d.RuleID())
+	}
+}
+
+// TestResolverIsNotCalledWhenNoRuleReadsIt is why Resolver is an interface
+// rather than a setter. A signal is out of gwaf's scope usually because
+// obtaining it is expensive — a reputation lookup, a fingerprint, a database
+// read — so paying for it when nothing reads it would undo the reason for
+// keeping it out.
+func TestResolverIsNotCalledWhenNoRuleReadsIt(t *testing.T) {
+	calls := 0
+
+	// A ruleset that reads ordinary arguments and no resolved collection.
+	set := rules.Set{{
+		ID:         5000005,
+		Phase:      types.PhaseRequestHeaders,
+		Targets:    []types.Target{{Kind: types.TargetArgs}},
+		Op:         vendor.NewOperator("needle"),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.Certain,
+		Msg:        "unrelated rule",
+	}}
+
+	w, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.AddResolver(vendor.Resolver{Score: "99", Calls: &calls})
+	tx.SetRequestLine("GET", "/x", "HTTP/1.1")
+	tx.AddArgument("q", "ordinary")
+	tx.ProcessRequestHeaders()
+	tx.ProcessRequestBody()
+
+	if calls != 0 {
+		t.Errorf("resolver called %d times when no rule reads it; the whole "+
+			"point is that an expensive signal is not paid for unread", calls)
+	}
+}
+
+// TestResolverIsCalledAtMostOncePerRequest covers the other half: a resolver
+// read by rules in several phases must not repeat an expensive lookup.
+func TestResolverIsCalledAtMostOncePerRequest(t *testing.T) {
+	calls := 0
+
+	set := rules.Set{
+		{
+			ID:         5000006,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    []types.Target{{Kind: types.TargetResolved, Name: "reputation"}},
+			Op:         vendor.NewOperator("zzz"),
+			Actions:    []rules.Action{rules.Log},
+			Severity:   types.SeverityNotice,
+			Confidence: types.Certain,
+			Msg:        "phase 1 reads reputation",
+		},
+		{
+			ID:         5000007,
+			Phase:      types.PhaseRequestBody,
+			Targets:    []types.Target{{Kind: types.TargetResolved, Name: "reputation"}},
+			Op:         vendor.NewOperator("zzz"),
+			Actions:    []rules.Action{rules.Log},
+			Severity:   types.SeverityNotice,
+			Confidence: types.Certain,
+			Msg:        "phase 2 reads reputation",
+		},
+	}
+
+	w, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.AddResolver(vendor.Resolver{Score: "10", Calls: &calls})
+	tx.SetRequestLine("POST", "/x", "HTTP/1.1")
+	tx.ProcessRequestHeaders()
+	tx.SetRequestBody([]byte(`{"a":1}`))
+	tx.ProcessRequestBody()
+
+	if calls != 1 {
+		t.Errorf("resolver called %d times across two phases, want 1", calls)
+	}
+}
+
+// TestResolvedValuesAreKeyed checks that a resolver may supply several values,
+// the way a header collection does, and that a rule can select one.
+func TestResolvedValuesAreKeyed(t *testing.T) {
+	set := rules.Set{{
+		ID:      5000008,
+		Phase:   types.PhaseRequestHeaders,
+		Targets: []types.Target{{Kind: types.TargetResolved, Name: "reputation"}},
+		// AS64496 is in the "asn" value, not the "score" value: the rule only
+		// fires if both keys were supplied.
+		Op:         vendor.NewOperator("AS64496"),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.Certain,
+		Msg:        "hostile ASN",
+	}}
+
+	w, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.AddResolver(vendor.Resolver{Score: "3", ASN: "AS64496"})
+	tx.SetRequestLine("GET", "/x", "HTTP/1.1")
+	if d := tx.ProcessRequestHeaders(); !d.Blocked() {
+		t.Error("the second resolved value never reached the rule")
+	}
+}
+
+// TestNoResolverIsSafe: a rule reading a resolved collection nobody registered
+// must not fire and must not panic. An embedder disabling a signal source
+// should degrade to "no match", never to a crash or a false positive.
+func TestNoResolverIsSafe(t *testing.T) {
+	set := rules.Set{{
+		ID:         5000009,
+		Phase:      types.PhaseRequestHeaders,
+		Targets:    []types.Target{{Kind: types.TargetResolved, Name: "reputation"}},
+		Op:         vendor.NewOperator("99"),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.Certain,
+		Msg:        "reputation rule",
+	}}
+
+	w, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.SetRequestLine("GET", "/x", "HTTP/1.1")
+	if d := tx.ProcessRequestHeaders(); d.Blocked() {
+		t.Errorf("blocked with no resolver registered: rule=%d", d.RuleID())
+	}
+
+	// A nil resolver is ignored rather than panicking on the request path.
+	tx2 := w.NewTransaction()
+	defer tx2.Close()
+	tx2.AddResolver(nil)
+	tx2.SetRequestLine("GET", "/x", "HTTP/1.1")
+	tx2.ProcessRequestHeaders()
+}

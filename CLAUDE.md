@@ -359,9 +359,16 @@ gwaf/
 
 ### Public extension interfaces
 
-`Operator`, `Transform`, `Action`, `Resolver`, and `Detector` are the five extension points
+`Operator`, `Transform`, `Action`, and `Resolver` are the four extension points
 (docs/RULES.md §4). They are the **most expensive API surface in the project** — third parties
-implement them, so post-v1.0 they are frozen hard. Treat any change to their signatures as a major
+implement them, so post-v1.0 they are frozen hard.
+
+A semantic detector is not a fifth: the engine dispatches through `Operator.Eval` and has no
+separate L1 tier, and every first-party detector exposes `Operator()`. **`test/extension` is a
+module at a foreign import path (`example.com/gwafvendor`) implementing all four**, because Go's
+internal-package rule is keyed on import path — so an interface returning an unexported type
+compiles for every in-tree implementation and is impossible for a vendor. `Operator.Cost()` was
+exactly that, and no test in the tree could have found it. Treat any change to their signatures as a major
 design review, not a refactor. Registration is per-WAF-instance and explicit: no global registries,
 no `init()` side effects, no import-for-side-effect packages.
 

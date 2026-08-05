@@ -131,6 +131,15 @@ type phasePlan struct {
 	// what lets one group resume where the previous one left off.
 	maxChainLen int
 
+	// resolved names the TargetResolved collections any rule in this phase
+	// reads, so the engine can skip calling a resolver nothing wants.
+	//
+	// That check is the point of the whole mechanism: a signal is usually out of
+	// gwaf's scope *because* it is expensive -- a reputation lookup, a
+	// fingerprint, a database read -- and paying for it on every request when
+	// three prefiltered rules use it would undo the reason for keeping it out.
+	resolved map[string]bool
+
 	// mirrorsOnly reports that every rule in this phase is a generated
 	// counterpart of a rule in an earlier phase, with the same operator and the
 	// same transform chain.
@@ -174,6 +183,19 @@ func allMirrors(rules []*CompiledRule, byID map[types.RuleID]*CompiledRule, phas
 		}
 	}
 	return true
+}
+
+// NeedsResolver reports whether any rule in the phase reads the named resolved
+// collection.
+//
+// An empty Name on a rule's target means "any resolver", so a rule written that
+// way makes every registered resolver needed.
+func (rs *Ruleset) NeedsResolver(p types.Phase, name string) bool {
+	if int(p) >= len(rs.phases) {
+		return false
+	}
+	m := rs.phases[p].resolved
+	return m[name] || m[""]
 }
 
 // MirrorsOnly reports whether a phase contains only generated counterparts, so
@@ -335,6 +357,14 @@ func Compile(set Set, opts Options) (*Ruleset, error) {
 		for _, t := range r.Targets {
 			if t.Kind < 64 {
 				g.targets |= 1 << uint(t.Kind)
+			}
+			if t.Kind == types.TargetResolved {
+				if plan.resolved == nil {
+					plan.resolved = map[string]bool{}
+				}
+				// An empty Name reads every resolver, which is what a rule
+				// matching on any supplied signal wants.
+				plan.resolved[t.Name] = true
 			}
 		}
 		g.Rules = append(g.Rules, cr)

@@ -76,6 +76,10 @@ type Transaction struct {
 	// matches is the reusable buffer behind Matches.
 	matches []Match
 
+	// resolvers are the embedder-supplied value sources for this request, each
+	// called at most once and only when a rule reads it.
+	resolvers []resolverState
+
 	// decodeBuf backs base64 decoding, reused across values.
 	decodeBuf []byte
 
@@ -121,6 +125,12 @@ type Transaction struct {
 	violatedAt string
 }
 
+// resolverState tracks whether a registered resolver has already been called.
+type resolverState struct {
+	r    rules.Resolver
+	done bool
+}
+
 // valueSpan locates one recorded value inside the transaction arena.
 type valueSpan struct{ key, data types.Span }
 
@@ -157,6 +167,7 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.framingConflict = ""
 	tx.oversizeKey = ""
 	tx.oversizeLen = 0
+	tx.resolvers = tx.resolvers[:0]
 	tx.bodyStart = -1
 	tx.responseStart = -1
 	tx.respBodySpan = types.Span{}
@@ -1258,12 +1269,81 @@ func (tx *Transaction) applyExceptions() {
 	}
 }
 
+// AddResolver registers a source of embedder-supplied values for this request.
+//
+// A resolver is how a signal gwaf deliberately does not compute reaches a rule:
+// an IP reputation score, a JA4 fingerprint, a bot score, a tenant identifier.
+// gwaf consumes the value; it never fetches, computes, or remembers one.
+//
+//	tx.AddResolver(myReputation{score: score, asn: asn})
+//
+// Per transaction rather than per WAF, because a resolver almost always closes
+// over data specific to one request, and a WAF is shared by every goroutine.
+//
+// The resolver is called only if a rule in the phase reads its name, and at
+// most once per phase. Do the work inside Resolve rather than before
+// registering: skipping the call entirely is the point, since a signal is
+// usually out of gwaf's scope because it is expensive.
+func (tx *Transaction) AddResolver(r rules.Resolver) {
+	if r == nil {
+		return
+	}
+	tx.resolvers = append(tx.resolvers, resolverState{r: r})
+}
+
+// runResolvers materialises the resolved collections this phase reads.
+func (tx *Transaction) runResolvers(phase types.Phase) {
+	if len(tx.resolvers) == 0 {
+		return
+	}
+	for i := range tx.resolvers {
+		st := &tx.resolvers[i]
+		if st.done {
+			continue
+		}
+		name := st.r.Name()
+		if !tx.rs.NeedsResolver(phase, name) {
+			continue
+		}
+		// Marked before the call, so a resolver that panics or yields nothing is
+		// not retried on the next phase. Repeating an expensive lookup because
+		// it returned no rows would be the opposite of lazy.
+		st.done = true
+
+		// Keys are qualified with the resolver name, so a rule can select every
+		// value a resolver supplies or exactly one of them, and an Explain
+		// record says which signal fired rather than only that one did.
+		qualified := make([]byte, 0, len(name)+1+16)
+		count := 0
+		for key, value := range st.r.Resolve() {
+			// Bounded like every other collection: a resolver is embedder code,
+			// but an embedder can have a bug, and an unbounded loop here would
+			// be an unbounded read the transaction never agreed to.
+			if count >= tx.waf.cfg.limits.MaxArgs {
+				break
+			}
+			count++
+			qualified = append(qualified[:0], name...)
+			if key != "" {
+				qualified = append(qualified, '.')
+				qualified = append(qualified, key...)
+			}
+			// Copied into the arena as it arrives, because a resolver is
+			// explicitly allowed to reuse its buffers between values.
+			tx.recordValueBytes(types.TargetResolved, qualified, value, false)
+		}
+	}
+}
+
 // runPhase evaluates one phase and folds the result into the transaction.
 func (tx *Transaction) runPhase(phase types.Phase) Decision {
 	if tx.decided {
 		return tx.decision
 	}
 	tx.phase = phase
+
+	// Resolvers run before the values are re-cut, because resolving appends.
+	tx.runResolvers(phase)
 
 	// Values are re-resolved against the arena because appending may have
 	// reallocated the backing array since they were recorded. Spans are stable;

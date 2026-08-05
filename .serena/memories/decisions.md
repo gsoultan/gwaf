@@ -829,3 +829,47 @@ tier the corpus cannot measure.
 
 Also created CHANGELOG.md, which CLAUDE.md §4 required for breaking changes and
 which did not exist.
+
+## SHIPPED: rules.Resolver — the scope line finally has an implementation
+CLAUDE.md §1 says "out-of-scope signals arrive as Resolver inputs — gwaf
+*consumes* a reputation score, it never *maintains* one." That sentence had no
+implementation: rules could only ever match bytes gwaf read off the wire, so an
+embedder computing a bot score had nowhere to put it.
+
+`types.TargetResolved` + `rules.Resolver` + `Transaction.AddResolver`.
+
+**Per transaction, not per WAF**, because a resolver almost always closes over
+data specific to one request and a WAF is shared by every goroutine.
+
+**Called only when a rule reads it**, which is why it is an interface rather
+than a setter: a signal is usually out of gwaf's scope *because* obtaining it is
+expensive — a reputation lookup, a fingerprint, a database read — so paying for
+it when nothing reads it would undo the reason for keeping it out. Compile-time
+`Ruleset.NeedsResolver(phase, name)` decides. Called at most once per request.
+
+### A design error the tests caught
+First version recorded the per-value key ("score") while `Target.Name` names the
+*resolver* ("reputation"), so the two never matched and the signal never reached
+a rule. Fixed by qualifying keys — `reputation.score`, `reputation.asn` — with a
+segment-boundary prefix match, so a rule reads either grain:
+
+    {Kind: TargetResolved, Name: "reputation"}      // every value
+    {Kind: TargetResolved, Name: "reputation.asn"}  // one of them
+
+Boundary-anchored on purpose: "rep" must not select "reputation.asn". A partial
+name silently widening a rule to a collection its author never meant is the
+quiet class of mistake this package exists to prevent.
+
+## CORRECTED: four extension points, not five
+`Detector` was documented as a fifth, "plugging into the L1 semantic tier rather
+than the rule tier". **There is no such tier.** The engine dispatches through
+`Operator.Eval` and nothing else (`internal/engine/eval.go`), and all six
+first-party detectors expose `Operator() rules.Operator`.
+
+Verified before deciding rather than assumed. Defining a `Detector` interface
+would have been building a second path to the same dispatch — describing an
+architecture nobody built. A third party writing a semantic detector implements
+`Operator`, exactly as sqli/xss/shelli/ssti/nosqli/ldapi do.
+
+Claiming five and shipping four is the same class of gap as claiming a
+confidence tier the corpus cannot measure: the doc was the thing that was wrong.

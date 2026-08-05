@@ -110,54 +110,101 @@ Same validator, same compiler, same guarantees. The only thing this form cannot 
 
 ## 4. Extension points
 
-Five interfaces. Implement any of them in your own package; no fork, no `internal/` access.
+**Four interfaces.** Implement any of them in your own package; no fork, no `internal/` access —
+and that second clause is load-bearing, so `test/extension` is a module declaring itself
+`example.com/gwafvendor` that implements all four from outside the gwaf import path. Go's
+internal-package rule is keyed on import path, so a public interface returning an unexported type
+compiles for every in-tree implementation and is impossible for a vendor. That happened to
+`Operator.Cost()` and nothing in the tree could see it.
 
 ```go
 // Operator decides whether a transformed value matches.
 type Operator interface {
+    Name() string
     Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool)
     Literals() ([]string, bool)   // see §5 — the performance contract
+    Cost() types.Fuel             // priced in the same units the engine meters
 }
 
 // Transform normalizes a value before evaluation. Must be pure and allocation-free
 // when the value is already normalized (return the input slice unchanged).
 type Transform interface {
+    Name() string
     Apply(dst, src []byte) ([]byte, bool)   // bool: whether anything changed
-    Name() string
+    MaxOutputLen(n int) int                 // so the engine sizes scratch up front
 }
 
-// Action runs when a rule matches. Terminal actions stop evaluation for the phase.
+// Action runs when a rule matches. The Outcome says whether evaluation stops.
 type Action interface {
-    Run(tx *gwaf.Transaction, m rules.Match) error
-    Terminal() bool
+    Name() string
+    Run(ctx *rules.EvalContext, m rules.Match) rules.Outcome
 }
 
-// Resolver exposes a new target (variable) to rules.
+// Resolver supplies values gwaf deliberately does not compute.
 type Resolver interface {
-    Resolve(tx *gwaf.Transaction) iter.Seq2[string, []byte]
     Name() string
-}
-
-// Detector plugs into the L1 semantic tier rather than the rule tier.
-type Detector interface {
-    Detect(input []byte, kind detect.Context) (detect.Verdict, bool)
-    Name() string
+    Resolve() iter.Seq2[string, []byte]
 }
 ```
 
-Registration is explicit and scoped to a WAF instance — no global registry, no init-order coupling:
+`Action.Run` takes an `*EvalContext` rather than a `*gwaf.Transaction`: `rules` is imported *by*
+`gwaf`, so the reverse would be an import cycle, and handing an action the whole transaction would
+give it powers an action has no business having.
+
+### Registration
+
+`Operator`, `Transform`, and `Action` are values on a rule — a rule literal names the ones it uses,
+so nothing needs registering and nothing can be registered twice:
 
 ```go
-waf, err := gwaf.New(
-    gwaf.WithOperator("similar_to", myFuzzyOp{}),
-    gwaf.WithResolver(myTenantResolver{}),
-    gwaf.WithDetector(myGraphQLAbuseDetector{}),
-)
+rules.Rule{
+    Op:         myFuzzyOp{},
+    Transforms: []rules.Transform{myNormalizer{}},
+    Actions:    []rules.Action{myAuditAction{}},
+}
 ```
 
-Named registration is what lets the **declarative and SecLang frontends reach custom operators**:
-once `similar_to` is registered, `op: { similar_to: ... }` resolves in YAML. Custom extensions are
-not second-class to built-ins.
+`Resolver` is registered **per transaction**, because it almost always closes over data specific to
+one request — the score *this* client got — and a `WAF` is shared by every goroutine:
+
+```go
+tx.AddResolver(myReputation{score: score, asn: asn})
+```
+
+It is called only if a rule in the phase reads its name, and at most once per request. That is why
+it is an interface rather than a setter: a signal is usually outside gwaf's scope *because* getting
+it is expensive, so paying for it when nothing reads it would undo the reason for keeping it out.
+
+### Why `Resolver` matters more than it looks
+
+It is the entire mechanism behind the scope line in §1 of CLAUDE.md. gwaf analyses one request with
+no memory, so rate limits, reputation, bot scores, and TLS fingerprints belong to the embedder —
+and that boundary only works if the *results* of the embedder's work have a way back in. Without a
+Resolver, rules can only ever match bytes gwaf read off the wire, and "out-of-scope signals arrive
+as Resolver inputs" is a sentence with no implementation behind it.
+
+A rule reads them with `types.TargetResolved`. Keys are qualified by resolver name, so a rule can
+select a whole collection or one value in it:
+
+```go
+Targets: []types.Target{{Kind: types.TargetResolved, Name: "reputation"}}      // all of it
+Targets: []types.Target{{Kind: types.TargetResolved, Name: "reputation.asn"}}  // one value
+```
+
+### A note on semantic detectors
+
+Earlier drafts of this document listed a fifth interface, `Detector`, "plugging into the L1 semantic
+tier rather than the rule tier". There is no such tier in the engine: it dispatches through
+`Operator.Eval` and nothing else, and all six first-party detectors — `detect/sqli`, `detect/xss`,
+`detect/shelli`, `detect/ssti`, `detect/nosqli`, `detect/ldapi` — expose exactly that:
+
+```go
+func Operator() rules.Operator
+```
+
+A third party writing a semantic detector implements `Operator` the same way. Defining a second
+interface that reaches the same dispatch would be describing an architecture nobody built, and
+counting it would make this document claim five extension points while shipping four.
 
 ---
 

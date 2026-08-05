@@ -42,6 +42,21 @@ const (
 	// compiler lowers their effective confidence by one tier.
 	TargetArgsJoined
 
+	// TargetResolved is a value an embedder supplied rather than one gwaf read
+	// off the request: an IP reputation score, a JA4 fingerprint, a bot score, a
+	// tenant identifier.
+	//
+	// It is the whole mechanism behind the scope line in CLAUDE.md §1. gwaf
+	// analyses one request with no memory, so anything needing state, identity,
+	// or a network lookup belongs to the embedder — and this is how the *result*
+	// of that work reaches a rule. gwaf consumes a reputation score; it never
+	// maintains one.
+	//
+	// Target.Name selects which resolver, so several may coexist. Values arrive
+	// through rules.Resolver, which the engine calls only when a rule in the
+	// phase actually reads them.
+	TargetResolved
+
 	targetKindCount
 )
 
@@ -93,6 +108,8 @@ func (k TargetKind) String() string {
 		return "RESPONSE_BODY"
 	case TargetArgsJoined:
 		return "ARGS_JOINED"
+	case TargetResolved:
+		return "RESOLVED"
 	default:
 		return "INVALID"
 	}
@@ -141,10 +158,35 @@ func (t Target) Matches(key string) bool {
 	if t.Name == "" {
 		return true
 	}
+	if t.Kind == TargetResolved {
+		return matchesResolved(t.Name, key)
+	}
 	if t.Kind.caseInsensitiveKeys() {
 		return strings.EqualFold(t.Name, key)
 	}
 	return t.Name == key
+}
+
+// matchesResolved selects a resolved value by resolver, or by one value within
+// a resolver.
+//
+// A resolved key is qualified: a resolver named "reputation" yielding "score"
+// and "asn" produces "reputation.score" and "reputation.asn". So a rule can be
+// written at either grain and both read naturally:
+//
+//	{Kind: TargetResolved, Name: "reputation"}      // every value it supplies
+//	{Kind: TargetResolved, Name: "reputation.asn"}  // one of them
+//	{Kind: TargetResolved}                          // every resolver
+//
+// The prefix only matches on a segment boundary, so "rep" does not select
+// "reputation.asn" — a partial resolver name silently widening a rule to a
+// collection its author never meant is exactly the kind of quiet mistake this
+// package exists to make impossible.
+func matchesResolved(name, key string) bool {
+	if name == key {
+		return true
+	}
+	return len(key) > len(name) && key[len(name)] == '.' && key[:len(name)] == name
 }
 
 // MatchesBytes is Matches over a byte slice.
@@ -157,10 +199,22 @@ func (t Target) MatchesBytes(key []byte) bool {
 	if t.Name == "" {
 		return true
 	}
+	if t.Kind == TargetResolved {
+		return matchesResolvedBytes(t.Name, key)
+	}
 	if t.Kind.caseInsensitiveKeys() {
 		return equalFoldBytes(t.Name, key)
 	}
 	return len(t.Name) == len(key) && t.Name == string(key)
+}
+
+// matchesResolvedBytes is matchesResolved without converting the key.
+func matchesResolvedBytes(name string, key []byte) bool {
+	if len(name) == len(key) && name == string(key) {
+		return true
+	}
+	return len(key) > len(name) && key[len(name)] == '.' &&
+		name == string(key[:len(name)])
 }
 
 // equalFoldBytes compares a string and a byte slice ignoring ASCII case,
@@ -226,6 +280,8 @@ func (k TargetKind) ConstName() string {
 		return "TargetArgsPost"
 	case TargetArgsJoined:
 		return "TargetArgsJoined"
+	case TargetResolved:
+		return "TargetResolved"
 	case TargetRequestBody:
 		return "TargetRequestBody"
 	case TargetRequestCookies:

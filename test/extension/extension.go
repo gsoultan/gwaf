@@ -28,6 +28,7 @@
 package extension
 
 import (
+	"iter"
 	"strings"
 
 	"github.com/gsoultan/gwaf/rules"
@@ -115,3 +116,34 @@ var (
 	_ rules.Transform = Transform{}
 	_ rules.Action    = Action{}
 )
+
+// ---- Resolver ---------------------------------------------------------------
+
+// Resolver is a third-party resolver: the mechanism by which a signal gwaf
+// deliberately does not compute reaches a rule that wants to match on it.
+//
+// This one stands in for a reputation service. The interesting property is not
+// what it returns but that it counts its own calls: the engine must not invoke
+// it when no rule reads it, because a signal is usually out of gwaf's scope
+// precisely because obtaining it is expensive.
+type Resolver struct {
+	Score string
+	ASN   string
+	Calls *int
+}
+
+func (r Resolver) Name() string { return "reputation" }
+
+func (r Resolver) Resolve() iter.Seq2[string, []byte] {
+	return func(yield func(string, []byte) bool) {
+		if r.Calls != nil {
+			*r.Calls++
+		}
+		if !yield("score", []byte(r.Score)) {
+			return
+		}
+		yield("asn", []byte(r.ASN))
+	}
+}
+
+var _ rules.Resolver = Resolver{}

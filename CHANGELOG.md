@@ -33,10 +33,28 @@ semver, and the five extension interfaces are frozen hard.
   in-tree code keeps compiling and the two names denote one type.
 
   `test/extension` is a new module declaring itself `example.com/gwafvendor`. It
-  implements `Operator`, `Transform`, and `Action` from a foreign path, so the
-  compiler now enforces what the documentation asserts.
+  implements `Operator`, `Transform`, `Action`, and `Resolver` from a foreign
+  path, so the compiler now enforces what the documentation asserts.
+
+- **Extension points are four, not five.** `Detector` was documented as a fifth,
+  "plugging into the L1 semantic tier rather than the rule tier". No such tier
+  exists: the engine dispatches through `Operator.Eval` and nothing else, and
+  all six first-party detectors expose `Operator()`. A third party writing a
+  semantic detector implements `Operator`, the same way they do. The docs were
+  describing an architecture nobody built.
 
 ### Added
+
+- **`rules.Resolver` and `types.TargetResolved`** — the mechanism by which a
+  signal gwaf deliberately does not compute reaches a rule: an IP reputation
+  score, a JA4 fingerprint, a bot score, a tenant identifier. Registered per
+  transaction with `Transaction.AddResolver`, called only when a rule in the
+  phase reads its name, and at most once per request.
+
+  This is the implementation behind the scope line in CLAUDE.md §1. gwaf
+  analyses one request with no memory, so rate limits and reputation belong to
+  the embedder — and that boundary only works if the results of the embedder's
+  work have a way back in. Until now they did not.
 
 - gRPC message unframing, per-message decompression via `grpc-encoding`, and
   whole-body base64 decoding for `grpc-web-text` (`internal/body/grpc.go`). Two
