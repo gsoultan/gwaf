@@ -317,9 +317,21 @@ var rubyExecution = []string{
 	"system(", "exec(", "spawn(", "open3.",
 }
 
-// directiveExecution reaches a runtime object from Velocity or Smarty.
+// directiveExecution reaches a runtime object from the template engine itself:
+// a Velocity or Smarty directive, or a Twig internal.
+//
+// The Twig entries are the engine's own escape hatch. "_self" alone is
+// legitimate and common -- "{% import _self as forms %}" is how every Twig
+// macro file is written -- so it is deliberately absent. "_self.env" is not:
+// it reaches the Environment object, and registerUndefinedFilterCallback then
+// turns any function name into a filter, which is the two-step that makes
+// "{{_self.env.registerUndefinedFilterCallback('system')}}" remote code
+// execution. Naming the escape rather than the delimiter is the same rule the
+// rest of this detector follows.
 var directiveExecution = []string{
 	"getruntime", "$rt.", "scriptutil", "{php}", "{system",
+	"_self.env", "registerundefinedfiltercallback",
+	"registerundefinedfunctioncallback", "getfilter(",
 }
 
 // scanExpression classifies the contents of one template expression.

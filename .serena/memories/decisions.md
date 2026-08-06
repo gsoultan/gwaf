@@ -1081,3 +1081,57 @@ a problem. An example written to solve a problem found both in one afternoon.
 **Examples are tests.** `examples/customrules` has a `main_test.go` that runs it
 and asserts every documented row, so a change that breaks the API's advertised
 shape fails the build rather than rotting a README.
+
+## FINDING: 139/139 was honest, and the class list was the thing with the hole
+
+An attack simulation of current real-world payloads (PHP wrappers, PHPGGC
+gadgets, Log4Shell, Spring4Shell, SSRF, prototype pollution) measured **40/62**
+against a ruleset reporting **139/139, 100%**. Both numbers were correct.
+
+`declaredClasses` exists because "a technique-only corpus cannot see a missing
+attack class" — 76/76 once measured canonicalization rather than coverage. The
+identical failure had reappeared **one level up**: the corpus could not see a
+missing class because the *class list itself* omitted it. A class absent from
+both is invisible twice over.
+
+**Rule going forward: name the class in `declaredClasses` first, watch the build
+fail for want of cases, then write them.** Now 169/169 across 17 classes.
+
+### Two "misses" were correct behaviour, already decided and measured
+The simulation flagged both; the code was right and the simulation was wrong.
+Re-fixing either would have reintroduced a documented false positive.
+- **Backtick command substitution** — `` `id` `` is Markdown inline code.
+  `$(id)` has no benign reading and *is* reported.
+- **`{{7*7}}`** — scores 2, below threshold, because `{{ 2*count }}` is a real
+  template. `SignalTemplateContext` is weighted zero on purpose.
+- **Bare `javascript:`** — scores 3; a scheme in prose is a sentence. In an
+  `href` it scores 5 and blocks.
+
+The simulation now carries a `skip` field recording *why* each is deliberate, so
+the next person to run it does not "fix" them either.
+
+### Three catches were coincidences, which only stripping the payload revealed
+`system('cat /etc/passwd')` blocked on the `/etc/passwd` literal, not on PHP;
+`system('id')` passed. A Laravel gadget blocked on `;` in `id;uname`; the same
+gadget with `phpinfo` passed. **A rule that fires on a coincidence is not
+coverage** — check what *else* was in the payload before believing a green row.
+
+### The corpus gained an `adjacent` archetype
+Every other archetype models an application and happens to exercise the
+ruleset. This one is the reverse: each request exists because a specific rule
+could plausibly match it. It removed `ldap://` and `jar:` from the SSRF scheme
+rule and `${env:` from the Log4j rule — all three matched nothing in the 10,386
+requests that existed, which proved only that the corpus had never seen an
+identity integration or a Java build. Zero-FP against traffic you never
+collected is not a measurement.
+
+### Cost of seven new rules: nothing measurable
+766ns benign GET / 0 allocs, 13.4us POST JSON, ruleset scaling flat at ~231ns
+from 10 to 10,000 rules. Prefilter grew to 225 literals / 3,095 states. This is
+the compiler thesis paying out: rules are compile-time input, not runtime work.
+
+### SSRF is in scope, but only lexically
+Passes all five ownership tests — the target is a literal in the value, no
+memory needed. But gwaf must **never resolve a hostname**: DNS is a network call
+and test 3 puts it with the embedder. So DNS rebinding is explicitly not covered
+and is documented as such rather than left as an implied promise.

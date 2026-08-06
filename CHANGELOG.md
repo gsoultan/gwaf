@@ -55,6 +55,24 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Added
 
+- **Five attack classes that a simulation walked straight through**, found by
+  replaying current real-world payloads rather than by reading the ruleset:
+
+  | Rule | Class | Tier |
+  |---|---|---|
+  | 4006 `Log4j lookup expression` | JNDI / CVE-2021-44228, incl. `${lower:}` and `${::-}` nesting | Certain |
+  | 4007 `PHP serialized object` | PHP object injection / PHPGGC gadget chains | Certain |
+  | 4008 `Java serialized object` | `rO0AB` and raw `\xac\xed`, anchored at value start | Certain |
+  | 4009 `Spring class loader property path` | Spring4Shell / CVE-2022-22965 | Certain |
+  | 11001 `Cloud metadata endpoint` | SSRF against IMDS (AWS, GCP, ECS, Alibaba) | Certain |
+  | 11002 `Protocol-smuggling URL scheme` | SSRF via `gopher://`, `dict://` | Certain |
+  | 12001 `Prototype pollution key` | `__proto__`, `constructor.prototype` | Certain |
+
+  `core.LoopbackSSRFRule` is exported rather than shipped, for the same reason
+  as GraphQL introspection: `localhost` and `127.0.0.1` are ordinary values in
+  CI, staging, and webhook registrations, so a core rule matching them is the
+  one that gets the WAF switched off in week one.
+
 - `examples/customrules` — a runnable walk through the whole custom-rule
   surface, tested so that what its comments claim is what CI checks.
 
@@ -108,6 +126,26 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Changed
 
+- **Rule 4003 matches the wrapper *scheme*, not a list of wrappers.** It carried
+  `php://input` and `php://filter` and stopped there, so `phar://`, `zip://`,
+  `glob://`, and `php://memory` went through. `phar://` is the serious one:
+  reaching a phar archive deserializes its metadata, so it is remote code
+  execution wearing the costume of a file read. Matching `php://` covers input,
+  filter, memory, temp, fd, stdin and whatever PHP adds next, and it is shorter
+  than the list it replaces.
+
+- `detect/ssti` recognises Twig's own escape hatch — `_self.env`,
+  `registerUndefinedFilterCallback`. `_self` alone stays absent because
+  `{% import _self as forms %}` is how every Twig macro file is written.
+
+- **The benign corpus has an `adjacent` archetype** (10,386 → 10,415). Every
+  other archetype models an application and happens to exercise the ruleset;
+  this one is the reverse — each request exists because a specific rule could
+  plausibly match it. It is what removed `ldap://` and `jar:` from the SSRF
+  scheme rule and `${env:` from the Log4j rule: all three matched nothing in the
+  corpus as it stood, which proved only that the corpus had never seen an
+  identity integration or a Java build.
+
 - `middleware` and `examples` are now separate modules, so a framework adapter
   can never reach the core module's dependency graph.
 - `SetRequestLine` parses the request target's query string into arguments.
@@ -134,6 +172,12 @@ all of which evaluate fewer rules rather than making each one cheaper.
 - Benign calibration corpus 1,435 → 10,386 requests across eleven application
   archetypes. The `Certain` tier is measurable for the first time; it needs
   ~10,001 distinct requests to observe one violation at its ceiling.
+- Evasion corpus 139 → 169 cases; `declaredClasses` gains jndi, phpobj,
+  javaser, ssrf, and protopoll. The list existed because a technique-only corpus
+  cannot see a missing attack class — and the same blind spot had reappeared one
+  level up, since a class absent from *both* the corpus and the list is
+  invisible twice over. 139/139 was an honest number about a question that was
+  not being asked.
 - Evasion corpus reorganised as attack class × evasion technique, with
   `declaredClasses` failing the build when a class gwaf claims to detect has too
   few cases behind the claim.

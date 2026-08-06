@@ -85,6 +85,9 @@ var archetypes = []archetype{
 	{"webhooks", emitWebhooks},
 	{"mobile", emitMobile},
 	{"cicd", emitCICD},
+	// Not an application shape. Traffic chosen to sit next to a specific rule,
+	// so widening one fails the build instead of an adopter. See adjacent.go.
+	{"adjacent", emitAdjacent},
 }
 
 func main() {

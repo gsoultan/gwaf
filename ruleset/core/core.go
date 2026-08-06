@@ -41,6 +41,8 @@ import (
 //	8,000–8,999  server-side template injection
 //	9,000–9,999  LDAP injection
 //	10,000–10,999 GraphQL abuse
+//	11,000–11,999 server-side request forgery
+//	12,000–12,999 prototype pollution
 //
 // An authored ID must end below 100 within its band, because the generated
 // body-phase counterpart is the ID plus 900 (see bodyPhaseOffset) and has to
@@ -94,13 +96,17 @@ const (
 	//
 	// Retired, not reused: the IDs appear in audit logs and in any exception
 	// already written against them.
-	IDLFIPHPWrapper    types.RuleID = 4003
-	IDPHPCodeUpload    types.RuleID = 4004
-	IDXMLEntity        types.RuleID = 4005
-	IDShelliSemantic   types.RuleID = 4010
-	IDSQLiSemantic     types.RuleID = 2010
-	IDXSSSemantic      types.RuleID = 3010
-	IDScannerUserAgent types.RuleID = 5001
+	IDLFIPHPWrapper       types.RuleID = 4003
+	IDPHPCodeUpload       types.RuleID = 4004
+	IDXMLEntity           types.RuleID = 4005
+	IDLog4ShellLookup     types.RuleID = 4006
+	IDPHPObjectInjection  types.RuleID = 4007
+	IDJavaDeserialization types.RuleID = 4008
+	IDSpring4Shell        types.RuleID = 4009
+	IDShelliSemantic      types.RuleID = 4010
+	IDSQLiSemantic        types.RuleID = 2010
+	IDXSSSemantic         types.RuleID = 3010
+	IDScannerUserAgent    types.RuleID = 5001
 
 	// 6,000-6,999: response-phase leak detection.
 	IDLeakPrivateKey types.RuleID = 6001
@@ -120,6 +126,25 @@ const (
 	// 10,000-10,999: GraphQL abuse. Not injection -- the document is valid and
 	// the damage is done by its shape.
 	IDGraphQLStructure types.RuleID = 10001
+
+	// 11,000-11,999: server-side request forgery. In scope because it is
+	// decidable from one request with no memory: the target is a literal in the
+	// value. Detection is deliberately *lexical only* -- gwaf never resolves a
+	// hostname, because a DNS lookup is a network call and the third ownership
+	// test puts that with the embedder (boundaries.md). That also means
+	// DNS-rebinding is explicitly not covered here; it cannot be.
+	IDSSRFMetadata types.RuleID = 11001
+	IDSSRFScheme   types.RuleID = 11002
+
+	// 11003 is LoopbackSSRFRule and is deliberately NOT here, for the same
+	// reason as GraphQL introspection below: "localhost" and "127.0.0.1" are
+	// ordinary values in CI, staging, and developer traffic, so blocking them by
+	// default is the rule that gets the WAF switched off. Opt in:
+	//
+	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.LoopbackSSRFRule(11003)}))
+
+	// 12,000-12,999: JavaScript prototype pollution.
+	IDPrototypePollution types.RuleID = 12001
 
 	// 10002 is graphql.IntrospectionRule and is deliberately NOT here.
 	//
@@ -508,7 +533,25 @@ func requestRules() rules.Set {
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
 			Transforms: decodeChain,
-			Op:         op.ContainsAny("php://input", "php://filter", "expect://", "data://text"),
+			// The scheme, not an enumeration of the wrappers behind it.
+			//
+			// This rule used to list "php://input" and "php://filter" and stop
+			// there, which is the failure mode CLAUDE.md §2 warns about: an
+			// enumeration is only ever as complete as the day it was written.
+			// An attack simulation walked "phar://", "zip://", "glob://", and
+			// "php://memory" straight through it. "phar://" is the worst of
+			// them -- reaching a phar archive deserializes its metadata, so it
+			// is remote code execution wearing the costume of a file read.
+			//
+			// Matching "php://" covers input, filter, memory, temp, fd, stdin,
+			// and whatever PHP adds next, and it is *shorter* than the list it
+			// replaces. A wrapper scheme in a request value has no benign
+			// reading: these name a stream to the interpreter, not a resource a
+			// client can legitimately ask for.
+			Op: op.ContainsAny(
+				"php://", "phar://", "zip://", "glob://",
+				"expect://", "data://text", "compress.zlib://",
+			),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
@@ -536,6 +579,183 @@ func requestRules() rules.Set {
 			Confidence: types.High,
 			Msg:        "PHP code in request value",
 			Tags:       []string{"rce", "upload", "owasp-a03"},
+		},
+		{
+			ID:         IDLog4ShellLookup,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// A Log4j lookup in a request value (CVE-2021-44228). Still the most
+			// exploited vulnerability in the corpus of things scanners throw at
+			// everything, five years on, because the payload travels in whatever
+			// field eventually gets logged -- User-Agent, Referer, a username.
+			// That is why this reads argTargets, which includes headers.
+			//
+			// Two shapes, because the obfuscation is not an edge case, it is the
+			// norm. "${jndi:ldap://…}" is the literal form. The evasion splits
+			// the scheme across nested lookups -- "${${lower:j}ndi:…}",
+			// "${${::-j}ndi:…}" -- and no substring of "jndi" survives it. So the
+			// nesting primitives are matched directly: ${lower:, ${upper:, ${::-
+			// exist to rewrite a string at lookup time and have no reason to
+			// appear in a value a client sent.
+			// "${env:" and "${sys:" were in this list and were removed. They are
+			// real Log4j lookups, but the exfiltration form that uses them --
+			// "${jndi:ldap://x/${env:AWS_SECRET_KEY}}" -- already contains
+			// "jndi:", so they added no coverage while carrying a benign
+			// reading: a configuration API that stores "${env:HOME}" as a value
+			// is doing something ordinary. Prefer deleting a rule over adding an
+			// exception to it (CLAUDE.md §6).
+			Op:         op.ContainsAny("jndi:", "${lower:", "${upper:", "${::-"),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Log4j lookup expression in request value",
+			Tags:       []string{"rce", "jndi", "cve-2021-44228", "owasp-a03"},
+		},
+		{
+			ID:         IDJavaDeserialization,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// A Java serialized object stream. The format begins with the magic
+			// 0xAC 0xED followed by a two-byte version, and base64 of those bytes
+			// begins "rO0AB" -- which is why that five-character string is a
+			// reliable fingerprint rather than a guess.
+			//
+			// Anchored at the start of the value, not merely contained in it.
+			// Five base64 characters would otherwise collide by chance inside a
+			// long enough blob, and a serialized stream that does not begin with
+			// its own magic is not one. The anchor is what makes this Certain.
+			Op:         javaSerializedStream(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Java serialized object in request value",
+			Tags:       []string{"rce", "deserialization", "owasp-a08"},
+		},
+		{
+			ID:         IDPHPObjectInjection,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// PHP object injection: a serialized object or array reaching
+			// unserialize(). The gadget chains that turn this into RCE are
+			// library-provided (PHPGGC ships them for Laravel, Symfony, Monolog,
+			// Doctrine), so the payload is ordinary-looking serialized data and
+			// the exploit lives in whatever classes the target has loaded.
+			//
+			// The simulation that prompted this rule showed why it is needed
+			// separately: a Laravel gadget chain *was* blocked, but only because
+			// the sample happened to contain "id;uname", which the command
+			// injection detector read as a shell command. Replace that with
+			// "phpinfo" and the same gadget went through. A rule that fires on a
+			// coincidence is not coverage.
+			Op:         phpSerializedObject(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "PHP serialized object in request value",
+			Tags:       []string{"rce", "deserialization", "php", "owasp-a08"},
+		},
+		{
+			ID:         IDSpring4Shell,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Spring4Shell (CVE-2022-22965). Data binding walks a property path
+			// from the request into the bean, and "class.module.classLoader"
+			// walks out of the bean and into Tomcat's logging configuration,
+			// where the attacker writes a JSP. The payload is a *parameter name*,
+			// which is why argTargets carrying TargetArgNames matters here.
+			Op:         op.ContainsAny("class.module.classloader", "class.classloader"),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Spring class loader property path in request",
+			Tags:       []string{"rce", "cve-2022-22965", "owasp-a03"},
+		},
+		{
+			ID:         IDPrototypePollution,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Prototype pollution: a key that reassigns Object.prototype, so a
+			// property the application never set appears on every object in the
+			// process. Usually privilege escalation ({"__proto__":{"isAdmin":
+			// true}}), sometimes RCE when a downstream template or child_process
+			// option is read off the prototype.
+			//
+			// "__proto__" as a *key* has no legitimate use in a request: JSON has
+			// no prototypes, and an API that wants a field called __proto__ has a
+			// naming problem rather than a security requirement. In a *value* it
+			// is a word, which is why the JSON body parser emitting object keys
+			// into TargetArgNames is what makes this rule precise.
+			Op: op.ContainsAny(
+				"__proto__", "constructor.prototype", "constructor][prototype",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Prototype pollution key in request",
+			Tags:       []string{"prototype-pollution", "javascript", "owasp-a08"},
+		},
+		{
+			ID:         IDSSRFMetadata,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Cloud instance metadata. Reaching 169.254.169.254 from a request
+			// parameter returns the instance's IAM credentials, which is why it
+			// is the first thing tried against any endpoint that fetches a URL.
+			//
+			// The link-local addresses are literals with no benign reading: a
+			// client has no reason to name the server's own metadata service.
+			// Note what is *not* here -- gwaf does not resolve hostnames, so an
+			// attacker-controlled name that resolves to 169.254.169.254 is not
+			// covered and cannot be. DNS is a network call, and the third
+			// ownership test puts it with the embedder.
+			Op: op.ContainsAny(
+				"169.254.169.254", "metadata.google.internal",
+				"169.254.170.2", "100.100.100.200", "metadata.tencentyun.com",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Cloud metadata endpoint in request value",
+			Tags:       []string{"ssrf", "cloud-metadata", "owasp-a10"},
+		},
+		{
+			ID:         IDSSRFScheme,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// URL schemes that exist to speak a protocol, not to fetch a page.
+			// gopher:// lets an SSRF write arbitrary bytes to a TCP socket, which
+			// is how a fetch becomes a Redis command or an SMTP session; dict://
+			// is the same trick with a smaller alphabet.
+			//
+			// "file://" is deliberately absent: it appears in documentation, in
+			// desktop-application links, and in error messages people paste into
+			// support tickets. The local-file case is already covered by the
+			// traversal and sensitive-file rules, which look at what is being
+			// read rather than at the scheme naming it.
+			// "ldap://" and "jar:" were in this list and were removed. Both are
+			// genuine SSRF vectors and both have a plain benign reading that the
+			// benign corpus cannot show, because the corpus is derived from one
+			// adopter (boundaries.md): an identity API configuring a directory
+			// server sends "ldap://ldap.corp.example.com" as data, and Java
+			// tooling passes "jar:file:///…" around routinely. The JNDI attack
+			// that "ldap://" was standing in for is matched by IDLog4ShellLookup
+			// on "jndi:", which has no such reading.
+			//
+			// What is left is the pair with no legitimate use in a request:
+			// both exist to speak a byte protocol, not to fetch a document.
+			Op:         op.ContainsAny("gopher://", "dict://"),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Protocol-smuggling URL scheme in request value",
+			Tags:       []string{"ssrf", "owasp-a10"},
 		},
 		{
 			ID:         IDXMLEntity,
@@ -805,4 +1025,123 @@ func readsArgs(r rules.Rule) bool {
 		}
 	}
 	return false
+}
+
+// javaSerializedStream reports a Java serialized object stream.
+//
+// The wire format opens with the magic 0xAC 0xED and a two-byte version, so a
+// raw stream starts with those bytes and a base64-encoded one starts with
+// "rO0AB". Both forms are anchored at the start of the value rather than merely
+// contained in it: five base64 characters occur by chance inside a long enough
+// blob, and a stream that does not begin with its own magic is not a stream.
+// The anchor is what lets this ship at Certain.
+//
+// The literal hint is the prefilter's promise (docs/RULES.md §5). "ro0ab" is
+// the lowercased form because the transform chain lowercases before matching,
+// and the raw magic is unaffected by case folding.
+func javaSerializedStream() rules.Operator {
+	return op.Func("java_serialized_stream", func(v []byte) bool {
+		// Leading whitespace is already gone -- the chain strips it -- but a
+		// value quoted inside another encoding can still arrive with padding.
+		for len(v) > 0 && (v[0] == '"' || v[0] == '\'') {
+			v = v[1:]
+		}
+		if len(v) >= 4 && v[0] == 0xac && v[1] == 0xed {
+			return true
+		}
+		return len(v) >= 5 && string(v[:5]) == "ro0ab"
+	}).WithLiterals("ro0ab", "\xac\xed")
+}
+
+// phpSerializedObject reports PHP serialized data reaching unserialize().
+//
+// The grammar is small and rigid, which is what makes it recognisable without
+// enumerating anything: an object is O:<len>:"<name>":<count>:{…} and an array
+// is a:<count>:{…}, and the members inside are s:<len>:"…"; i:<n>; b:<0|1>;
+// d:<float>; or N;. Matching the *header shape* rather than a list of gadget
+// class names is the difference between covering PHPGGC and covering the
+// version of PHPGGC that existed when the rule was written.
+//
+// A bare "a:2:{" is required to be followed by a member, so JSON and prose
+// containing a colon after a letter do not reach the predicate. The literals
+// are the member separators, which are rare outside serialized data: a
+// semicolon or brace immediately followed by a type tag and a colon.
+func phpSerializedObject() rules.Operator {
+	return op.Func("php_serialized_object", func(v []byte) bool {
+		for i := 0; i+3 < len(v); i++ {
+			// Object header: o:<digits>:"
+			if v[i] == 'o' || v[i] == 'a' {
+				// Not part of a longer word -- "foo:1:" is not a header.
+				if i > 0 && isWordByte(v[i-1]) {
+					continue
+				}
+				if v[i+1] != ':' {
+					continue
+				}
+				j := i + 2
+				for j < len(v) && v[j] >= '0' && v[j] <= '9' {
+					j++
+				}
+				if j == i+2 || j >= len(v) || v[j] != ':' {
+					continue
+				}
+				j++
+				if j >= len(v) {
+					continue
+				}
+				// O:<len>:"name" -- an object names its class.
+				// a:<count>:{ -- an array opens its members directly.
+				if v[i] == 'o' && v[j] == '"' {
+					return true
+				}
+				if v[i] == 'a' && v[j] == '{' {
+					return true
+				}
+			}
+		}
+		return false
+	}).WithLiterals(";s:", ";i:", ";b:", ";d:", "{s:", "{i:", ":{s:")
+}
+
+// isWordByte reports whether b can be part of an identifier, so a type tag
+// preceded by one is a suffix rather than a header.
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' ||
+		b >= '0' && b <= '9' || b == '_'
+}
+
+// LoopbackSSRFRule reports a loopback or link-local target in a request value.
+//
+// It is not in the default ruleset and that is a measurement, not caution.
+// "localhost", "127.0.0.1", and "0.0.0.0" are ordinary values in CI
+// configuration, staging traffic, developer tooling, and webhook registrations
+// pointed at a tunnel — the benign corpus carries them — so a core rule
+// matching them would be the one that gets the WAF switched off in week one
+// (CLAUDE.md §2b, rule 8).
+//
+// An embedder who knows their API never legitimately fetches a loopback address
+// knows something gwaf cannot know from one request, so they opt in:
+//
+//	waf, err := gwaf.New(gwaf.WithRuleset(
+//	    append(core.Default(), core.LoopbackSSRFRule(11003)),
+//	))
+//
+// The decimal and hexadecimal forms are included because 2130706433 and
+// 0x7f000001 are 127.0.0.1 to every URL parser and to no human reviewer.
+func LoopbackSSRFRule(id types.RuleID) rules.Rule {
+	return rules.Rule{
+		ID:         id,
+		Phase:      types.PhaseRequestHeaders,
+		Targets:    argTargets,
+		Transforms: decodeChain,
+		Op: op.ContainsAny(
+			"127.0.0.1", "localhost", "0.0.0.0", "[::1]",
+			"2130706433", "0x7f000001", "169.254.", "::ffff:127.",
+		),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityError,
+		Confidence: types.Medium,
+		Msg:        "Loopback or link-local address in request value",
+		Tags:       []string{"ssrf", "owasp-a10", "opt-in"},
+	}
 }
