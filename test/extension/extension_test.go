@@ -347,3 +347,47 @@ func TestNoResolverIsSafe(t *testing.T) {
 	tx2.SetRequestLine("GET", "/x", "HTTP/1.1")
 	tx2.ProcessRequestHeaders()
 }
+
+// TestResolverIsCalledWhenARuleNamesOneValue is a regression test for a bug the
+// custom-rules example found.
+//
+// The compile-time index recorded the whole target name, so a rule reading
+// "reputation.asn" indexed that string — while the engine looks the resolver up
+// by Resolver.Name, which is "reputation". The lookup never matched, the
+// resolver was never called, and the rule could never fire.
+//
+// Every earlier test happened to target a whole collection, where the two
+// strings are identical. Writing an example that targeted one value inside a
+// collection is what surfaced it, which is the argument for examples being
+// compiled and run rather than pasted into documentation.
+func TestResolverIsCalledWhenARuleNamesOneValue(t *testing.T) {
+	calls := 0
+
+	set := rules.Set{{
+		ID:         5000010,
+		Phase:      types.PhaseRequestHeaders,
+		Targets:    []types.Target{{Kind: types.TargetResolved, Name: "reputation.asn"}},
+		Op:         vendor.NewOperator("AS64496"),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.Certain,
+		Msg:        "hostile ASN",
+	}}
+
+	w, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.AddResolver(vendor.Resolver{Score: "3", ASN: "AS64496", Calls: &calls})
+	tx.SetRequestLine("GET", "/x", "HTTP/1.1")
+
+	if d := tx.ProcessRequestHeaders(); !d.Blocked() {
+		t.Errorf("a rule naming one value of a resolver did not fire (calls=%d)", calls)
+	}
+	if calls != 1 {
+		t.Errorf("resolver called %d times, want 1", calls)
+	}
+}

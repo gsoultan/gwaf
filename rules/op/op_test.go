@@ -141,7 +141,7 @@ func TestFuncIsUnconditionalWithoutHint(t *testing.T) {
 func TestFuncWithLiterals(t *testing.T) {
 	o := Func("test", func(v []byte) bool {
 		return strings.Contains(string(v), "__schema")
-	}).(LiteralHinter).WithLiterals("__schema")
+	}).WithLiterals("__schema")
 
 	lits, required := o.Literals()
 	if !required {
@@ -156,7 +156,7 @@ func TestFuncWithLiterals(t *testing.T) {
 // hinting one rule's operator must not silently change another's.
 func TestWithLiteralsDoesNotMutateOriginal(t *testing.T) {
 	base := Func("test", func([]byte) bool { return true })
-	hinted := base.(LiteralHinter).WithLiterals("x")
+	hinted := base.WithLiterals("x")
 
 	if _, required := base.Literals(); required {
 		t.Error("WithLiterals mutated the original operator")

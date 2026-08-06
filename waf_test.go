@@ -549,7 +549,7 @@ func TestUnconditionalRuleIsReported(t *testing.T) {
 func TestFuncWithLiteralsIsPrefiltered(t *testing.T) {
 	hinted := op.Func("graphql-introspection", func(v []byte) bool {
 		return strings.Contains(string(v), "__schema")
-	}).(op.LiteralHinter).WithLiterals("__schema")
+	}).WithLiterals("__schema")
 
 	w := newWAF(t, gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(rules.Set{{
 		ID:         1_000_060,

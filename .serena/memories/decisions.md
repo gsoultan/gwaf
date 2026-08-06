@@ -1052,3 +1052,32 @@ The gateon `wafengine` adapter and shadow mode mean modifying a *different
 repository*. That is an outward-facing change the user has to authorise, and
 they have already corrected me once for drifting gateon-specific. The in-repo
 enabler is done; the cross-repo step is theirs to start.
+
+## FOUND BY EXAMPLE: two defects no unit test could see
+
+Writing `examples/customrules` — a runnable program using every extension point
+the way a user would — found two bugs the whole test suite had missed. Both were
+invisible for the same structural reason: **the tests were written by the people
+who knew the internals**, so they never used the API the way the documentation
+describes it.
+
+1. **`op.Func(...).WithLiterals(...)` did not compile.** `Func` returned the
+   `rules.Operator` interface, so the method on the concrete type was
+   unreachable; every in-tree caller happened to assert to a hinter first. It is
+   the exact form documented in RULES.md §5 since the file was written. Fixed by
+   returning `*op.FuncOperator` (breaking, recorded in CHANGELOG).
+
+2. **A `Resolver` never fired when a rule read one value from a collection.**
+   The compile-time index was keyed on the full target name, so a rule targeting
+   `reputation.asn` looked up `"reputation.asn"` while resolvers register under
+   `"reputation"`. The rule silently never matched. Fixed with `resolverSegment`;
+   regression test in `test/extension`.
+
+**The lesson, which generalizes:** `test/extension` proved the interfaces are
+*implementable* from a foreign import path. It could not prove they are
+*usable*, because it was written to exercise the interfaces rather than to solve
+a problem. An example written to solve a problem found both in one afternoon.
+
+**Examples are tests.** `examples/customrules` has a `main_test.go` that runs it
+and asserts every documented row, so a change that breaks the API's advertised
+shape fails the build rather than rotting a README.

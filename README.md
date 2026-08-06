@@ -173,6 +173,37 @@ dependencies**, and that is the one property no competing WAF library offers.
 | `schema/openapi` | YAML needs a parser core will not carry |
 | `seclang` | CRS migration links a regex engine |
 
+## Writing your own rules
+
+Rules are Go values, so they diff, code-review, and fail the build on a typo
+rather than silently never firing:
+
+```go
+rules.Rule{
+    ID:         1_000_001,
+    Phase:      types.PhaseRequestHeaders,
+    Targets:    []types.Target{{Kind: types.TargetRequestPath}},
+    Transforms: []rules.Transform{transform.Lowercase, transform.NormalizePath},
+    Op:         op.HasPrefix("/internal/"),
+    Actions:    []rules.Action{rules.Block},
+    Severity:   types.SeverityCritical,
+    Confidence: types.Certain,
+    Msg:        "internal-only path reached from outside",
+}
+```
+
+`examples/customrules` walks the whole surface in one runnable program — built-in
+operators, `op.Func` and what a literal hint buys back, a custom `Operator`,
+`Transform`, `Action`, and `Resolver`, and an `Exception` for the day one of your
+rules is wrong about one route:
+
+```
+go run ./customrules
+```
+
+It is a test as well as an example, so what its comments claim is what CI checks.
+Reference: [docs/RULES.md](docs/RULES.md).
+
 ## Scope
 
 gwaf analyzes **one request in isolation, with no memory**, and answers one

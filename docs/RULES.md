@@ -151,6 +151,11 @@ type Resolver interface {
 `gwaf`, so the reverse would be an import cycle, and handing an action the whole transaction would
 give it powers an action has no business having.
 
+A runnable walk through all of it — a struct-literal rule, `op.Func` with and
+without a hint, a custom `Operator`, `Transform`, `Action`, and `Resolver`, and
+an `Exception` — is `examples/customrules`. It is a test as well as an example,
+so the behaviour its comments describe is the behaviour CI checks.
+
 ### Registration
 
 `Operator`, `Transform`, and `Action` are values on a rule — a rule literal names the ones it uses,
@@ -230,7 +235,7 @@ The bool means **"these literals are required — if none appear, this operator 
 | `op.Regex("(?i)union\\s+select")` | `["union"], true` (RE2 required-literal analysis) | prefiltered |
 | `op.Regex(".*")` | `nil, false` | **unconditional — runs on every request** |
 | `op.Func(myPredicate)` | `nil, false` | **unconditional** |
-| `op.Func(f).WithLiterals("__schema")` | `["__schema"], true` | prefiltered, hint is a promise |
+| `op.Func(name, f).WithLiterals("__schema")` | `["__schema"], true` | prefiltered, hint is a promise |
 
 `WithLiterals` is an assertion you are making to the compiler: *if none of these bytes are present,
 my predicate cannot match.* If that's wrong, your rule silently stops firing. It is the one place

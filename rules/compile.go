@@ -185,6 +185,15 @@ func allMirrors(rules []*CompiledRule, byID map[types.RuleID]*CompiledRule, phas
 	return true
 }
 
+// resolverSegment returns the resolver a target name selects: everything before
+// the first dot, since keys are qualified as "resolver.key".
+func resolverSegment(name string) string {
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		return name[:i]
+	}
+	return name
+}
+
 // NeedsResolver reports whether any rule in the phase reads the named resolved
 // collection.
 //
@@ -362,9 +371,18 @@ func Compile(set Set, opts Options) (*Ruleset, error) {
 				if plan.resolved == nil {
 					plan.resolved = map[string]bool{}
 				}
-				// An empty Name reads every resolver, which is what a rule
-				// matching on any supplied signal wants.
-				plan.resolved[t.Name] = true
+				// Indexed by the *resolver* segment, not by the whole target
+				// name, because the engine looks this up by Resolver.Name.
+				//
+				// A rule may name one value within a collection —
+				// "reputation.asn" — and indexing that verbatim meant asking
+				// for "reputation" found nothing, so the resolver was never
+				// called and the rule could never fire. The tests all happened
+				// to target whole collections; writing an example that targeted
+				// one value is what surfaced it.
+				//
+				// An empty Name reads every resolver, and is stored as such.
+				plan.resolved[resolverSegment(t.Name)] = true
 			}
 		}
 		g.Rules = append(g.Rules, cr)

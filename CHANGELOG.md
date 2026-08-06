@@ -8,6 +8,16 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Breaking
 
+- **`op.Func` returns `*op.FuncOperator` rather than `rules.Operator`**, so the
+  chained form `op.Func(name, fn).WithLiterals("…")` compiles. It is the form
+  `docs/RULES.md` §5 has always documented, and it was a type error: `Func`
+  returned the interface, so the method was unreachable and callers needed an
+  `op.LiteralHinter` assertion. `*FuncOperator` satisfies `rules.Operator`, so
+  code that only stores the result is unaffected.
+
+  Found by writing `examples/customrules` — an escape hatch that needs a type
+  assertion is not "always present and always visible" (CLAUDE.md §2b).
+
 - **`Fuel` moved from `internal/budget` to `types`.** `Operator.Cost()` now
   returns `types.Fuel`; `gwaf.WithFuelLimit` and `Transaction.FuelSpent` take
   and return it.
@@ -44,6 +54,9 @@ semver, and the four extension interfaces are frozen hard.
   describing an architecture nobody built.
 
 ### Added
+
+- `examples/customrules` — a runnable walk through the whole custom-rule
+  surface, tested so that what its comments claim is what CI checks.
 
 - **`rules.Resolver` and `types.TargetResolved`** — the mechanism by which a
   signal gwaf deliberately does not compute reaches a rule: an IP reputation

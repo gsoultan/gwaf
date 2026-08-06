@@ -156,10 +156,25 @@ func (o *hasPrefix) Cost() budget.Fuel { return budget.CostLiteralMatch }
 // Third-party predicates also run behind a recovering boundary, which built-in
 // operators do not need.
 //
-// Use WithLiterals when you can honestly assert what the predicate requires.
-func Func(name string, fn func(value []byte) bool) rules.Operator {
-	return &funcOp{name: name, fn: fn}
+// Use WithLiterals when you can honestly assert what the predicate requires:
+//
+//	op.Func("graphql-introspection", isIntrospection).WithLiterals("__schema")
+//
+// It returns the concrete type rather than the interface so that chains like
+// the one above compile. Returning rules.Operator made the documented form a
+// type error and forced callers through a LiteralHinter assertion, which is not
+// what an escape hatch should feel like -- CLAUDE.md §2b asks for one that is
+// always present and always visible. *FuncOperator satisfies rules.Operator, so
+// nothing that only stores the result had to change.
+func Func(name string, fn func(value []byte) bool) *FuncOperator {
+	return &FuncOperator{name: name, fn: fn}
 }
+
+// FuncOperator is the operator Func returns.
+//
+// Exported for its methods rather than for its fields: a caller builds one with
+// Func and refines it with WithLiterals.
+type FuncOperator = funcOp
 
 type funcOp struct {
 	name     string
@@ -192,7 +207,7 @@ func (o *funcOp) Cost() budget.Fuel { return budget.CostCustomOperator }
 // where you can be wrong without being told: if the predicate can match input
 // containing none of these literals, the rule will silently stop firing. State
 // the literals the predicate actually looks for, not the ones you expect to see.
-func (o *funcOp) WithLiterals(literals ...string) rules.Operator {
+func (o *funcOp) WithLiterals(literals ...string) *FuncOperator {
 	clone := *o
 	clone.literals = append([]string(nil), literals...)
 	return &clone
@@ -202,7 +217,7 @@ func (o *funcOp) WithLiterals(literals ...string) rules.Operator {
 // assertion. It lets callers attach hints without knowing the concrete type.
 type LiteralHinter interface {
 	rules.Operator
-	WithLiterals(literals ...string) rules.Operator
+	WithLiterals(literals ...string) *FuncOperator
 }
 
 var _ LiteralHinter = (*funcOp)(nil)
