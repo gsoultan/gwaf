@@ -6,6 +6,57 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Fixed
+
+- **Literal extraction could silently stop a rule firing.** `Literals()` tells
+  the prefilter which byte sequences a rule requires, and the engine skips the
+  rule entirely when none appear — so a literal that is not genuinely required
+  makes the rule quietly stop matching, with no error and nothing in the
+  compile report. Two ways to reach that state are fixed:
+
+  - The walk mixed conjunctive and disjunctive reasoning. A concatenation
+    returned the literals of *all* its parts including a nested alternation's,
+    and the alternation then kept the longest of that mixed list. For
+    `\.(php[345]?|phtml|aspx?)$` the parser factors the shared `ph` prefix and
+    the surviving literal was `tml` — a rule that no longer fired on `.php`.
+  - The minimum-length filter dropped individual members of a disjunction.
+    `foo|ab` kept only `foo`, asserting that it covered every match; it does not
+    cover `ab`. The filter is now all-or-nothing.
+
+  Both were found by a soundness property — every string a pattern matches must
+  contain one of its declared literals — now enforced by a test and a fuzz
+  target.
+
+- **A character class between alternation branches produced no literals at
+  all.** The parser factors `py|pl` into `p[ly]`, and refusing to enumerate the
+  class dragged the whole disjunction below the length floor, so a common
+  extension list like `\.(exe|php|sh|py|pl|rb)$` extracted nothing and ran on
+  every request. Small classes are now enumerated; wide ones still yield
+  nothing, because 26 automaton entries that between them match nearly every
+  value is a prefilter that costs memory and excludes nothing.
+
+### Added
+
+- **`rules/op/rx`** — the `@rx` operator, promoted out of the `seclang` module.
+
+  It lived there on the reasoning that an embedder writing `gwaf.New()` should
+  not link a regex engine because somebody else is migrating from CRS. That was
+  right about the cost and wrong about where to put it: Go links per package, so
+  a package of its own gives the same guarantee without making an embedder who
+  wants one regex rule take a SecLang parser as well. `seclang` now delegates to
+  it, so there is one implementation rather than two that can drift.
+
+  The core module still has zero third-party dependencies.
+
+- **`types.TargetFileNames`** — the `FILES_NAMES` target.
+
+  The multipart parser synthesises a `<field>.filename` argument key for an
+  uploaded file's name, and `Target.Name` matches exactly, so there was no way
+  to write a rule about "any upload's name": an author had to know the form
+  field in advance or inspect every argument — which means blocking
+  `?page=index.php` to catch an upload called `index.php`. The name is still
+  recorded as an argument too, so no existing rule narrows.
+
 ### Breaking
 
 - **`op.Func` returns `*op.FuncOperator` rather than `rules.Operator`**, so the
