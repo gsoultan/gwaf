@@ -8,6 +8,19 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **SQLi evaded detection inside MySQL executable comments.** The tokenizer
+  treated every `/*…*/` as one opaque comment, so `UNION` and `SELECT` inside a
+  `/*!50000UNION*/ /*!50000SELECT*/` pair were never seen as keywords and the
+  scorer found no structure. But `/*!…*/` is not a comment to MySQL — it
+  executes, and `/*!NNNNN…*/` executes from version NNNNN — so `detect/sqli` now
+  lexes the executable body as code, the way a real parser does. This is the
+  `versionedmorekeywords` / `modsecurityversioned` evasion the package header
+  always claimed to catch. Found by the pentest harness in `test/pentest`;
+  detection is 57/57 with false positives still 0/60 and the tokenizer fuzz
+  target clean, because only the executable-comment *structure*, not the
+  characters, now lexes as code — benign values carrying `/*!important*/` are
+  unaffected.
+
 - **Literal extraction could silently stop a rule firing.** `Literals()` tells
   the prefilter which byte sequences a rule requires, and the engine skips the
   rule entirely when none appear — so a literal that is not genuinely required
