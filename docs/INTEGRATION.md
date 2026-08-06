@@ -46,8 +46,15 @@ func main() {
 ### Turning the dials
 
 ```go
+// Schemas are parsed, not loaded by path: the library never reads a file it
+// was not handed. Report says what the document failed to specify.
+sch, report, err := openapi.Parse(doc, openapi.Options{})
+if err != nil {
+	return err
+}
+
 waf, err := gwaf.New(
-	gwaf.WithSchema(openapi.MustLoad("openapi.yaml")),   // 70–90% plan reduction + positive security
+	gwaf.WithSchema(sch),                                // 70–90% plan reduction + positive security
 	gwaf.WithRuleset(myAppRules),                        // your rules on top of core
 	gwaf.WithMode(gwaf.DetectionOnly),                   // rollout: observe first
 	gwaf.WithLogger(slog.Default()),                     // library never makes its own
@@ -79,15 +86,21 @@ middleware.HTTP(waf,
 
 ### Frameworks
 
-Each in its own module, so importing the chi adapter doesn't put echo in your dependency graph.
+**`net/http` is the only adapter that ships.** `middleware.Chi`, `Echo`, `Gin`, `Fiber` and
+`Connect` are *planned, not yet shipped* — `middleware/` contains `http.go` and nothing else in
+v0.1.x. Each is intended to be its own module, so importing the chi adapter would not put echo in
+your dependency graph.
+
+Until they land, every one of those frameworks accepts a `func(http.Handler) http.Handler`, which
+is exactly what `middleware.HTTP` returns:
 
 ```go
-r.Use(middleware.Chi(waf))                    // chi
-e.Use(middleware.Echo(waf))                   // echo
-r.Use(middleware.Gin(waf))                    // gin
-app.Use(middleware.Fiber(waf))                // fiber
-interceptor := middleware.Connect(waf)        // connect / gRPC
+r.Use(middleware.HTTP(waf))                   // chi — stdlib middleware signature
+e.Use(echo.WrapMiddleware(middleware.HTTP(waf)))
+r.Use(gin.WrapH)                              // gin — wrap the handler, not the router
 ```
+
+The adapters are sugar over this, not capability. Nothing is unreachable without them.
 
 ### Two traps the middleware handles for you
 
@@ -195,36 +208,69 @@ plane push, SIGHUP, whatever your platform already does.
 You get the compiler, not just the runtime.
 
 ```go
-// Compile in CI, ship the artifact.
-plan, err := rules.Compile(rules.Input{
-	Sets:     []rules.Set{core.Default, myVendorRules},
-	Schemas:  []schema.Source{openapi.MustLoad("customer.yaml")},
-	Policies: customerPolicies,
-})
+// Compile in CI and fail the build on what the report says, not at 3 a.m.
+rs, err := rules.Compile(append(core.Default(), myVendorRules...), rules.Options{})
 if err != nil {
 	return err
 }
-report := plan.Report()   // rules, prefiltered count, unconditional cost, fuel estimates
-if err := plan.WriteTo(w); err != nil {   // flat, signable, mmap-able artifact
-	return err
-}
+
+report := rs.Report()
+report.Rules            // total compiled
+report.Prefiltered      // how many only run when their literals appear
+report.Unconditional    // the ones that run on every request in their phase
+report.Literals         // distinct prefilter literals
+report.AutomatonStates  // prefilter memory proxy
 ```
+
+`Unconditional` is the one to gate on. A rule that cannot be prefiltered runs on every request in
+its phase, which is how a ruleset silently buys latency — CLAUDE.md §2 invariant 6 exists so that
+cost is reported at compile time instead of discovered in production.
+
+**Shipping the compiled artifact is *planned, not yet shipped*.** There is no `plan.WriteTo(w)` in
+v0.1.x, so the flat, signable, mmap-able artifact described in CONCEPT.md §7 is a design, not an
+API. Compile in-process at startup for now; `Compile` is off the hot path either way.
 
 ### Your own detectors and operators
 
 The four extension interfaces (RULES.md §4) are the whole point of this profile — implement them in
-your package, no fork:
+your package, no fork. There is no registry to register them with, and that is deliberate: a
+package-level registry is global state, which CLAUDE.md §2b rules out. An operator reaches the
+engine by being *in a rule*, and a rule reaches the engine through `WithRuleset`.
 
 ```go
+// Your Operator is an ordinary rules.Operator. So is every first-party
+// detector -- there is no separate L1 tier for it to be second-class to.
 waf, err := gwaf.New(
-	gwaf.WithDetector(myProprietaryMLDetector{}),   // your L1 detector
-	gwaf.WithOperator("threat_intel", myFeedOp{}),  // usable from YAML rules too
-	gwaf.WithResolver(myTenantResolver{}),
+	gwaf.WithRuleset(rules.Set{
+		{
+			ID:         1_500_001,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    []types.Target{{Kind: types.TargetRequestHeaders, Name: "user-agent"}},
+			Op:         myFeedOp{},          // your operator
+			Confidence: types.High,
+			Actions:    []rules.Action{rules.Block},
+		},
+		{
+			ID:      1_500_002,
+			Phase:   types.PhaseRequestBody,
+			Targets: []types.Target{{Kind: types.TargetArgs}},
+			Op:      sqli.Operator(),        // a first-party detector, same door
+		},
+	}),
 )
 ```
 
-Registering an operator by name makes it reachable from the declarative and SecLang frontends — so
-your customers can write `op: { threat_intel: ... }` in YAML against *your* operator.
+A `Resolver` is per-transaction rather than per-WAF, because what it resolves — a tenant, a
+reputation score, a fingerprint — is a property of the request, not of the engine:
+
+```go
+tx.AddResolver(myTenantResolver{})   // engine calls it only if a rule in the phase reads it
+```
+
+**Registering an operator under a name, so customers can write `op: { threat_intel: ... }` in YAML
+against your operator, is *planned, not yet shipped*.** `gwaf.WithOperator`, `WithDetector` and
+`WithResolver` do not exist in v0.1.x. Nothing above is blocked by their absence — the Go rule form
+reaches everything; what is missing is the declarative frontend's route to a third-party operator.
 
 ### Feeding your control plane
 
