@@ -387,7 +387,33 @@ everything is a broken detector. Always report the FP rate alongside it.
 
 ### Security & supply chain
 
-- `govulncheck` in CI, blocking.
+**`make check` runs `staticcheck` and `govulncheck` over every module, and both are required.
+Never skip them, never make them conditional, and never trust a green run that says it skipped one.**
+This is not a style preference. Both scanners were wired up "when installed", and:
+
+- `lint` probed with `command -v staticcheck`. staticcheck was installed in `GOPATH/bin` the whole
+  time, `command -v` missed it because make's `PATH` is not the developer's, and every run printed
+  `staticcheck not installed; skipping` next to a passing gate. **An analyser that quietly opts out
+  is worse than one that was never wired up, because the green tick says it ran.** Tools are now
+  resolved through `GOPATH/bin` as well as `PATH`, and a missing tool is a hard failure.
+- `vuln` scanned only the root module — the one module that has **zero third-party dependencies by
+  design**, so it was scanning the one place a dependency CVE cannot exist. Everything an adopter
+  actually pulls in lives in the modules it skipped. Scanning all ten immediately found the gin
+  adapter pinning `golang.org/x/net@v0.25.0` (12 known vulnerabilities) and `x/text@v0.15.0`.
+
+Binding rules:
+
+- **Run the security scanners before claiming any work is done.** `make check` includes them; if you
+  invoke steps individually, `lint` and `vuln` are not optional extras.
+- **Scan every module, not just core.** The dependency risk is entirely outside core, by design.
+- **Fix findings; do not annotate them away.** `//nolint`, `//lint:ignore`, and a raised ceiling are
+  all ways of making a real finding invisible. If a finding is genuinely wrong, say why in the code.
+- **Read security-relevant code adversarially, not just for correctness.** Ask what an attacker
+  controls, what the ceiling is, and what happens at the boundary — every parser and every
+  canonicalization function takes hostile input.
+- `govulncheck` reports "vulnerabilities in packages you import" separately from called ones.
+  **Both matter here**: gwaf ships adapters, so an adopter inherits our transitive pins whether or
+  not we call the vulnerable path.
 - Dependencies are adversarially reviewed. The core module's dependency count is a KPI: target zero
   beyond `golang.org/x`. Every addition needs justification in the PR.
 - Releases ship SLOs, SBOM, and SLSA provenance.
@@ -475,6 +501,9 @@ Write a memory when a decision cost real work — especially a rejection.
 
 ## 6. Working agreements
 
+- **Never let a check be optional.** A gate that skips when a tool is missing reports success it did
+  not earn — `staticcheck` skipped silently for the life of the project because `command -v` could
+  not see `GOPATH/bin`. If a check cannot run, that is a failure, not a warning.
 - Ship the evasion corpus and benchmark harness **before** the detectors they measure. Metrics
   first, or you optimize the wrong thing.
 - Prefer deleting a rule over adding an exception to it.

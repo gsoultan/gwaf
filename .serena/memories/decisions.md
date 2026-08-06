@@ -1219,3 +1219,33 @@ they are RCE. Rule 4015 matches the *directives*, not the filename, because the
 filename is the part an upload handler may rewrite and the content is the part
 that has to survive to work. High rather than Certain: a hosting control panel
 manages .htaccess for customers, and that is its payload rather than an attack.
+
+## FOUND: both security scanners were effectively off
+
+Asked to make security scanning a standing rule, and checking first found the
+rule was already written and not enforced.
+
+**staticcheck had never run.** `lint` probed with `command -v staticcheck`, and
+make's PATH is not the developer's, so it missed the binary sitting in
+`GOPATH/bin` and printed `staticcheck not installed; skipping` next to a passing
+gate — for the life of the project. **An analyser that quietly opts out is worse
+than one nobody wired up, because the green tick says it ran.** Now resolved via
+`GOPATH/bin` and a hard failure when absent. (All ten modules were clean, so
+nothing was hiding — but that was luck, not a control.)
+
+**govulncheck scanned only the root module — the one module with zero
+third-party dependencies by design.** It was scanning the single place a
+dependency CVE cannot exist, while every module an adopter actually pulls in was
+skipped. Scanning all ten immediately found the gin adapter pinning
+`golang.org/x/net@v0.25.0` (12 known vulnerabilities, fixed in v0.55.0) and
+`x/text@v0.15.0`. echo and fiber carried the same class. Bumped; 12/3/4 imported
+vulnerabilities went to 0/0/0, core still zero third-party.
+
+**`make check` now includes `vuln`.** It was a separate target somebody had to
+remember, which for security infrastructure is the same as not having it.
+
+### The generalisation, now in CLAUDE.md §4 and §6
+A gate that skips when a tool is missing reports success it did not earn. If a
+check cannot run, that is a failure, not a warning. And "imported but not
+called" vulnerabilities matter here specifically, because gwaf ships adapters —
+an adopter inherits our transitive pins whether or not we call the bad path.

@@ -12,11 +12,27 @@ MODULES ?= . ./middleware ./examples ./schema/openapi ./schema/grpc ./seclang \
            ./adapters/gin ./adapters/echo ./adapters/fiber \
            ./test/extension
 
+# Tools are resolved through GOPATH/bin as well as PATH.
+#
+# `go install` puts binaries in GOPATH/bin, which is frequently not on PATH in a
+# make shell even when it is in the developer's interactive shell. The lint
+# target used to probe with `command -v staticcheck` and print "not installed;
+# skipping" when it missed -- so on a machine where staticcheck was installed and
+# working, every `make check` silently skipped it and still reported success.
+# A security tool that is optional is a security tool that is off.
+GOBIN        := $(shell $(GO) env GOPATH)/bin
+STATICCHECK  := $(shell command -v staticcheck 2>/dev/null || echo $(GOBIN)/staticcheck)
+GOVULNCHECK  := $(shell command -v govulncheck 2>/dev/null || echo $(GOBIN)/govulncheck)
+
 .DEFAULT_GOAL := check
 
-## check: everything CI runs.
+## check: everything CI runs, including the security scanners.
+##
+## vuln and lint are part of this rather than separate targets somebody has to
+## remember. gwaf is security infrastructure (CLAUDE.md §4); a gate that omits
+## the vulnerability scan is a gate that reports a clean run it did not perform.
 .PHONY: check
-check: fmt-check vet lint test race deps calibrate lint-rules
+check: fmt-check vet lint test race deps calibrate lint-rules vuln
 
 ## fmt: format the tree.
 .PHONY: fmt
@@ -35,16 +51,23 @@ vet:
 		echo "vet $$m"; (cd $$m && $(GO) vet ./...) || exit 1; \
 	done
 
-## lint: staticcheck, when installed.
+## lint: staticcheck across every module. Required, never skipped.
+##
+## This used to skip when the binary was not on PATH, and that is exactly how it
+## failed: staticcheck was installed in GOPATH/bin the whole time, `command -v`
+## missed it, and every run printed "skipping" next to a passing gate. An
+## analyser that quietly opts out is worse than one that was never wired up,
+## because the green tick says it ran.
 .PHONY: lint
 lint:
-	@if command -v staticcheck >/dev/null 2>&1; then \
-		for m in $(MODULES); do \
-			echo "staticcheck $$m"; (cd $$m && staticcheck ./...) || exit 1; \
-		done; \
-	else \
-		echo "staticcheck not installed; skipping (go install honnef.co/go/tools/cmd/staticcheck@latest)"; \
+	@if [ ! -x "$(STATICCHECK)" ]; then \
+		echo "staticcheck not found at $(STATICCHECK)"; \
+		echo "install: go install honnef.co/go/tools/cmd/staticcheck@latest"; \
+		exit 1; \
 	fi
+	@for m in $(MODULES); do \
+		echo "staticcheck $$m"; (cd $$m && $(STATICCHECK) ./...) || exit 1; \
+	done
 
 .PHONY: test
 test:
@@ -150,14 +173,26 @@ fuzz:
 	$(GO) test -run=XXX -fuzz=FuzzParseForm -fuzztime=$(FUZZTIME) ./internal/body/
 	$(GO) test -run=XXX -fuzz=FuzzParseMultipart -fuzztime=$(FUZZTIME) ./internal/body/
 
-## vuln: check dependencies and stdlib for known vulnerabilities.
+## vuln: check every module's dependencies and the stdlib for known CVEs.
+##
+## Every module, not just the root one, and the distinction is the whole point.
+## The core module has zero third-party dependencies by design (CLAUDE.md §4),
+## so scanning it alone scans the one place that cannot have a dependency
+## vulnerability. Everything an adopter actually pulls in -- gin, echo, fiber,
+## the SecLang and OpenAPI frontends -- lives in the modules this used to skip.
+##
+## Runs inside `make check` rather than as a target somebody remembers, because
+## we ship security infrastructure and a scan nobody runs is not a control.
 .PHONY: vuln
 vuln:
-	@if command -v govulncheck >/dev/null 2>&1; then \
-		govulncheck ./...; \
-	else \
-		echo "govulncheck not installed (go install golang.org/x/vuln/cmd/govulncheck@latest)"; exit 1; \
+	@if [ ! -x "$(GOVULNCHECK)" ]; then \
+		echo "govulncheck not found at $(GOVULNCHECK)"; \
+		echo "install: go install golang.org/x/vuln/cmd/govulncheck@latest"; \
+		exit 1; \
 	fi
+	@for m in $(MODULES); do \
+		echo "govulncheck $$m"; (cd $$m && $(GOVULNCHECK) ./...) || exit 1; \
+	done
 
 ## deps: assert the core module has no third-party dependencies.
 ##
