@@ -9,3 +9,7 @@ graphify-out/
 # Serena runtime state; memories and project.yml are versioned
 .serena/cache/
 .serena/project.local.yml
+
+# Compiled corpus generator. Build it with `go run ./testdata/corpus/gen`;
+# a 2.9 MB prebuilt executable was committed here once and should not be again.
+/gen

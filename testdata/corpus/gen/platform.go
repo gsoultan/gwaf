@@ -391,6 +391,19 @@ var webhookAgents = []string{
 	"PagerDuty-Webhook/3.0",
 }
 
+// secretValues populates the saas/secret archetype: a legitimate request that
+// POSTs a credential to a secrets-management API, which a WAF must not block.
+//
+// These deliberately carry *no vendor prefix*. They used to be Stripe, GitHub,
+// Slack, AWS, DigitalOcean, and npm formats, and that was a mistake with a cost
+// and no benefit. The cost: GitHub push protection rejects the repository, and
+// every clone, fork, and mirror trips secret scanning forever. The benefit was
+// zero, because no gwaf rule keys on a vendor format -- what the corpus needs is
+// an opaque, high-entropy, credential-shaped string, which is exactly what these
+// are. Same lengths as the originals, same character class, no fingerprint.
+//
+// Keep it that way. A security library whose test corpus sets off every secret
+// scanner on the internet is teaching the wrong lesson.
 var secretValues = []string{
 	"tok_SPkc47MsBxJnTi3FDbhUHq7j4bAZcuGyFQ9vKBV78niBcah",
 	"tok_txKABJWVRaRsQrDrgW38mK2XJ3S3hZv2MbhB",
