@@ -141,6 +141,7 @@ attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
 | Doc | What |
 |---|---|
 | [CONCEPT.md](docs/CONCEPT.md) | The architectural thesis — 12 core concepts. **Start here.** |
+| [COMPARISON.md](docs/COMPARISON.md) | gwaf vs Coraza, CrowdSec, SafeLine, open-appsec, Sophos — including where gwaf is behind |
 | [PLAN.md](docs/PLAN.md) | Execution plan, milestones, gates, kill criteria |
 | [ROADMAP.md](docs/ROADMAP.md) | Phase detail and risk register |
 | [RULES.md](docs/RULES.md) | Rule authoring, extension interfaces, confidence & policies |
