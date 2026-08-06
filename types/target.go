@@ -57,6 +57,19 @@ const (
 	// phase actually reads them.
 	TargetResolved
 
+	// TargetFileNames is the client-supplied name of an uploaded file.
+	//
+	// It exists because a file name is attacker-controlled data with its own
+	// grammar — double extensions, traversal, null bytes — and rules about it
+	// are not rules about ordinary parameters. It is the FILES_NAMES an
+	// operator migrating from ModSecurity is looking for.
+	//
+	// The name is also recorded as an argument keyed "<field>.filename", which
+	// is how it was addressable before this target existed. Both are kept: the
+	// argument view is what the general-purpose detectors already scan, and
+	// removing it would quietly narrow them.
+	TargetFileNames
+
 	targetKindCount
 )
 
@@ -86,6 +99,8 @@ func (k TargetKind) String() string {
 		return "ARGS"
 	case TargetArgNames:
 		return "ARGS_NAMES"
+	case TargetFileNames:
+		return "FILES_NAMES"
 	case TargetArgsGet:
 		return "ARGS_GET"
 	case TargetArgsPost:
@@ -129,7 +144,7 @@ func (k TargetKind) String() string {
 // phase-1 injection rules with phase-2 counterparts.
 func (k TargetKind) Phase() Phase {
 	switch k {
-	case TargetArgsPost, TargetRequestBody:
+	case TargetArgsPost, TargetRequestBody, TargetFileNames:
 		return PhaseRequestBody
 	case TargetArgsJoined:
 		// The joined view concatenates every argument, so it is only meaningful
@@ -274,6 +289,8 @@ func (k TargetKind) ConstName() string {
 		return "TargetArgs"
 	case TargetArgNames:
 		return "TargetArgNames"
+	case TargetFileNames:
+		return "TargetFileNames"
 	case TargetArgsGet:
 		return "TargetArgsGet"
 	case TargetArgsPost:

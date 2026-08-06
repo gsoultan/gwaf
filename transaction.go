@@ -3,6 +3,7 @@
 package gwaf
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/gsoultan/gwaf/internal/body"
@@ -862,6 +863,10 @@ func (tx *Transaction) recordText(frame int, b []byte) {
 // defence against the CVE-2026-21876 class, in which the Core Rule Set checked
 // only the final part's charset and a payload in any earlier one passed
 // unexamined.
+// filenameKeySuffix is what the multipart parser appends to a field name when
+// it records the client-supplied file name.
+var filenameKeySuffix = []byte(".filename")
+
 func (tx *Transaction) parseMultipartBody(b, boundary []byte) bool {
 	tx.bodyParser.Reset(body.Limits{
 		MaxFields:    tx.waf.cfg.limits.MaxArgs,
@@ -890,6 +895,13 @@ func (tx *Transaction) parseMultipartBody(b, boundary []byte) bool {
 		if kind == body.KindKey {
 			tx.recordFieldBytes(types.TargetArgNames, name, value, false)
 			return true
+		}
+		// An uploaded file's name is also recorded under its own target, so a
+		// rule can say "any upload's name" instead of having to know the
+		// "<field>.filename" key the parser synthesises. The argument view
+		// above is kept as well; the general detectors already scan it.
+		if bytes.HasSuffix(name, filenameKeySuffix) {
+			tx.recordFieldBytes(types.TargetFileNames, name, value, false)
 		}
 		// An uploaded file is binary for the same reason a protobuf frame is,
 		// and 8 KiB of JPEG is 8 KiB of chances for a short literal to appear.
