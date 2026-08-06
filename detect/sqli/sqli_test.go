@@ -36,6 +36,18 @@ var attacks = []struct {
 	{"hash comment", "1' OR 1=1#"},
 	{"null comparison", "1' OR NULL=NULL--"},
 
+	// ---- auth-bypass tail --------------------------------------------------
+	// Closing the literal and commenting away the rest of the statement, with
+	// no condition of its own. Against "WHERE user='$u'" that is the whole
+	// attack: the closing quote the application appends lands inside the
+	// comment. Quote-break and comment-terminator each score below threshold,
+	// so without the adjacency signal none of these are caught.
+	{"numeric auth bypass tail", "1'--"},
+	{"identifier auth bypass tail", "admin'--"},
+	{"hash auth bypass tail", "admin'#"},
+	{"double quote auth bypass tail", `admin"--`},
+	{"auth bypass tail trailing space", "admin'-- "},
+
 	// ---- union ------------------------------------------------------------
 	{"union select", "1 UNION SELECT password FROM users"},
 	{"union all select", "1 UNION ALL SELECT NULL,NULL"},
@@ -46,6 +58,15 @@ var attacks = []struct {
 	{"union newline", "1 UNION\nSELECT pw"},
 	{"union quoted", "1' UNION SELECT password FROM users--"},
 	{"union tab", "1\tUNION\tSELECT\tpw"},
+
+	// MySQL executable comments: /*!...*/ runs in every version, /*!NNNNN...*/
+	// runs from version NNNNN. The keyword lives *inside* the comment, so a
+	// tokenizer that treats /*...*/ as opaque never sees UNION SELECT. sqlmap's
+	// versionedmorekeywords / modsecurityversioned tampers emit exactly this.
+	{"versioned union split", "1/*!50000UNION*/ /*!50000SELECT*/ pw"},
+	{"versioned union no version", "1/*!UNION*//*!SELECT*/pw"},
+	{"versioned union one comment", "1/*!50000UNION SELECT*/pw"},
+	{"versioned keywords", "1/*!50000UNION*//*!ALL*//*!SELECT*/pw"},
 
 	// ---- stacked queries ---------------------------------------------------
 	{"stacked drop", "1; DROP TABLE users"},
@@ -80,6 +101,19 @@ var benign = []struct {
 	name  string
 	value string
 }{
+	// ---- text that breaks a quote near a comment marker --------------------
+	// The adjacency signal for the auth-bypass tail must not fire on these.
+	// Each contains both halves — an apostrophe and a comment marker that runs
+	// to the end of the value — but with content in between, which is what
+	// separates prose and code from a truncation.
+	{"jquery id selector", "$('#main').addClass('active')"},
+	{"jquery attr selector", "$('#nav a[href^=\"/docs\"]').show()"},
+	{"css fragment in value", "a.btn{color:#fff}"},
+	{"apostrophe then dashes then words", "don't -- see the note below"},
+	{"hashtag after apostrophe", "it's #trending today"},
+	{"anchor link with apostrophe", "/faq#what's-new"},
+	{"markdown em dash aside", "the plan's cost -- roughly $40 -- is fixed"},
+
 	// ---- prose containing SQL keywords -------------------------------------
 	{"select in prose", "please select a delivery option"},
 	{"union in prose", "credit union membership application"},

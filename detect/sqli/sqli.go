@@ -86,6 +86,18 @@ const (
 	// SignalCommentSplit is an inline comment between two keywords —
 	// "UNION/**/SELECT" — which exists only to defeat string matching.
 	SignalCommentSplit
+
+	// SignalTerminatedQuoteBreak is the auth-bypass tail: a value that escapes
+	// its quoted literal and then comments away everything the origin query
+	// would have appended, with nothing in between — "1'--", "admin'--", "x'#".
+	//
+	// Quote-break and comment-terminator are each weak alone for good reason:
+	// apostrophes and trailing dashes both occur in prose. Their *adjacency*,
+	// with the comment running to the end of the value, is not prose. "don't
+	// -- see below" has words between the two and does not qualify; "1'--" has
+	// nothing between them, and closing a literal only to discard the rest of
+	// the statement has no meaning except against a query.
+	SignalTerminatedQuoteBreak
 )
 
 // String implements fmt.Stringer, so a decision can say what it saw.
@@ -121,6 +133,9 @@ func (s Signal) String() string {
 	if s&SignalCommentSplit != 0 {
 		add("comment_split")
 	}
+	if s&SignalTerminatedQuoteBreak != 0 {
+		add("terminated_quote_break")
+	}
 	if len(out) == 0 {
 		return "none"
 	}
@@ -136,7 +151,7 @@ func (s Signal) String() string {
 func weightOf(s Signal) int {
 	switch s {
 	case SignalUnionSelect, SignalStackedQuery, SignalDangerFunction,
-		SignalBooleanInjection:
+		SignalBooleanInjection, SignalTerminatedQuoteBreak:
 		return 5
 	case SignalCommentSplit:
 		return 4
@@ -149,6 +164,36 @@ func weightOf(s Signal) int {
 	default:
 		return 0
 	}
+}
+
+// commentBodyEmpty reports whether a comment token carries nothing after its
+// marker but whitespace.
+//
+// The tokenizer gives a line comment everything from the marker to the end of
+// input, so the body is what distinguishes a truncation ("--") from an
+// expression that merely contains a '#' ("#main').addClass('active')").
+func commentBodyEmpty(text []byte) bool {
+	body := text
+	switch {
+	case len(body) >= 2 && body[0] == '-' && body[1] == '-':
+		body = body[2:]
+	case len(body) >= 1 && body[0] == '#':
+		body = body[1:]
+	case len(body) >= 2 && body[0] == '/' && body[1] == '*':
+		body = body[2:]
+		// An unterminated /* consumed the rest; a terminated one ends in */.
+		if n := len(body); n >= 2 && body[n-2] == '*' && body[n-1] == '/' {
+			body = body[:n-2]
+		}
+	default:
+		return false
+	}
+	for _, c := range body {
+		if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+			return false
+		}
+	}
+	return true
 }
 
 // Threshold is the score at or above which a value is reported as injection.
@@ -311,6 +356,22 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 			// the origin would have appended.
 			if t.off+len(t.text) >= valueLen {
 				sigs |= SignalCommentTerminator
+
+				// The auth-bypass tail. Under a quoted context the value has
+				// already escaped its literal; if the terminating comment is
+				// the first token after that break *and carries no body*, the
+				// whole payload is "close the string, discard the rest" and
+				// nothing else.
+				//
+				// The empty-body requirement is what separates this from real
+				// text. A jQuery selector like $('#main').addClass('active')
+				// also breaks a quote and also runs a '#' comment to the end of
+				// the value — but that comment has a body, because the rest of
+				// the expression is inside it. An attacker appending "--" to
+				// truncate a query has nothing left to say.
+				if ctx != ctxNone && i == 0 && commentBodyEmpty(t.text) {
+					sigs |= SignalTerminatedQuoteBreak
+				}
 			}
 
 		case tkLogic:

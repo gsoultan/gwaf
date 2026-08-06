@@ -139,6 +139,26 @@ func tokenize(dst []token, src []byte, ctx context) []token {
 			dst = append(dst, token{kind: tkComment, text: src[i:], off: i})
 			i = len(src)
 
+		case c == '/' && i+1 < len(src) && src[i+1] == '*' &&
+			i+2 < len(src) && src[i+2] == '!':
+			// MySQL executable comment. /*!...*/ runs in every version and
+			// /*!NNNNN...*/ runs from version NNNNN, so the body is code, not a
+			// comment: a tokenizer that swallowed it whole would never see the
+			// UNION SELECT inside "/*!50000UNION*/ /*!50000SELECT*/", which is
+			// the versionedmorekeywords / modsecurityversioned evasion. Skip the
+			// "/*!" and any version digits; the body then tokenizes as SQL and
+			// the closing "*/" is consumed by the tkComment-close case below.
+			i += 3
+			for i < len(src) && isDigit(src[i]) {
+				i++
+			}
+
+		case c == '*' && i+1 < len(src) && src[i+1] == '/':
+			// The close of an executable comment, treated as whitespace. A bare
+			// "*/" is not valid SQL on its own, so skipping it never hides
+			// structure a benign value depended on.
+			i += 2
+
 		case c == '/' && i+1 < len(src) && src[i+1] == '*':
 			end := indexFrom(src, i+2, "*/")
 			if end < 0 {
