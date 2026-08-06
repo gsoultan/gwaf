@@ -1186,3 +1186,36 @@ Host/X-Forwarded-Host spoofing needs to know the legitimate host (embedder).
 Open redirects need to know which parameter is a redirect target (schema).
 Go template `{{.Env}}` is the same delimiter tradeoff already settled for Jinja
 — and the benign corpus carries `{{ .Name }}` to prove it.
+
+## SHIPPED: file upload, both halves (driven by a real compromise)
+
+An adopter reported attackers writing files into their WordPress. Simulated the
+full chain: 16 upload evasions plus 4 requests for what had already landed.
+
+**The upload half was already strong — 14/16 — and for a reason worth keeping:
+the detectors read file *content*, so every filename trick failed.** Double
+extension, `shell.php\x00.jpg`, uppercase `.PHP`, trailing dot, trailing space,
+`.phar`, `.phtml`, a plugin zip, and a `nopriv` AJAX upload were all blocked by
+"PHP code in request value" on the body. Filename-extension filtering is the
+thing every upload filter does and the thing every bypass defeats; reading the
+content is why gwaf did not need one.
+
+### The gap was the second half, and it is the one that matters post-breach
+A file that arrived before gwaf was deployed, through a plugin it does not sit
+in front of, or with stolen credentials, is already on disk. Blocking uploads
+does nothing about it. **Requesting it is the step that turns a file into code,
+and that request gwaf can always see.** Rule 1010.
+
+**Scope discipline that made it shippable:** the rule is a script under an
+*upload directory*, not "a PHP file". Every WordPress plugin is a PHP file under
+wp-content/plugins and some are reached directly, so the broad form would block
+WordPress itself. The broad form exists as `WordPressHardeningRule`, opt-in,
+with the trade stated.
+
+### Also: .htaccess as the upload-filter bypass
+Blocked `.php`? Upload a `.htaccess` with `AddType application/x-httpd-php .jpg`
+and then upload the shell as an image. Both files individually pass; together
+they are RCE. Rule 4015 matches the *directives*, not the filename, because the
+filename is the part an upload handler may rewrite and the content is the part
+that has to survive to work. High rather than Certain: a hosting control panel
+manages .htaccess for customers, and that is its payload rather than an attack.

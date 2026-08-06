@@ -278,6 +278,7 @@ func TestSchemaDoesNotWeakenTheEvasionCorpus(t *testing.T) {
 		gwaf.WithRuleset(rules.Set{
 			core.CRLFHeaderRule(1007),
 			core.LoopbackSSRFRule(11003),
+			core.WordPressHardeningRule(1011),
 		}))
 
 	missed := 0

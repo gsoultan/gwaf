@@ -66,6 +66,7 @@ const (
 	//
 	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007)}))
 	IDConfigTraversal types.RuleID = 1009
+	IDScriptInUpload  types.RuleID = 1010
 	// 2001-2004 were literal SQL injection rules: tautology, UNION SELECT,
 	// comment sequences, and stacked statements. All four are superseded by
 	// IDSQLiSemantic, which recognises the same constructs by grammar and
@@ -119,6 +120,7 @@ const (
 	IDJavaGadgetClass     types.RuleID = 4012
 	IDPHPDynamicEval      types.RuleID = 4013
 	IDRemoteFileInclusion types.RuleID = 4014
+	IDServerConfigUpload  types.RuleID = 4015
 	IDSQLiSemantic        types.RuleID = 2010
 	IDXSSSemantic         types.RuleID = 3010
 	IDScannerUserAgent    types.RuleID = 5001
@@ -594,6 +596,73 @@ func requestRules() rules.Set {
 			Confidence: types.High,
 			Msg:        "PHP code in request value",
 			Tags:       []string{"rce", "upload", "owasp-a03"},
+		},
+		{
+			ID:      IDScriptInUpload,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: []types.Target{{Kind: types.TargetRequestURI}},
+			// The path as the origin will resolve it, so "/uploads/x.php%00.jpg"
+			// and "/uploads/./x.php" both arrive in the form that decides
+			// whether the interpreter runs.
+			Transforms: pathChain,
+			// A script being *executed* out of a directory that exists to hold
+			// uploads.
+			//
+			// This is the second half of the file-upload attack and the half
+			// that still matters after the first has failed. Blocking the
+			// upload depends on gwaf seeing it; a file that arrived before gwaf
+			// was deployed, through a plugin it does not sit in front of, over
+			// FTP, or with stolen credentials, is already on disk. Requesting
+			// it is the step that turns a file into code, and that request is
+			// one gwaf can always see.
+			//
+			// The claim is narrow on purpose. It is not "a PHP file", which
+			// would block WordPress itself -- every plugin is PHP under
+			// wp-content/plugins and some are reached directly. It is a script
+			// under a directory whose entire purpose is user-supplied content,
+			// where execution is never intended and every hardening guide for
+			// twenty years has said to switch it off. An application serving
+			// PHP out of its own upload directory is describing a compromise,
+			// not a feature.
+			Op:         scriptInUploadPath(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Script execution inside an upload directory",
+			Tags:       []string{"rce", "webshell", "upload", "owasp-a01"},
+		},
+		{
+			ID:         IDServerConfigUpload,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Apache configuration directives in a request value.
+			//
+			// This is the answer to an upload filter that blocks ".php": rather
+			// than smuggling a script past the extension check, upload a
+			// ".htaccess" that tells the server to run ".jpg" files as PHP, then
+			// upload the shell as an image. Both files are individually
+			// permitted and together they are remote code execution.
+			//
+			// The directives are matched, not the filename, because the filename
+			// is the part an upload handler may rewrite and the content is the
+			// part that has to survive intact to work.
+			Op: op.ContainsAny(
+				"addtypeapplication/x-httpd-php", "sethandlerapplication/x-httpd-php",
+				"addhandlerphp", "addhandlerapplication/x-httpd-php",
+				"php_flag", "php_value", "addtypeapplication/x-httpd-cgi",
+				"options+execcgi", "sethandlercgi-script",
+			),
+			Actions:  []rules.Action{rules.Block},
+			Severity: types.SeverityCritical,
+			// High, not Certain: a hosting control panel manages .htaccess for
+			// its customers, so these directives are its payload rather than an
+			// attack on it. That is a narrow class and it should scope an
+			// exception to the field that carries the file, the same answer
+			// detect/shelli gives a CI platform.
+			Confidence: types.High,
+			Msg:        "Server configuration directive in an uploaded value",
+			Tags:       []string{"rce", "upload", "htaccess", "owasp-a03"},
 		},
 		{
 			ID:      IDExposedArtifact,
@@ -1561,4 +1630,142 @@ func CRLFHeaderRule(id types.RuleID) rules.Rule {
 		Msg:        "CRLF header injection in request value",
 		Tags:       []string{"response-splitting", "crlf", "owasp-a03", "opt-in"},
 	}
+}
+
+// scriptInUploadPath reports a request for a script inside a directory whose
+// purpose is user-supplied content.
+//
+// Both halves are required, and the conjunction is what makes the rule safe.
+// The directory alone is ordinary — every site serves images out of its upload
+// folder. The extension alone is ordinary too — WordPress is PHP, and blocking
+// requests for PHP files would block WordPress. Only together do they describe
+// a file the site accepted as data and is now being asked to run.
+//
+// The extension is taken from the end of the path, after pathChain has decoded
+// and normalised it, so "shell.php%00.jpg" and "shell.php." resolve the way the
+// interpreter will rather than the way a suffix check hopes.
+func scriptInUploadPath() rules.Operator {
+	// Directories that exist to hold uploads, across the stacks that get
+	// compromised this way. Not an attempt at completeness: an embedder whose
+	// upload directory is named something else adds a rule, and the point of
+	// this one is to cover the defaults that ship in the wild.
+	dirs := []string{
+		"/wp-content/uploads/", "/wp-content/upgrade/", "/wp-content/cache/",
+		"/uploads/", "/upload/", "/userfiles/", "/media/uploads/",
+		"/sites/default/files/", "/assets/uploads/", "/storage/uploads/",
+		"/public/uploads/", "/static/uploads/", "/attachments/", "/avatars/",
+	}
+	// Extensions an interpreter will execute. ".phar" is included because
+	// reaching one deserializes its metadata, which is code execution without
+	// ever being "a script" in the sense a filter usually means.
+	exts := []string{
+		".php", ".php3", ".php4", ".php5", ".php7", ".php8", ".phps",
+		".phtml", ".pht", ".phar", ".inc",
+		".jsp", ".jspx", ".jsw", ".asp", ".aspx", ".ashx", ".asmx",
+		".cgi", ".pl", ".py", ".rb", ".sh",
+	}
+	return op.Func("script_in_upload_path", func(v []byte) bool {
+		inUpload := false
+		for _, d := range dirs {
+			if indexOf(v, d) >= 0 {
+				inUpload = true
+				break
+			}
+		}
+		if !inUpload {
+			return false
+		}
+		// Cut the query string: the path is what selects the handler.
+		path := v
+		for i := 0; i < len(path); i++ {
+			if path[i] == '?' || path[i] == '#' {
+				path = path[:i]
+				break
+			}
+		}
+		// A trailing dot or space is stripped by the filesystem on the platforms
+		// where this bypass works, so strip it here too before matching.
+		for len(path) > 0 && (path[len(path)-1] == '.' || path[len(path)-1] == ' ') {
+			path = path[:len(path)-1]
+		}
+		for _, e := range exts {
+			if len(path) >= len(e) && string(path[len(path)-len(e):]) == e {
+				return true
+			}
+			// "shell.php/x.jpg" executes as PHP under path-info handling, so an
+			// extension followed by a separator counts as well.
+			if i := indexOf(path, e+"/"); i >= 0 {
+				return true
+			}
+		}
+		return false
+	}).WithLiterals(dirs...)
+}
+
+// WordPressHardeningRule blocks direct execution of any PHP file under
+// wp-content — plugins and themes included, not just uploads.
+//
+// It is not in the default ruleset because it is not universally safe. Core
+// rule 1010 covers the upload directories, where execution is never intended by
+// anyone; this goes further and blocks the whole content tree, which is the
+// hardening every WordPress security guide recommends and which a minority of
+// plugins genuinely break under. Those plugins expose an endpoint by having the
+// browser request their PHP file directly instead of routing through
+// index.php — discouraged for a decade, still shipped.
+//
+// The trade is worth stating plainly, because it is the difference between a
+// site that survives a plugin vulnerability and one that does not. WordPress
+// itself never needs a direct request to a file under wp-content: the front
+// controller is index.php and admin-ajax.php is under wp-admin. If nothing on
+// the site breaks in staging with this on, leave it on.
+//
+//	waf, err := gwaf.New(gwaf.WithRuleset(
+//	    rules.Set{core.WordPressHardeningRule(1011)},
+//	))
+//
+// Only the extra rule: WithRuleset accumulates onto the default set rather than
+// replacing it.
+func WordPressHardeningRule(id types.RuleID) rules.Rule {
+	return rules.Rule{
+		ID:         id,
+		Phase:      types.PhaseRequestHeaders,
+		Targets:    []types.Target{{Kind: types.TargetRequestURI}},
+		Transforms: pathChain,
+		Op:         phpUnderWPContent(),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.High,
+		Msg:        "Direct PHP execution under wp-content",
+		Tags:       []string{"rce", "webshell", "wordpress", "opt-in"},
+	}
+}
+
+// phpUnderWPContent reports a request for a PHP file anywhere under wp-content.
+func phpUnderWPContent() rules.Operator {
+	exts := []string{".php", ".php3", ".php4", ".php5", ".php7", ".php8",
+		".phps", ".phtml", ".pht", ".phar", ".inc"}
+	return op.Func("php_under_wp_content", func(v []byte) bool {
+		if indexOf(v, "/wp-content/") < 0 {
+			return false
+		}
+		path := v
+		for i := 0; i < len(path); i++ {
+			if path[i] == '?' || path[i] == '#' {
+				path = path[:i]
+				break
+			}
+		}
+		for len(path) > 0 && (path[len(path)-1] == '.' || path[len(path)-1] == ' ') {
+			path = path[:len(path)-1]
+		}
+		for _, e := range exts {
+			if len(path) >= len(e) && string(path[len(path)-len(e):]) == e {
+				return true
+			}
+			if indexOf(path, e+"/") >= 0 {
+				return true
+			}
+		}
+		return false
+	}).WithLiterals("/wp-content/")
 }

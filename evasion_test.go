@@ -497,6 +497,40 @@ var evasions = []evasion{
 	{name: "crlf/set-cookie", optIn: true, technique: "urlencode", target: "/r?u=/x%0d%0aSet-Cookie:%20admin=1"},
 	{name: "crlf/location", optIn: true, technique: "urlencode", target: "/r?u=%0d%0aLocation:%20http://evil.example.com"},
 	{name: "crlf/lf only", optIn: true, technique: "urlencode", target: "/r?u=%0aContent-Type:%20text/html"},
+
+	// ---- file upload, and executing what landed ----------------------------
+	//
+	// The upload half is largely covered already, because the detectors read the
+	// file *content* and a web shell is PHP whatever the filename claims. These
+	// cases exist to keep it that way, and to cover the second half: a file that
+	// arrived before gwaf was deployed, through a plugin it does not sit in
+	// front of, or with stolen credentials, is already on disk. Requesting it is
+	// the step that turns it into code.
+	{name: "upload/shell in wp uploads", technique: "none", target: "/wp-content/uploads/2026/08/shell.php"},
+	{name: "upload/phtml in uploads", technique: "none", target: "/wp-content/uploads/x.phtml"},
+	{name: "upload/phar in uploads", technique: "none", target: "/wp-content/uploads/payload.phar"},
+	{name: "upload/trailing dot", technique: "none", target: "/wp-content/uploads/shell.php."},
+	{name: "upload/path-info suffix", technique: "none", target: "/uploads/shell.php/x.jpg"},
+	{name: "upload/drupal files dir", technique: "none", target: "/sites/default/files/shell.php"},
+	{name: "upload/generic uploads dir", technique: "none", target: "/public/uploads/cmd.php"},
+	{name: "upload/jsp in uploads", technique: "none", target: "/uploads/shell.jsp"},
+	{name: "upload/encoded extension", technique: "urlencode", target: "/wp-content/uploads/shell%2Ephp"},
+	{name: "upload/wp-content php direct", optIn: true, technique: "none",
+		target: "/wp-content/plugins/hello/shell.php"},
+	{name: "upload/wp-content theme php", optIn: true, technique: "none",
+		target: "/wp-content/themes/twenty/x.php"},
+
+	// ---- server configuration smuggled in as an upload ----------------------
+	{name: "htaccess/addtype php", technique: "body",
+		body: `{"name":".htaccess","content":"AddType application/x-httpd-php .jpg"}`},
+	{name: "htaccess/sethandler", technique: "body",
+		body: `{"content":"SetHandler application/x-httpd-php"}`},
+	{name: "htaccess/addhandler", technique: "body",
+		body: `{"content":"AddHandler php5-script .gif"}`},
+	{name: "htaccess/php_value", technique: "body",
+		body: `{"content":"php_value auto_prepend_file /tmp/x"}`},
+	{name: "htaccess/exec cgi", technique: "body",
+		body: `{"content":"Options +ExecCGI\nSetHandler cgi-script"}`},
 }
 
 // urlEncodeQ percent-encodes a GraphQL document for the GET form the
@@ -838,6 +872,8 @@ var declaredClasses = map[string]int{
 	"phpeval":   5,
 	"rfi":       4,
 	"crlf":      3,
+	"upload":    9,
+	"htaccess":  5,
 }
 
 // classOf returns the attack class a case belongs to, taken from its name.
@@ -963,6 +999,7 @@ func TestEvasionCorpus(t *testing.T) {
 	wOpt := newWAF(t, gwaf.WithRuleset(rules.Set{
 		core.CRLFHeaderRule(1007),
 		core.LoopbackSSRFRule(11003),
+		core.WordPressHardeningRule(1011),
 	}))
 
 	byTechnique := map[string]struct{ caught, total int }{}

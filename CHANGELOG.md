@@ -55,6 +55,30 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Added
 
+- **File-upload attacks, both halves.** Prompted by a real compromise: an
+  attacker writing files into a WordPress install.
+
+  Blocking the *upload* was already strong — 14 of 16 evasions failed, including
+  double extensions, `shell.php\x00.jpg`, uppercase `.PHP`, trailing dot and
+  space, `.phar`, and a plugin zip — because the detectors read the file content
+  and a web shell is PHP whatever the filename claims.
+
+  What was missing is the half that still matters after the first has failed:
+
+  - **Rule 1010, script execution inside an upload directory.** A file that
+    arrived before gwaf was deployed, through a plugin it does not sit in front
+    of, or with stolen credentials, is already on disk. Requesting it is the
+    step that turns a file into code, and that request gwaf can always see.
+    Deliberately narrow: a script under a directory whose purpose is
+    user-supplied content, not "a PHP file", which would block WordPress itself.
+  - **Rule 4015, server configuration directives in an uploaded value.** The
+    answer to an upload filter that blocks `.php` is to upload a `.htaccess`
+    saying `AddType application/x-httpd-php .jpg` and then upload the shell as
+    an image. Both files are individually permitted; together they are RCE.
+  - **`core.WordPressHardeningRule`** (opt-in) extends 1010 to all of
+    `wp-content`. Not default: a minority of plugins expose endpoints by having
+    the browser request their PHP file directly.
+
 - **Positive security now covers what no signature can.** A broad simulation
   (WordPress, malware droppers, CVE exploitation, nginx/Apache/cPanel, Go, Java,
   DDoS, AMP/host spoofing, and gambling-platform abuse) showed the gap is not
