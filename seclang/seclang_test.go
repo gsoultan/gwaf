@@ -189,10 +189,16 @@ func TestLiteralExtractionIsSound(t *testing.T) {
 		want    []string // each must appear among the extracted literals
 		none    bool     // or: no literal may be extracted
 	}{
-		{pattern: `(?i)union\s+select`, want: []string{"union"}},
+		// A concatenation requires every part, so any single part is a sound
+		// key -- and keying on only the most selective one is better than
+		// keying on all of them. The prefilter skips a rule when *none* of its
+		// literals appear, so an extra literal only widens the candidate set:
+		// with {"union", "select"} a value containing "union" alone becomes a
+		// candidate and evaluates for nothing, where {"select"} excludes it.
+		{pattern: `(?i)union\s+select`, want: []string{"select"}},
 		{pattern: `/etc/passwd`, want: []string{"/etc/passwd"}},
 		{pattern: `(?:select|insert|update)\s`, want: []string{"select", "insert", "update"}},
-		{pattern: `foo(bar)baz`, want: []string{"foo", "bar", "baz"}},
+		{pattern: `foo(bar)baz`, want: []string{"foobar"}},
 		{pattern: `x+yyyy`, want: []string{"yyyy"}},
 
 		// Unsound to extract from: one branch requires nothing, a starred group

@@ -173,7 +173,7 @@ func writeRule(b *strings.Builder, r *rules.Rule) error {
 func renderOperator(o rules.Operator) (string, error) {
 	switch v := o.(type) {
 	case *regexOperator:
-		return "seclang.MustRegex(" + strconv.Quote(v.src) + ")", nil
+		return "seclang.MustRegex(" + strconv.Quote(v.Pattern()) + ")", nil
 	}
 
 	// Literal operators are rendered from their declared literals, which is
