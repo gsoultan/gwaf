@@ -5,9 +5,10 @@ An embeddable, Go-native Web Application Firewall **library**.
 > Every other WAF is an interpreter. gwaf is a compiler.
 
 Rules, schemas, and route policies are inputs to an optimizer that emits a specialized, pointer-free
-execution plan. Requests stream through it in a single pass — transformations folded into the
-matcher, ambiguous encodings evaluated as a lattice rather than a loop, work metered in deterministic
-fuel rather than wall-clock.
+execution plan. A literal prefilter decides what to evaluate before any rule runs, transform chains
+are computed once and shared by every rule that needs them, ambiguous input is evaluated *every*
+plausible way rather than guessed at, and work is metered in deterministic fuel rather than
+wall-clock.
 
 **Status: M1 — compiler core.** The engine works and is tested; see
 [docs/PLAN.md](docs/PLAN.md) for what is built and what is next.
@@ -28,13 +29,17 @@ embedding into something that is not `net/http`.
 
 ## Measured, not claimed
 
-Apple M5 Pro, Go 1.26.5, full core ruleset. Reproduce with `make bench`.
+darwin/arm64, Go 1.26.5, full core ruleset (66 rules), 200,000 samples per
+workload. Reproduce with `make bench-publish`.
 
-| Workload | Latency | Allocations |
-|---|---|---|
-| Benign `GET` | **1.76 µs** | **0** |
-| Benign `POST`, 1 KiB JSON | **18.5 µs** | **0** |
-| Attack (blocked at header phase) | **1.47 µs** | 3 |
+| Workload | p50 | p99 | Allocations |
+|---|---|---|---|
+| Benign `GET`, no body | **917 ns** | 1.29 µs | **0** |
+| Benign `POST`, 1 KiB JSON | **13.5 µs** | 18.0 µs | **0** |
+| Attack (blocked at header phase) | **708 ns** | 958 ns | **0** |
+
+Percentiles rather than means, because a mean hides the request that took forty
+times longer — and that request is the one an attacker is trying to produce.
 
 Request bodies are **decompressed first** (gzip, deflate, zlib — stdlib only),
 and an encoding gwaf cannot decode is reported rather than passed through: a
@@ -56,8 +61,16 @@ is precisely CVE-2026-21876.
 
 | | |
 |---|---|
-| Evasion corpus | **76/76 blocked (100%)** |
-| Benign corpus | **0/72 false positives (0.00%)** |
+| Evasion corpus | **216/216 blocked (100%)** across 25 attack classes |
+| False-positive corpus | **0/124 (0.00%)** |
+| Calibration corpus | **10,430 benign requests**, every rule inside its declared tier |
+
+The evasion corpus is organised as *attack class × evasion technique*, and a
+class gwaf claims to detect with too few cases behind the claim **fails the
+build**. That check exists because it was needed: a technique-only corpus once
+reported 76/76 while template, NoSQL, and LDAP injection each scored 0/0 — and
+0/0 does not appear in a percentage. The same blind spot reappeared later one
+level up, when the class *list* was the thing with the hole.
 
 **SQL injection and XSS are detected structurally**, by grammar rather than by
 signature.
@@ -70,7 +83,16 @@ not. Both of those were **false positives** under the literal rules this
 replaced.
 
 Seven literal rules were deleted and two structural detectors added. Detection
-stayed at 76/76 and two real false positives went away.
+did not drop and two real false positives went away.
+
+**What is covered**, beyond SQL injection and XSS: command, template, NoSQL,
+LDAP, and expression-language injection; path traversal and local/remote file
+inclusion; XXE; Log4Shell including the `${${lower:j}ndi:` nesting no substring
+of `jndi` survives; Spring4Shell; PHP object injection and Java deserialization;
+SSRF against cloud metadata; prototype pollution; GraphQL depth, complexity, and
+alias amplification; gRPC and protobuf payloads; and **file upload in both
+halves** — the web shell going in, and the request that would execute one
+already on disk.
 
 The evasion corpus covers case variation, whitespace splitting, single and
 double percent-encoding, overlong UTF-8, NUL truncation, backslash separators,
@@ -82,10 +104,10 @@ false-positive rate beside it.
 
 | | With schema | Without |
 |---|---|---|
-| Latency | **1.49 µs** | 2.28 µs |
-| Work performed (fuel) | **314** | 710 |
+| Latency | **950 ns** | 1.58 µs |
+| Work performed (fuel) | **185** | 610 |
 
-29% faster, 56% less work, *and* stricter — every out-of-spec request rejected
+40% faster, 70% less work, *and* stricter — every out-of-spec request rejected
 before a rule runs. A field declared an integer that validates as one cannot
 contain `UNION SELECT`, so those rules are skipped soundly rather than
 heuristically. **Specifying your API makes gwaf both faster and safer.**
@@ -94,10 +116,10 @@ heuristically. **Specifying your API makes gwaf both faster and safer.**
 
 | Rules | Latency | Rules evaluated |
 |---|---|---|
-| 10 | 339 ns | 0 |
-| 100 | 344 ns | 0 |
-| 1,000 | 364 ns | 0 |
-| 10,000 | **346 ns** | **0** |
+| 10 | 233 ns | 0 |
+| 100 | 234 ns | 0 |
+| 1,000 | 233 ns | 0 |
+| 10,000 | **233 ns** | **0** |
 
 A thousand-fold larger ruleset costs the same. Rules evaluated per request is
 a small constant independent of ruleset size — zero for values containing no
@@ -127,21 +149,61 @@ attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
 | [GATEON-MIGRATION.md](docs/GATEON-MIGRATION.md) | First adopter: replacing Coraza |
 | [CLAUDE.md](CLAUDE.md) | Project guidelines, structure, standards |
 
-## Performance
+## Positive security: what no signature can catch
 
-| | p50 | p99 | allocations |
-|---|---|---|---|
-| Benign GET, no body | 875 ns | 1.0 µs | 0 |
-| Benign POST, 1 KiB JSON | 13.2 µs | 15.8 µs | 0 |
-| Blocked SQL injection | 709 ns | 875 ns | 0 |
+A signature answers *"does this value look like an attack?"*. Some of the most
+expensive attacks do not look like anything. A stake of `-5000` is a valid
+number, `"BTC"` is a valid currency string, and `/phpmyadmin/index.php` is a
+valid path — they are attacks only because *your* application does not accept
+them, and only your application can say so.
 
-Ruleset scaling is flat from 10 to 10,000 rules (245 → 239 ns), because the
-prefilter decides what to evaluate before any rule runs. Detection is 132/132 on
-the evasion corpus with 0/124 false positives, measured on the same build.
+```go
+api, _ := schema.New(schema.Operation{
+    Method: "POST", Path: "/api/v1/bets", Strict: true,
+    Body: []schema.Field{
+        {Name: "event_id", Kind: schema.KindString,
+            Format: schema.FormatUUID, Required: true},
+        {Name: "stake", Kind: schema.KindNumber, Required: true,
+            Min: schema.Bound(0.01), Max: schema.Bound(10_000)},
+        {Name: "currency", Kind: schema.KindEnum,
+            Enum: []string{"USD", "EUR", "GBP"}},
+    },
+})
+api.Closed()   // anything matching no operation is rejected
 
-Percentiles rather than means, because a mean hides the request that took forty
-times longer — and that request is the one an attacker is trying to produce.
-Methodology, hardware, re-run instructions, and what these numbers **do not**
+waf, _ := gwaf.New(gwaf.WithSchema(api))
+```
+
+That rejects a negative stake, an integer-overflow payout, an unsupported
+currency, a smuggled `is_admin` field, a missing required field — and every
+reconnaissance probe for a route this API does not have, without naming a single
+product. [`examples/positivesecurity`](examples/positivesecurity) runs all of it
+and is a test, so the claims stay true.
+
+Read [`Schema.Closed`](schema/schema.go) before enabling it: a closed schema is
+only correct once the schema is complete.
+
+## Optional rules
+
+Everything in the core ruleset is `Certain` or `High` confidence, so
+`gwaf.New()` blocks without a tuning phase. Rules that are *right for most
+deployments but not all* ship exported instead of enabled, with the trade
+documented at the point of use:
+
+| Rule | Why it is opt-in |
+|---|---|
+| `core.WordPressHardeningRule` | blocks all direct PHP under `wp-content`; a minority of plugins expose endpoints that way |
+| `core.LoopbackSSRFRule` | `localhost` and `127.0.0.1` are ordinary in CI, staging, and webhook targets |
+| `core.CRLFHeaderRule` | needs a transform chain no other rule shares — measured at 8% of the latency budget |
+| `graphql.IntrospectionRule` | introspection is how every GraphQL development tool discovers a schema |
+
+```go
+waf, _ := gwaf.New(gwaf.WithRuleset(rules.Set{core.WordPressHardeningRule(1011)}))
+```
+
+`WithRuleset` *accumulates* onto the default set — pass only the extra rules.
+
+Methodology, hardware, re-run instructions, and what the numbers **do not**
 show: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). One command reproduces them:
 
 ```
@@ -171,7 +233,12 @@ dependencies**, and that is the one property no competing WAF library offers.
 | `middleware` | so a framework adapter never reaches core |
 | `adapters/{gin,echo,fiber}` | your router is your choice, not gwaf's |
 | `schema/openapi` | YAML needs a parser core will not carry |
+| `schema/grpc` | protobuf descriptors need `google.golang.org/protobuf` |
 | `seclang` | CRS migration links a regex engine |
+
+`staticcheck` and `govulncheck` run over **every** module in `make check`, not
+just core — core is the one module that cannot have a dependency CVE, so
+scanning it alone would scan the wrong place.
 
 ## Writing your own rules
 
