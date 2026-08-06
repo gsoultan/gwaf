@@ -108,26 +108,33 @@ Skip the middleware; drive the transaction directly. This is the API for gateway
 anything that isn't `net/http`.
 
 ```go
-tx := waf.NewTransaction(ctx)
+tx := waf.NewTransaction()
 defer tx.Close()                                   // returns the arena to the pool
 
-tx.SetClient(clientIP, clientPort)
-tx.SetRequest(method, uri, proto)
+tx.SetRemoteAddr(remoteAddr)                       // "host:port"
+tx.SetRequestLine(method, target, proto)           // target includes the query
 for k, v := range headers {
 	tx.AddRequestHeader(k, v)
 }
+
+// Anything the platform knows and gwaf cannot -- a reputation score, a tenant,
+// a fingerprint -- is registered here, per transaction. The engine calls a
+// resolver only when a rule in the phase actually reads it.
+tx.AddResolver(myReputationResolver)
 
 if d := tx.ProcessRequestHeaders(); d.Blocked() {
 	return respond(d)                              // body never read, never parsed
 }
 
-for chunk := range bodyChunks {
-	if d, err := tx.WriteRequestBody(chunk); err != nil {
-		return err
-	} else if d.Blocked() {
-		return respond(d)                          // stop reading from the client
-	}
-}
+// The request body is supplied whole, bounded by Limits.MaxBodySize. Read one
+// byte past that bound and hand over what you read: a body truncated to exactly
+// the limit is one the engine accepts and inspects, while the remainder reaches
+// the origin uninspected.
+tx.SetRequestBody(body)
+
+// Run this phase even when there is no body. Query arguments are recorded by
+// SetRequestLine and stay visible here, so a rule targeting ARGS only fires if
+// the phase is evaluated.
 if d := tx.ProcessRequestBody(); d.Blocked() {
 	return respond(d)
 }
@@ -153,37 +160,30 @@ the body is never read off the socket, never parsed, never transformed.
 
 Two shapes, and the right one depends on how much tenants differ.
 
-**Shared base + per-tenant overlay** — preferred. The base ruleset is compiled once, mmap'd, and
-shared; each tenant contributes a small delta.
+**Shared base + per-tenant overlay** — *planned, not yet shipped.* `rules.Overlay` and
+`gwaf.WithOverlay` do not exist in v0.1.x. The intent is that a base ruleset is compiled once and
+shared while each tenant contributes a small delta, so 10,000 tenants cost one base plus 10,000
+deltas rather than 10,000 rulesets. Until it lands, use separate instances.
 
-```go
-base := rules.MustCompileFile("rulesets/base.gwafc")   // ~16 MB, one resident copy
-
-tenant := rules.Overlay{
-	Base:       base,
-	Add:        tenantRules,
-	Exceptions: tenantExceptions,
-	Policies:   tenantPolicies,
-}
-waf, err := gwaf.New(gwaf.WithOverlay(tenant))
-```
-
-10,000 tenants cost one base ruleset plus 10,000 small deltas — not 10,000 rulesets. Because the
-compiled plan is pointer-free and off-heap (CONCEPT.md §5, §7), the base contributes nothing to GC.
-
-**Separate `WAF` instances** — when tenants need entirely different detectors or schemas. This is
-why "no global state" is a hard rule in CLAUDE.md §2b: N instances in one process, fully isolated,
-is a supported configuration, not an accident.
+**Separate `WAF` instances** — the shipped answer today, and the right one whenever tenants need
+entirely different detectors or schemas. This is why "no global state" is a hard rule in
+CLAUDE.md §2b: N instances in one process, fully isolated, is a supported configuration, not an
+accident.
 
 ### Hot reload
 
 ```go
-rs, err := rules.CompileFile("rules/prod.yaml")   // validate off the hot path
+// Compile off the hot path. A ruleset that does not compile never goes live.
+rs, err := waf.Compile(newRuleSet)                // newRuleSet is a rules.Set
 if err != nil {
-	return err                                    // bad ruleset never goes live
+	return err
 }
 waf.SwapRuleset(rs)                               // atomic; cannot fail
 ```
+
+Compilation is separate from installation on purpose: `Compile` is the fallible half and returns a
+`*rules.Ruleset`, so `SwapRuleset` has nothing left to reject. A ruleset that does not compile can
+never reach traffic.
 
 The library never watches files or polls. *When* to reload is your decision — file watcher, control
 plane push, SIGHUP, whatever your platform already does.
@@ -232,7 +232,9 @@ your customers can write `op: { threat_intel: ... }` in YAML against *your* oper
 the "no UI, ever" rule: we don't build the dashboard, we make yours possible.
 
 ```go
-gwaf.WithEventSink(mySink)     // structured decisions, matched spans, transform chains
+gwaf.OnDecision(func(d gwaf.Decision) {   // every decision, as it is reached
+	myControlPlane.Record(d)              // d.LogValue() is slog-ready
+})
 
 exp := d.Explain()             // same data `gwaf explain` prints — as a struct
 exp.RuleID()                   // what fired
