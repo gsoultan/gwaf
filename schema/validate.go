@@ -16,6 +16,7 @@ const (
 	ViolationLength
 	ViolationUndeclared
 	ViolationMissing
+	ViolationRange
 )
 
 // String implements fmt.Stringer.
@@ -33,6 +34,8 @@ func (v Violation) String() string {
 		return "undeclared_parameter"
 	case ViolationMissing:
 		return "missing_required_parameter"
+	case ViolationRange:
+		return "out_of_range"
 	default:
 		return "none"
 	}
@@ -57,9 +60,15 @@ func Validate(f Field, value []byte) Violation {
 		if !isInteger(value) {
 			return ViolationType
 		}
+		if v := inRange(f, value); v != ViolationNone {
+			return v
+		}
 	case KindNumber:
 		if !isNumber(value) {
 			return ViolationType
+		}
+		if v := inRange(f, value); v != ViolationNone {
+			return v
 		}
 	case KindBoolean:
 		if !isBoolean(value) {
@@ -412,4 +421,78 @@ func ParseFormat(s string) (Format, bool) {
 	default:
 		return FormatNone, false
 	}
+}
+
+// inRange checks a numeric value against the field's declared bounds.
+//
+// Parsing happens only when a bound is declared, so a field with no Min or Max
+// costs one nil check and nothing else -- which matters because Validate runs
+// on every value of every request.
+func inRange(f Field, value []byte) Violation {
+	if f.Min == nil && f.Max == nil {
+		return ViolationNone
+	}
+	n, ok := parseFloat(value)
+	if !ok {
+		// isInteger/isNumber already accepted it, so a parse failure here means
+		// the value is outside float64's range -- which is out of any bound an
+		// author could sensibly have written.
+		return ViolationRange
+	}
+	if f.Min != nil && n < *f.Min {
+		return ViolationRange
+	}
+	if f.Max != nil && n > *f.Max {
+		return ViolationRange
+	}
+	return ViolationNone
+}
+
+// parseFloat converts a validated numeric literal without allocating.
+//
+// The input has already passed isInteger or isNumber, so the grammar is known:
+// an optional sign, digits, an optional fraction, an optional exponent. It
+// reports false when the magnitude runs past what float64 can hold, which is
+// the integer-overflow case the range check exists to catch.
+func parseFloat(v []byte) (float64, bool) {
+	i, neg := 0, false
+	if i < len(v) && (v[i] == '+' || v[i] == '-') {
+		neg = v[i] == '-'
+		i++
+	}
+	var n float64
+	digits := 0
+	for i < len(v) && v[i] >= '0' && v[i] <= '9' {
+		n = n*10 + float64(v[i]-'0')
+		digits++
+		i++
+		if digits > 17 {
+			return 0, false
+		}
+	}
+	if i < len(v) && v[i] == '.' {
+		i++
+		scale := 1.0
+		for i < len(v) && v[i] >= '0' && v[i] <= '9' {
+			scale /= 10
+			n += float64(v[i]-'0') * scale
+			digits++
+			i++
+			if digits > 17 {
+				return 0, false
+			}
+		}
+	}
+	if i < len(v) && (v[i] == 'e' || v[i] == 'E') {
+		// An exponent can express a magnitude no bound anticipates; treat it as
+		// unparseable rather than guessing.
+		return 0, false
+	}
+	if i != len(v) || digits == 0 {
+		return 0, false
+	}
+	if neg {
+		n = -n
+	}
+	return n, true
 }

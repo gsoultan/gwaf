@@ -92,6 +92,52 @@ func emitAdjacent(emit func(request)) {
 			fmt.Sprintf(`{"filename":"file-%d.bin","data":%q}`, i+1, b))
 	}
 
+	// File-storage traffic. This is the archetype the corpus did not have when
+	// IDBackupArtifact was written, and its absence is exactly why that rule
+	// ships at High while IDExposedArtifact ships at Certain: nobody serves
+	// "/.git/config" deliberately, but "notes.bak" is a file somebody saved.
+	for i, f := range []string{
+		"quarterly-notes.bak", "schema-2026.sql", "draft.old",
+		"budget.orig", "session.save", "export.dump",
+	} {
+		emit(request{Name: fmt.Sprintf("stored file %d", i+1), Method: "GET",
+			Target: fmt.Sprintf("/api/v1/files/%s", f)})
+	}
+
+	// A multi-line text field. The CRLF rule matches a break *followed by a
+	// header name*, and these are the ordinary newlines that prove a bare break
+	// is not enough on its own.
+	for i, t := range []string{
+		"Line one.\nLine two.\nRegards,\nSam",
+		"Steps:\r\n1. open the app\r\n2. tap settings\r\n3. sign out",
+		"Address:\n12 Example Street\nSuite 4\nExampleton",
+	} {
+		json(fmt.Sprintf("multiline note %d", i+1), "/api/v1/notes",
+			fmt.Sprintf(`{"text":%q,"author_id":%d}`, t, 300+i))
+	}
+
+	// URLs in parameters that are not remote file inclusion. The RFI predicate
+	// needs a scheme *and* a script extension, and these have only the scheme.
+	for i, u := range []string{
+		"https://cdn.example.com/avatars/u1.png",
+		"https://hooks.example.com/callback?id=9",
+		"https://docs.example.com/guide/index.html",
+	} {
+		json(fmt.Sprintf("callback url %d", i+1), "/api/v1/integrations",
+			fmt.Sprintf(`{"kind":"webhook","target":%q}`, u))
+	}
+
+	// Java and PHP vocabulary in prose, which the expression-language and
+	// dynamic-eval rules must not read as an expression.
+	for i, t := range []string{
+		"The report runs java.lang.String.format on every row.",
+		"We removed the last create_function call during the PHP 8 upgrade.",
+		"Jackson needs default typing disabled; see the deserialization ticket.",
+	} {
+		json(fmt.Sprintf("technical note %d", i+1), "/api/v1/notes",
+			fmt.Sprintf(`{"text":%q,"author_id":%d}`, t, 400+i))
+	}
+
 	// Colon-separated values that are not PHP serialization. The predicate
 	// requires a digit run and the right delimiter, and these are what would
 	// notice if that ever loosened into "contains a colon".

@@ -55,6 +55,17 @@ const (
 	IDSensitiveFile     types.RuleID = 1003
 	IDNullByteInjection types.RuleID = 1005
 	IDTraversalRepeated types.RuleID = 1004
+	IDExposedArtifact   types.RuleID = 1006
+	IDBackupArtifact    types.RuleID = 1008
+
+	// 1007 is CRLFHeaderRule and is deliberately NOT here. It is the only rule
+	// needing a transform chain that keeps line breaks, and a chain nobody else
+	// shares is materialised over every value of every request: benign POST JSON
+	// measured 15.4us with it and 14.2us without, against a 15us SLO. One rule
+	// cannot spend 8% of the latency budget on requests it cannot match.
+	//
+	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007)}))
+	IDConfigTraversal types.RuleID = 1009
 	// 2001-2004 were literal SQL injection rules: tautology, UNION SELECT,
 	// comment sequences, and stacked statements. All four are superseded by
 	// IDSQLiSemantic, which recognises the same constructs by grammar and
@@ -104,6 +115,10 @@ const (
 	IDJavaDeserialization types.RuleID = 4008
 	IDSpring4Shell        types.RuleID = 4009
 	IDShelliSemantic      types.RuleID = 4010
+	IDExpressionLanguage  types.RuleID = 4011
+	IDJavaGadgetClass     types.RuleID = 4012
+	IDPHPDynamicEval      types.RuleID = 4013
+	IDRemoteFileInclusion types.RuleID = 4014
 	IDSQLiSemantic        types.RuleID = 2010
 	IDXSSSemantic         types.RuleID = 3010
 	IDScannerUserAgent    types.RuleID = 5001
@@ -579,6 +594,214 @@ func requestRules() rules.Set {
 			Confidence: types.High,
 			Msg:        "PHP code in request value",
 			Tags:       []string{"rce", "upload", "owasp-a03"},
+		},
+		{
+			ID:      IDExposedArtifact,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: []types.Target{{Kind: types.TargetRequestURI}},
+			// Path only, deliberately. "Keep wp-config.php outside the web root"
+			// is a sensible thing to write in a code review comment, and a rule
+			// that read argument values would block the sentence along with the
+			// request. What matters is that the *path being fetched* names one
+			// of these, not that the string appeared somewhere.
+			Transforms: pathChain,
+			// Files that exist on the server by accident and disclose it when
+			// fetched: version-control metadata, environment files, editor and
+			// deployment leftovers, and the status handlers that ship enabled.
+			//
+			// None of these is an injection. They are the reconnaissance step
+			// that precedes one, and they are worth blocking because a request
+			// for /.git/config is never a user doing anything.
+			Op: op.ContainsAny(
+				"/.git/", "/.svn/", "/.hg/", "/.bzr/",
+				"/.env", "/.htpasswd", "/.htaccess", "/web.config",
+				"/.npmrc", "/.dockercfg", "/.docker/config.json",
+				"/wp-config.php", "/configuration.php", "/.ds_store",
+				"/server-status", "/server-info", "/debug/pprof", "/debug/vars",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.Certain,
+			Msg:        "Request for an exposed configuration or metadata artifact",
+			Tags:       []string{"disclosure", "recon", "owasp-a05"},
+		},
+		{
+			ID:         IDBackupArtifact,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    []types.Target{{Kind: types.TargetRequestURI}},
+			Transforms: pathChain,
+			// Editor, backup, and dump leftovers, split from the rule above
+			// because they are a *weaker claim*. Nobody serves "/.git/config" on
+			// purpose, but "report-2026.sql" and "notes.bak" are ordinary
+			// filenames inside a file-storage product, a database tool, or a
+			// backup service, and those applications would be broken by a rule
+			// that ships at Certain.
+			//
+			// The corpus showed zero matches for both groups until a storage
+			// archetype was added to it; this rule then matched 6 of 10,430
+			// benign requests (0.058%), and the other one still matches none.
+			// That is the tier difference, measured rather than asserted.
+			//
+			// A file-storage or backup product should scope an exception to the
+			// route that serves user filenames -- the same answer detect/shelli
+			// gives a CI platform that carries shell commands as data. Reporting
+			// the finding is right; certainty about it is not available.
+			Op: op.ContainsAny(
+				".sql", ".sql.gz", ".bak", ".swp", ".swo",
+				".old", ".orig", ".save", ".backup", ".dump",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityWarning,
+			Confidence: types.High,
+			Msg:        "Request for a backup or editor leftover file",
+			Tags:       []string{"disclosure", "recon", "owasp-a05"},
+		},
+		{
+			ID:      IDConfigTraversal,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// decodeChain, not pathChain, and the reason is latency rather than
+			// taste. pathChain existed only on the request URI; applying it to
+			// arguments as well adds a (chain x target) combination, so every
+			// body field is materialised a second time through NormalizePath.
+			// That alone moved benign POST JSON from 13.4us to 16.5us and broke
+			// the 15us SLO, which the latency gate caught.
+			//
+			// Nothing is lost: the payload has no whitespace to compress, and
+			// NormalizePath would collapse the "../" this rule is looking for.
+			Transforms: decodeChain,
+			// A relative traversal that ends at an application config file.
+			//
+			// Neither half is enough alone, and that is the whole design. A
+			// single "../" is ordinary -- "../shared/2026/q3-summary.pdf" is a
+			// real relative path and the benign corpus contains ones like it --
+			// so traversal depth is not the signal. The filename alone is not
+			// either: "keep wp-config.php outside the web root" is a sensible
+			// code-review comment, and a rule matching the name would block the
+			// sentence.
+			//
+			// Together they are unambiguous. Nobody writes "../wp-config.php"
+			// into a parameter except to read the database credentials out of
+			// it, which is what made the TimThumb and Slider Revolution bugs
+			// mass compromises rather than curiosities.
+			Op:         configFileTraversal(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Traversal to an application configuration file",
+			Tags:       []string{"lfi", "disclosure", "owasp-a01"},
+		},
+		{
+			ID:         IDExpressionLanguage,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// OGNL, SpEL, and MVEL reaching the JVM. The template-injection
+			// detector already knows this vocabulary, but it only reads it
+			// *inside template delimiters*, and the expression languages that
+			// matter here arrive without any: Struts evaluates OGNL out of a
+			// Content-Type header (CVE-2017-5638) and Spring Cloud Function
+			// evaluates SpEL out of a routing expression (CVE-2022-22963).
+			//
+			// A class-literal reference to the Java runtime in a request value
+			// has no benign reading. It is not "a value that mentions Java", it
+			// is a value asking for Runtime.exec.
+			Op: op.ContainsAny(
+				"@java.lang.runtime@", "@ognl.ognlcontext@", "@java.lang.system@",
+				"t(java.lang.runtime)", "t(java.lang.system)",
+				// No space in "java.lang.processbuilder": the transform chain
+				// strips whitespace before matching, so "new java.lang.Process
+				// Builder(...)" arrives as one run of bytes. A literal written
+				// with the space in it matched nothing, and the corpus caught
+				// it -- which is the argument for adding the case before
+				// believing the rule.
+				"getruntime().exec", "java.lang.processbuilder",
+				"@org.apache.commons.io.ioutils@", "_memberaccess",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Expression-language injection reaching the JVM runtime",
+			Tags:       []string{"rce", "ognl", "spel", "owasp-a03"},
+		},
+		{
+			ID:         IDJavaGadgetClass,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Polymorphic deserialization: a document that names the class it
+			// wants instantiated. Jackson with default typing enabled, and
+			// several YAML and XML binders, will build whatever the input asks
+			// for -- so "@class": "com.sun.rowset.JdbcRowSetImpl" plus a
+			// dataSourceName pointing at an attacker's LDAP server is remote
+			// code execution written as configuration.
+			//
+			// The class names rather than the "@class" key, because the key is
+			// spelled differently by every library ("@class", "@type", "$type",
+			// "class") while the gadget set is small and shared. A request that
+			// names JdbcRowSetImpl is not doing anything else.
+			Op: op.ContainsAny(
+				"com.sun.rowset.jdbcrowsetimpl",
+				"org.springframework.context.support.classpathxmlapplicationcontext",
+				"org.springframework.context.support.filesystemxmlapplicationcontext",
+				"com.sun.org.apache.xalan.internal.xsltc.trax.templatesimpl",
+				"javax.management.badattributevalueexpexception",
+				"org.apache.commons.collections.functors",
+				"com.mchange.v2.c3p0.jndi",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Known deserialization gadget class in request value",
+			Tags:       []string{"rce", "deserialization", "java", "owasp-a08"},
+		},
+		{
+			ID:         IDPHPDynamicEval,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// PHP evaluating a string it was handed. The web shells all reduce
+			// to this: "@eval($_POST['pass'])" is China Chopper in its entirety,
+			// and the obfuscated droppers wrap it in one or two decoders so the
+			// payload survives a naive scan of the file.
+			//
+			// "eval(" alone is absent on purpose -- it is a word in JavaScript,
+			// in code-sharing sites, and in any discussion of this rule. What is
+			// matched is eval *with an error-suppressed or decoded argument*,
+			// which is a shape nobody writes deliberately.
+			Op: op.ContainsAny(
+				"@eval(", "eval(base64_decode(", "eval(gzinflate(",
+				"eval(gzuncompress(", "eval(str_rot13(", "assert(base64_decode(",
+				"create_function(", "@assert(", "preg_replace('/.*/e",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "PHP dynamic code evaluation in request value",
+			Tags:       []string{"rce", "webshell", "php", "owasp-a03"},
+		},
+		{
+			ID:         IDRemoteFileInclusion,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Remote file inclusion: a parameter whose value is a URL to a
+			// script. The vulnerable include() fetches it and the interpreter
+			// runs it, which is how TimThumb and a decade of plugin bugs became
+			// mass compromises.
+			//
+			// The predicate requires *both* halves -- an absolute URL and a
+			// script extension at its end -- because a parameter holding a URL
+			// is ordinary (callbacks, avatars, webhooks) and only the script
+			// extension makes it an inclusion. A trailing "?" or NUL is
+			// tolerated, since both are used to hide the extension from a naive
+			// suffix check while the interpreter still sees it.
+			Op:         remoteFileInclusion(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Remote file inclusion URL in request value",
+			Tags:       []string{"rce", "rfi", "owasp-a03"},
 		},
 		{
 			ID:         IDLog4ShellLookup,
@@ -1123,8 +1346,12 @@ func isWordByte(b byte) bool {
 // knows something gwaf cannot know from one request, so they opt in:
 //
 //	waf, err := gwaf.New(gwaf.WithRuleset(
-//	    append(core.Default(), core.LoopbackSSRFRule(11003)),
+//	    rules.Set{core.LoopbackSSRFRule(11003)},
 //	))
+//
+// Only the extra rule: WithRuleset accumulates onto the default set rather than
+// replacing it, so passing core.Default() as well defines every core rule twice
+// and fails to compile with a duplicate-ID error.
 //
 // The decimal and hexadecimal forms are included because 2130706433 and
 // 0x7f000001 are 127.0.0.1 to every URL parser and to no human reviewer.
@@ -1143,5 +1370,195 @@ func LoopbackSSRFRule(id types.RuleID) rules.Rule {
 		Confidence: types.Medium,
 		Msg:        "Loopback or link-local address in request value",
 		Tags:       []string{"ssrf", "owasp-a10", "opt-in"},
+	}
+}
+
+// crlfHeaderInjection reports a line break followed by something header-shaped.
+//
+// The pair is the point. A bare newline is ordinary in any multi-line text
+// field — a comment, a description, an address — so matching one would make
+// every textarea a false positive. A newline followed by "set-cookie:" is a
+// value that has been reflected into a response header and terminated it early,
+// and there is no benign way to write that.
+func crlfHeaderInjection() rules.Operator {
+	return op.Func("crlf_header_injection", func(v []byte) bool {
+		for i := 0; i < len(v); i++ {
+			if v[i] != '\r' && v[i] != '\n' {
+				continue
+			}
+			j := i
+			for j < len(v) && (v[j] == '\r' || v[j] == '\n') {
+				j++
+			}
+			// Optional leading space: header continuation lines are folded
+			// with one, and an attacker gets the same effect either way.
+			for j < len(v) && (v[j] == ' ' || v[j] == '\t') {
+				j++
+			}
+			// A header name is letters and hyphens, then a colon.
+			k := j
+			for k < len(v) && (v[k] >= 'a' && v[k] <= 'z' || v[k] == '-') {
+				k++
+			}
+			if k > j && k < len(v) && v[k] == ':' {
+				return true
+			}
+		}
+		return false
+	}).WithLiterals(
+		"\nset-cookie:", "\rset-cookie:", "\nlocation:", "\rlocation:",
+		"\ncontent-type:", "\rcontent-type:", "\ncontent-length:",
+		"\rcontent-length:", "\nrefresh:", "\nlink:",
+	)
+}
+
+// remoteFileInclusion reports a parameter value that is a URL to a script.
+//
+// Both halves are required. A parameter holding a URL is ordinary — avatars,
+// callbacks, webhook targets, canonical links — and only the script extension
+// at the end makes it something an include() would execute. Requiring the pair
+// is what keeps this at Certain instead of blocking every integration.
+func remoteFileInclusion() rules.Operator {
+	scheme := func(v []byte) int {
+		for _, s := range []string{"http://", "https://", "ftp://", "ftps://"} {
+			if len(v) >= len(s) && string(v[:len(s)]) == s {
+				return len(s)
+			}
+		}
+		return -1
+	}
+	return op.Func("remote_file_inclusion", func(v []byte) bool {
+		// The URL may be the whole value or follow an "=" inside it.
+		for start := 0; start < len(v); start++ {
+			if start > 0 && v[start-1] != '=' && v[start-1] != ',' {
+				continue
+			}
+			if scheme(v[start:]) < 0 {
+				continue
+			}
+			// Cut at the first byte that ends a path: "?" and NUL are both
+			// used to hide the extension from a suffix check while the
+			// interpreter still resolves it.
+			end := start
+			for end < len(v) && v[end] != '?' && v[end] != 0 && v[end] != '#' {
+				end++
+			}
+			path := v[start:end]
+			for _, ext := range []string{
+				".php", ".phtml", ".php3", ".php4", ".php5", ".php7", ".phps",
+				".inc", ".jsp", ".jspx", ".asp", ".aspx", ".cfm", ".cgi",
+			} {
+				if len(path) >= len(ext) && string(path[len(path)-len(ext):]) == ext {
+					return true
+				}
+			}
+		}
+		return false
+		// The hint is the *extension*, not the scheme, and the difference is
+		// measurable. Both halves must be present for the predicate to fire, so
+		// either could serve as the literal — but "http://" appears in a large
+		// share of ordinary JSON bodies (callbacks, avatars, canonical links),
+		// which would make this rule a prefilter candidate on traffic that has
+		// no chance of matching. The extensions are rare in benign values, so
+		// the automaton discards those requests before the predicate runs.
+		//
+		// Same rule, same matches, one fewer reason to wake up.
+	}).WithLiterals(
+		".php", ".phtml", ".php3", ".php4", ".php5", ".php7", ".phps",
+		".inc", ".jsp", ".jspx", ".asp", ".aspx", ".cfm", ".cgi",
+	)
+}
+
+// configFileTraversal reports a relative traversal that ends at an application
+// configuration file.
+//
+// The conjunction is the rule. "../" alone is an ordinary relative path and the
+// filename alone is an ordinary noun; only the pair says "read me the database
+// credentials". Requiring both is what lets this ship at Certain next to a
+// corpus that contains "../shared/2026/q3-summary.pdf" and a code-review
+// comment about wp-config.php.
+func configFileTraversal() rules.Operator {
+	names := []string{
+		"wp-config.php", "configuration.php", "config.php", "settings.php",
+		"config.inc.php", "database.php", "local.xml", "parameters.yml",
+		".env", "web.config", "app.config", "settings.py", "secrets.yml",
+	}
+	return op.Func("config_file_traversal", func(v []byte) bool {
+		// A traversal segment has to be present. pathChain has already
+		// normalised separators and case.
+		hasDotDot := false
+		for i := 0; i+2 < len(v); i++ {
+			if v[i] == '.' && v[i+1] == '.' && (v[i+2] == '/' || v[i+2] == '\\') {
+				hasDotDot = true
+				break
+			}
+		}
+		if !hasDotDot {
+			return false
+		}
+		for _, n := range names {
+			if indexOf(v, n) >= 0 {
+				return true
+			}
+		}
+		return false
+	}).WithLiterals(names...)
+}
+
+// indexOf is a small substring search over a byte view, kept here so the hot
+// path does not convert to string.
+func indexOf(hay []byte, needle string) int {
+	if len(needle) == 0 || len(hay) < len(needle) {
+		return -1
+	}
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		if hay[i] != needle[0] {
+			continue
+		}
+		if string(hay[i:i+len(needle)]) == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+// CRLFHeaderRule reports a line break followed by a header name in a request
+// value — response splitting, where the value is reflected into a response
+// header and terminates it early so everything after the break is a header the
+// attacker wrote.
+//
+// It is not in the default ruleset, and the reason is latency rather than
+// precision. Every other rule reads values through a chain that strips
+// whitespace; this one cannot, because the line break *is* the attack. A
+// transform chain no other rule shares gets materialised over every value of
+// every request, and measuring it was unambiguous: benign POST JSON with a 1
+// KiB body ran at 15.4µs with this rule in core and 14.2µs without, against a
+// 15µs SLO. One rule may not spend 8% of the budget on requests it cannot
+// match.
+//
+// Opt in where the origin reflects request values into response headers —
+// redirect targets, Location, Set-Cookie, custom correlation headers:
+//
+//	waf, err := gwaf.New(gwaf.WithRuleset(
+//	    rules.Set{core.CRLFHeaderRule(1007)},
+//	))
+//
+// Most Go services do not need it: net/http rejects a header value containing
+// CR or LF outright, so the origin cannot be split. It matters most in front of
+// PHP, older Java stacks, and anything writing headers by string concatenation.
+func CRLFHeaderRule(id types.RuleID) rules.Rule {
+	return rules.Rule{
+		ID:      id,
+		Phase:   types.PhaseRequestHeaders,
+		Targets: argTargets,
+		// URL-decoded and lowercased but never whitespace-stripped: a chain
+		// that removes the line break removes the evidence.
+		Transforms: []rules.Transform{transform.URLDecode, transform.Lowercase},
+		Op:         crlfHeaderInjection(),
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.Certain,
+		Msg:        "CRLF header injection in request value",
+		Tags:       []string{"response-splitting", "crlf", "owasp-a03", "opt-in"},
 	}
 }

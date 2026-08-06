@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/gsoultan/gwaf"
+	"github.com/gsoultan/gwaf/rules"
+	"github.com/gsoultan/gwaf/ruleset/core"
 	"github.com/gsoultan/gwaf/schema"
 )
 
@@ -268,10 +270,23 @@ func TestUnknownRouteFallsBackToFullInspection(t *testing.T) {
 // never reduce coverage elsewhere.
 func TestSchemaDoesNotWeakenTheEvasionCorpus(t *testing.T) {
 	w := newWAF(t, gwaf.WithSchema(ordersAPI(t, false)))
+	// Cases covered by an opt-in rule are replayed against a WAF that has it,
+	// for the same reason the evasion corpus does: this test asks whether a
+	// schema *weakens* detection, and measuring an opt-in case against a WAF
+	// that was never given the rule would answer a different question.
+	wOpt := newWAF(t, gwaf.WithSchema(ordersAPI(t, false)),
+		gwaf.WithRuleset(rules.Set{
+			core.CRLFHeaderRule(1007),
+			core.LoopbackSSRFRule(11003),
+		}))
 
 	missed := 0
 	for _, e := range evasions {
-		if d := runEvasion(t, w, e); !d.Blocked() {
+		target := w
+		if e.optIn {
+			target = wOpt
+		}
+		if d := runEvasion(t, target, e); !d.Blocked() {
 			missed++
 			t.Errorf("%s not blocked with a schema configured", e.name)
 		}

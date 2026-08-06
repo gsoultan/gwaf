@@ -10417,6 +10417,21 @@
 {"name":"adjacent/binary upload 1","method":"POST","target":"/api/v1/attachments","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"file-1.bin\",\"data\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\"}"}
 {"name":"adjacent/binary upload 2","method":"POST","target":"/api/v1/attachments","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"file-2.bin\",\"data\":\"JVBERi0xLjQKJcfsj6IKNSAwIG9iago8PC9MZW5ndGggNiAwIFI+PgpzdHJlYW0K\"}"}
 {"name":"adjacent/binary upload 3","method":"POST","target":"/api/v1/attachments","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"file-3.bin\",\"data\":\"UEsDBBQAAAAIAJ1jV1cAAAAAAAAAAAAAAAAJAAAAbWV0YS54bWw=\"}"}
+{"name":"adjacent/stored file 1","method":"GET","target":"/api/v1/files/quarterly-notes.bak"}
+{"name":"adjacent/stored file 2","method":"GET","target":"/api/v1/files/schema-2026.sql"}
+{"name":"adjacent/stored file 3","method":"GET","target":"/api/v1/files/draft.old"}
+{"name":"adjacent/stored file 4","method":"GET","target":"/api/v1/files/budget.orig"}
+{"name":"adjacent/stored file 5","method":"GET","target":"/api/v1/files/session.save"}
+{"name":"adjacent/stored file 6","method":"GET","target":"/api/v1/files/export.dump"}
+{"name":"adjacent/multiline note 1","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"Line one.\\nLine two.\\nRegards,\\nSam\",\"author_id\":300}"}
+{"name":"adjacent/multiline note 2","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"Steps:\\r\\n1. open the app\\r\\n2. tap settings\\r\\n3. sign out\",\"author_id\":301}"}
+{"name":"adjacent/multiline note 3","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"Address:\\n12 Example Street\\nSuite 4\\nExampleton\",\"author_id\":302}"}
+{"name":"adjacent/callback url 1","method":"POST","target":"/api/v1/integrations","headers":{"Content-Type":"application/json"},"body":"{\"kind\":\"webhook\",\"target\":\"https://cdn.example.com/avatars/u1.png\"}"}
+{"name":"adjacent/callback url 2","method":"POST","target":"/api/v1/integrations","headers":{"Content-Type":"application/json"},"body":"{\"kind\":\"webhook\",\"target\":\"https://hooks.example.com/callback?id=9\"}"}
+{"name":"adjacent/callback url 3","method":"POST","target":"/api/v1/integrations","headers":{"Content-Type":"application/json"},"body":"{\"kind\":\"webhook\",\"target\":\"https://docs.example.com/guide/index.html\"}"}
+{"name":"adjacent/technical note 1","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"The report runs java.lang.String.format on every row.\",\"author_id\":400}"}
+{"name":"adjacent/technical note 2","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"We removed the last create_function call during the PHP 8 upgrade.\",\"author_id\":401}"}
+{"name":"adjacent/technical note 3","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"Jackson needs default typing disabled; see the deserialization ticket.\",\"author_id\":402}"}
 {"name":"adjacent/notation note 1","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"a:2 ratio applies to the b:3 column\",\"author_id\":200}"}
 {"name":"adjacent/notation note 2","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"o:1 is the override flag; s:4 is the shard\",\"author_id\":201}"}
 {"name":"adjacent/notation note 3","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"timestamp 12:04:59, offset +07:00\",\"author_id\":202}"}

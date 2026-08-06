@@ -191,9 +191,33 @@ type Field struct {
 	// MaxLength bounds the value, in bytes. Zero means unbounded.
 	MaxLength int
 
+	// Min and Max bound a numeric field's value. They apply to KindInteger and
+	// KindNumber and are ignored otherwise. Both are pointers because zero is a
+	// meaningful bound: a stake of 0 and an unspecified minimum are different
+	// statements, and an int field cannot express the difference.
+	//
+	// These exist because type validation alone answers the wrong question. A
+	// stake of -5000 is a perfectly good number, and an API that only checks
+	// "is this a number" accepts a bet that pays the house's money out. The
+	// same is true of 9223372036854775807, which is a valid integer and an
+	// overflow in whatever multiplies it by the odds. OpenAPI has modelled
+	// minimum and maximum since Swagger 2.0; not carrying them across meant
+	// every range check stayed in application code, where a WAF cannot see it.
+	Min *float64
+	Max *float64
+
 	// Context describes how the origin uses the value.
 	Context Context
 }
+
+// Bound returns a pointer to v, for use with Field.Min and Field.Max.
+//
+//	schema.Field{Name: "stake", Kind: schema.KindNumber,
+//	    Min: schema.Bound(0.01), Max: schema.Bound(10_000)}
+//
+// It exists because Go has no literal for a pointer to a constant, and writing
+// a two-line helper at every call site is how a range check gets skipped.
+func Bound(v float64) *float64 { return &v }
 
 // Inert reports whether a value that has passed validation for this field is
 // provably incapable of carrying an injection payload.
@@ -262,12 +286,43 @@ type Operation struct {
 type Schema struct {
 	ops []Operation
 
+	// closed rejects requests that match no operation. Off by default: a schema
+	// is usually partial when it is first written, and a library that started
+	// blocking every undescribed route the moment one was described would
+	// punish the act of describing.
+	closed bool
+
 	// byMethodPath indexes literal (non-templated) routes for O(1) lookup.
 	// Templated routes fall back to a linear segment match, which is fine
 	// because they are a minority and the comparison is cheap.
 	literal   map[string]*Operation
 	templated []*Operation
 }
+
+// Closed makes the schema reject any request matching no operation, turning a
+// description of an API into the definition of it.
+//
+// This is the strongest form of positive security and the one that answers
+// reconnaissance. A ruleset would need to know every product on the internet to
+// block requests for /cpanel, /phpmyadmin, /mgmt/tm/util/bash, and whatever is
+// disclosed next month; a closed schema needs to know one API and rejects all
+// of them for the same reason, without naming any.
+//
+// It is opt-in because it is only correct when the schema is complete. Calling
+// it against a partial description blocks the routes nobody got round to
+// writing down yet, so it belongs at the end of an adoption, not the start:
+//
+//	api, err := schema.New(ops...)
+//	api.Closed()
+//
+// Returns the schema so it can be chained onto New in one expression.
+func (s *Schema) Closed() *Schema {
+	s.closed = true
+	return s
+}
+
+// IsClosed reports whether the schema rejects unmatched requests.
+func (s *Schema) IsClosed() bool { return s.closed }
 
 // New compiles operations into a Schema.
 func New(ops ...Operation) (*Schema, error) {
@@ -392,4 +447,40 @@ func FieldFor(fields []Field, name string) (Field, bool) {
 		}
 	}
 	return fallback, haveFallback
+}
+
+// IndexFor returns the position of a named parameter within a group, or -1.
+//
+// It exists so a caller can record *which* declared fields a request supplied
+// without allocating a set: the index becomes a bit in a mask. Unlike FieldFor
+// there is no empty-name fallback, because a fallback declaration describes a
+// shape rather than a specific parameter and cannot be "the one that was
+// missing".
+func IndexFor(fields []Field, name string) int {
+	for i := range fields {
+		if fields[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// MissingRequired returns the name of the first required field in fields whose
+// bit is clear in seen, or "" when every required field was supplied.
+//
+// seen is a bitmask over the first 64 declared fields. Operations with more
+// than 64 parameters are not checked past that point, which is stated rather
+// than silently true: the alternative is a per-request allocation on the hot
+// path, and no route in the corpus comes close to the limit.
+func MissingRequired(fields []Field, seen uint64) string {
+	n := len(fields)
+	if n > 64 {
+		n = 64
+	}
+	for i := 0; i < n; i++ {
+		if fields[i].Required && seen&(1<<uint(i)) == 0 {
+			return fields[i].Name
+		}
+	}
+	return ""
 }

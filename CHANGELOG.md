@@ -55,6 +55,36 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Added
 
+- **Positive security now covers what no signature can.** A broad simulation
+  (WordPress, malware droppers, CVE exploitation, nginx/Apache/cPanel, Go, Java,
+  DDoS, AMP/host spoofing, and gambling-platform abuse) showed the gap is not
+  always a missing rule. A stake of `-5000` is a valid number, `"BTC"` is a
+  valid string, and `/phpmyadmin/index.php` is a valid path; they are attacks
+  only because *this* application does not accept them.
+
+  - `schema.Field.Min` / `.Max` with `schema.Bound` — numeric range validation.
+    OpenAPI has modelled `minimum`/`maximum` since Swagger 2.0 and gwaf did not
+    carry them across, so every range check stayed in application code where a
+    WAF cannot see it. New violation: `ViolationRange`.
+  - **`Field.Required` is now enforced.** It was documented as "rejects the
+    request when the field is absent" and did nothing: `ViolationMissing` was
+    declared and never assigned. Tracked with a bitmask so the hot path still
+    allocates nothing.
+  - `Schema.Closed()` rejects requests matching no operation. A ruleset would
+    need to know every product on the internet to block `/cpanel`,
+    `/mgmt/tm/util/bash`, and whatever is disclosed next month; a closed schema
+    needs to know one API and rejects all of them without naming any. Opt-in,
+    because it is only correct once the schema is complete.
+  - `examples/positivesecurity` — runnable and tested, 15 rows.
+
+- **Ten rules for what the simulation showed was genuinely missing**: 1006
+  exposed artifacts (`/.git/`, `/.env`, `/.htpasswd`, `/server-status`,
+  `/debug/pprof`), 1008 backup and editor leftovers, 1009 traversal to an
+  application config file, 4011 OGNL/SpEL reaching the JVM (Struts2
+  CVE-2017-5638, Spring Cloud Function CVE-2022-22963), 4012 deserialization
+  gadget classes, 4013 PHP dynamic evaluation (the web-shell one-liners), 4014
+  remote file inclusion.
+
 - **Five attack classes that a simulation walked straight through**, found by
   replaying current real-world payloads rather than by reading the ruleset:
 
@@ -125,6 +155,14 @@ semver, and the four extension interfaces are frozen hard.
   `ProcessResponseHeaders`, `WriteResponseBody`, `ProcessResponseBody`.
 
 ### Changed
+
+- **`core.CRLFHeaderRule` ships opt-in rather than in core, on a measurement.**
+  It is the only rule needing a transform chain that preserves line breaks — the
+  break *is* the attack — and a chain no other rule shares is materialised over
+  every value of every request. Benign POST JSON measured 15.4µs with it in core
+  and 13.7µs without, against a 15µs SLO. One rule may not spend 8% of the
+  latency budget on requests it cannot match. The latency gate caught this; it
+  was not noticed by review.
 
 - **Rule 4003 matches the wrapper *scheme*, not a list of wrappers.** It carried
   `php://input` and `php://filter` and stopped there, so `phar://`, `zip://`,

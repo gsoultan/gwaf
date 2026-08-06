@@ -123,6 +123,13 @@ type Transaction struct {
 	// rejected with the reason rather than merely failing to match a rule.
 	violation  schema.Violation
 	violatedAt string
+
+	// bodySeen and querySeen are bitmasks over the operation's declared Body and
+	// Query fields, recording which the request actually supplied. A bitmask
+	// rather than a set because this runs on every request and the hot path
+	// allocates nothing.
+	bodySeen  uint64
+	querySeen uint64
 }
 
 // resolverState tracks whether a registered resolver has already been called.
@@ -152,6 +159,8 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.argCount = 0
 	tx.bodyLen = 0
 	tx.op = nil
+	tx.bodySeen = 0
+	tx.querySeen = 0
 	tx.violation = schema.ViolationNone
 	tx.violatedAt = ""
 	tx.bodyErr = nil
@@ -280,6 +289,13 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 	if s := tx.waf.cfg.schema; s != nil {
 		if op, ok := s.Lookup(method, path); ok {
 			tx.op = op
+		} else if s.IsClosed() && tx.violation == schema.ViolationNone {
+			// A closed schema defines the API rather than describing it, so a
+			// request matching no operation is not underspecified -- it is for
+			// a route that does not exist. This is what answers product-path
+			// reconnaissance without naming a single product.
+			tx.violation = schema.ViolationUndeclared
+			tx.violatedAt = path
 		}
 	}
 
@@ -913,6 +929,11 @@ func (tx *Transaction) checkBodySchema(name, value []byte) bool {
 		}
 		return false
 	}
+	// Record that this declared field was supplied, so a Required field that
+	// never arrives can be reported once the whole body has been read.
+	if i := schema.IndexFor(tx.op.Body, string(name)); i >= 0 && i < 64 {
+		tx.bodySeen |= 1 << uint(i)
+	}
 	if v := schema.Validate(f, value); v != schema.ViolationNone {
 		if tx.violation == schema.ViolationNone {
 			tx.violation = v
@@ -1095,6 +1116,16 @@ func (tx *Transaction) ProcessRequestBody() Decision {
 			detail:         "body sent to an operation that declares none",
 			rulesEvaluated: tx.evaluated,
 		})
+	}
+	// Required fields are checked once the body has been read, because absence
+	// is only knowable at the end. Doing this here rather than per field is
+	// also what keeps it free for the common case: one pass over a small
+	// declaration, and only when the route declares a required field at all.
+	if tx.op != nil && tx.violation == schema.ViolationNone {
+		if missing := schema.MissingRequired(tx.op.Body, tx.bodySeen); missing != "" {
+			tx.violation = schema.ViolationMissing
+			tx.violatedAt = missing
+		}
 	}
 	if d, rejected := tx.schemaViolation(); rejected {
 		return d
