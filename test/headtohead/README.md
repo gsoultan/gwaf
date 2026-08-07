@@ -16,11 +16,11 @@ CRS_TESTS=/tmp/crs/tests/regression/tests CRS_RULES=/tmp/crs/rules \
 | engine | detection |
 |---|---|
 | coraza + CRS | **3246 / 4025 (80.6%)** |
-| gwaf + CRS | 1995 / 4025 (49.6%) |
+| gwaf + CRS | 2005 / 4025 (49.8%) |
 | gwaf | 807 / 4025 (20.0%) |
 
 **Does gwaf + CRS close the gap? Partly, and the trade is now a real one.**
-The SecLang bridge translates 192 of 788 CRS directives. gwaf + CRS reaches
+The SecLang bridge translates 212 of 788 CRS directives. gwaf + CRS reaches
 49.6% detection at **9.9% false positives**, against Coraza's 80.6% at 36.4% —
 roughly 60% of the detection for about a quarter of the false positives.
 

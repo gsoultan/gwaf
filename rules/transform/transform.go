@@ -293,3 +293,170 @@ func (normalizePath) Apply(dst, src []byte) ([]byte, bool) {
 	}
 	return dst, true
 }
+
+// EscapeDecode resolves backslash escape sequences the way a JavaScript or C
+// string literal would: \xHH, \uHHHH, \0NNN, and the single-character escapes.
+//
+// SecLang spells this t:jsDecode and t:escapeSeqDecode, and between them they
+// are 35 of CRS's directives — the largest transform in the ruleset that gwaf
+// could not express.
+//
+// # Why a transform rather than a reading
+//
+// gwaf usually answers "the origin might decode this differently" with a
+// *reading*: every plausible decoding is evaluated and a rule matches under any
+// of them. That is the right shape for ambiguity the WAF cannot resolve, and it
+// is what makes the CVE-2026-21876 class impossible here.
+//
+// This is not that. A backslash escape is unambiguous — "\x41" is "A" to every
+// consumer that reads escapes at all — so there is nothing to enumerate. Making
+// it a reading would add a decode pass to every value in every request to serve
+// the rules that ask for it; as a transform it costs only where it is requested.
+// With the latency budget already thin, that distinction is the whole argument.
+var EscapeDecode rules.Transform = escapeDecode{}
+
+type escapeDecode struct{}
+
+func (escapeDecode) Name() string { return "escape_decode" }
+
+// MaxOutputLen: decoding only ever shortens, since every escape is at least two
+// bytes in and one byte out.
+func (escapeDecode) MaxOutputLen(n int) int { return n }
+
+func (escapeDecode) Apply(dst, src []byte) ([]byte, bool) {
+	if indexByteIn(src, '\\') < 0 {
+		return src, false
+	}
+
+	dst = dst[:0]
+	for i := 0; i < len(src); {
+		if src[i] != '\\' || i+1 >= len(src) {
+			dst = append(dst, src[i])
+			i++
+			continue
+		}
+		switch c := src[i+1]; {
+		case c == 'x' || c == 'u':
+			// Hex escapes. A malformed or truncated one is kept verbatim --
+			// backslash included -- because "\x" is not an escape and pretending
+			// it decodes to "x" would silently rewrite the value.
+			width := 2
+			if c == 'u' {
+				width = 4
+			}
+			if i+1+width >= len(src) {
+				dst = append(dst, src[i])
+				i++
+				continue
+			}
+			var v rune
+			ok := true
+			for k := 0; k < width; k++ {
+				d, valid := unhex(src[i+2+k])
+				if !valid {
+					ok = false
+					break
+				}
+				v = v<<4 | rune(d)
+			}
+			if !ok {
+				dst = append(dst, src[i])
+				i++
+				continue
+			}
+			dst = appendRuneTo(dst, v)
+			i += 2 + width
+		case c >= '0' && c <= '7':
+			// Octal, one to three digits.
+			v, n := 0, 0
+			for n < 3 && i+1+n < len(src) && src[i+1+n] >= '0' && src[i+1+n] <= '7' {
+				v = v*8 + int(src[i+1+n]-'0')
+				n++
+			}
+			if v > 0xFF {
+				v = 0xFF
+			}
+			dst = append(dst, byte(v))
+			i += 1 + n
+		default:
+			if b, ok := simpleEscape(c); ok {
+				dst = append(dst, b)
+				i += 2
+				continue
+			}
+			// An escaped ordinary character is that character: "\q" is "q",
+			// which is how a shell or a string literal reads it, and it is the
+			// form "c\at" uses to hide "cat".
+			dst = append(dst, c)
+			i += 2
+		}
+	}
+	return dst, true
+}
+
+// simpleEscape covers the single-character escapes both JavaScript and C share.
+//
+// "\a" is deliberately absent. JavaScript has no such escape and drops the
+// backslash, and t:jsDecode is 28 of the 35 directives this transform serves, so
+// JavaScript's reading is the one that matches most of the corpus. It also keeps
+// "c\at" decoding to "cat", which is the evasion an attacker is actually
+// writing, rather than to a bell character nobody sent.
+func simpleEscape(c byte) (byte, bool) {
+	switch c {
+	case 'n':
+		return '\n', true
+	case 'r':
+		return '\r', true
+	case 't':
+		return '\t', true
+	case 'v':
+		return '\v', true
+	case 'f':
+		return '\f', true
+	case 'b':
+		return '\b', true
+	case '0':
+		return 0, true
+	}
+	return 0, false
+}
+
+func indexByteIn(b []byte, c byte) int {
+	for i := range b {
+		if b[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// appendRuneTo writes r as UTF-8, or as a single byte when it fits, so a
+// "A" and an "\x41" produce the same result.
+func appendRuneTo(dst []byte, r rune) []byte {
+	if r < 0x80 {
+		return append(dst, byte(r))
+	}
+	var buf [4]byte
+	n := encodeRune(buf[:], r)
+	return append(dst, buf[:n]...)
+}
+
+func encodeRune(p []byte, r rune) int {
+	switch {
+	case r < 0x800:
+		p[0] = 0xC0 | byte(r>>6)
+		p[1] = 0x80 | byte(r)&0x3F
+		return 2
+	case r < 0x10000:
+		p[0] = 0xE0 | byte(r>>12)
+		p[1] = 0x80 | byte(r>>6)&0x3F
+		p[2] = 0x80 | byte(r)&0x3F
+		return 3
+	default:
+		p[0] = 0xF0 | byte(r>>18)
+		p[1] = 0x80 | byte(r>>12)&0x3F
+		p[2] = 0x80 | byte(r>>6)&0x3F
+		p[3] = 0x80 | byte(r)&0x3F
+		return 4
+	}
+}

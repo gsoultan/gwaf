@@ -503,6 +503,33 @@ func (c *compiler) transforms(acts []action) ([]rules.Transform, string) {
 			// Trimming changes only leading and trailing whitespace, and every
 			// operator gwaf offers is position-independent, so dropping it
 			// cannot change a verdict.
+		case "jsdecode", "escapeseqdecode":
+			out = append(out, transform.EscapeDecode)
+		case "removenulls":
+			// A NUL is already a reading: interpret.ClassNullTruncate evaluates
+			// the value as a C-backed origin would truncate it, so the rule sees
+			// the same bytes with or without this transform.
+		case "utf8tounicode", "htmlentitydecode":
+			// Accepted and dropped, because gwaf already evaluates these as
+			// *readings* rather than as a transform.
+			//
+			// A transform rewrites the value once and matches the result, which
+			// is the single-interpretation model that CVE-2026-21876 exploited.
+			// gwaf instead evaluates every plausible decoding: overlong UTF-8
+			// and HTML entities each produce their own reading
+			// (interpret.ClassOverlongUTF8, interpret.ClassHTMLEntity), and a
+			// rule matches if it matches under any of them.
+			//
+			// So an imported rule sees the decoded form whether or not this
+			// transform is applied, and applying it as well would only narrow
+			// the rule to that one reading. Dropping it is the faithful
+			// translation, not an approximation.
+			//
+			// The transforms below are deliberately NOT treated this way:
+			// t:cmdLine and t:replaceComments are covered by gwaf's own
+			// detectors rather than by canonicalization, which does nothing for
+			// an imported regex, so silently dropping them would make the
+			// imported rule narrower with no compensation. Those stay reported.
 		default:
 			return nil, fmt.Sprintf("transformation t:%s has no gwaf equivalent", a.Value)
 		}

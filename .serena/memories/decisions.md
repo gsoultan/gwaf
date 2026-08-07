@@ -1679,3 +1679,43 @@ t:utf8toUnicode, 20 exclusions. The chains, exclusions, unconditional actions an
 encoding validation are deliberate architecture — converting them would mean
 being more permissive than the original or importing cross-request state. The
 honest ceiling is short of 100% and that is a design outcome, not a defect.
+
+## SHIPPED: transform.EscapeDecode, and the "fix one, reveal the next" effect
+
+Bridge 192 -> 212 rules. Three increments, each smaller than the last:
+
+- **utf8toUnicode + htmlEntityDecode (33)** — accepted and *dropped*, because
+  gwaf already evaluates both as readings (ClassOverlongUTF8, ClassHTMLEntity).
+  A transform rewrites once and matches the result, which is the
+  single-interpretation model CVE-2026-21876 exploited; applying it as well would
+  narrow the rule to that one reading. Dropping is the faithful translation.
+- **removeNulls (3)** — same argument via ClassNullTruncate.
+- **jsDecode + escapeSeqDecode (35)** — a real new transform,
+  `transform.EscapeDecode`.
+
+**Deliberately NOT dropped: cmdLine and replaceComments.** gwaf covers those at
+the *detector* tier (shelli unquoting, sqli comment structure), which does
+nothing for an imported CRS regex — silently dropping them would make the
+imported rule narrower with no compensation. The distinction between "covered by
+canonicalization" (safe to drop) and "covered by our own detector" (not safe) is
+the rule to apply to the rest.
+
+### Why a transform and not a reading
+A backslash escape is *unambiguous* — "\x41" is "A" to every consumer. Readings
+exist for ambiguity the WAF cannot resolve. Making this a reading would add a
+decode pass to every value in every request to serve the rules that ask for it;
+as a transform it costs only where requested. With latency already thin that
+distinction decided it.
+
+### Two bugs in my own first cut, both found by the test I wrote
+1. Truncated `\x` decoded to `x`, contradicting the doc comment two lines above
+   that said malformed escapes are kept verbatim.
+2. `\a` decoded to BEL (C semantics). JavaScript has no `\a` and drops the
+   backslash, and jsDecode is 28 of the 35 directives — so `c\at` must decode to
+   `cat`, the evasion actually being written, not to a bell character nobody
+   sent.
+
+### The pattern worth remembering
+The transform switch returns on the *first* unsupported name, so each fix
+reveals the next one hiding behind it: utf8toUnicode(25) hid jsDecode(28) hid
+cmdLine(8). A "25 directives" estimate was really "25 visible directives".
