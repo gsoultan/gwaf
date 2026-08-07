@@ -61,9 +61,10 @@ is precisely CVE-2026-21876.
 
 | | |
 |---|---|
-| Evasion corpus | **216/216 blocked (100%)** across 25 attack classes |
+| Evasion corpus | **271/271 blocked (100%)** across 31 attack classes |
 | False-positive corpus | **0/124 (0.00%)** |
-| Calibration corpus | **10,430 benign requests**, every rule inside its declared tier |
+| Calibration corpus | **10,473 benign requests**, **every rule matches none of them** |
+| Pentest suite | **189/189 blocked**, **0/62 false positives**; sqlmap finds no injection |
 
 The evasion corpus is organised as *attack class × evasion technique*, and a
 class gwaf claims to detect with too few cases behind the claim **fails the

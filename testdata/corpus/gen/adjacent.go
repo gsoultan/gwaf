@@ -174,3 +174,91 @@ func emitAdjacent(emit func(request)) {
 // becomes "%2F" and "." is left alone. That asymmetry is exactly why "..%2f"
 // cannot be treated as evasion.
 func urlValue(s string) string { return url.QueryEscape(s) }
+
+// emitAdjacentUploadAndExport is the same idea as emitAdjacent, aimed at the
+// four rules added in the zero-false-positive pass.
+//
+// Each of those rules matches a *shape* rather than a literal, and a shape is
+// exactly the kind of claim a corpus can refute. Two of these requests already
+// refuted an earlier draft: "libssl.so.1.1" and "db.inc.php" both tripped the
+// double-extension rule before it learned that a numeric tail is a version and
+// that an executable *final* extension is not a disguise.
+func emitAdjacentUploadAndExport(emit func(request)) {
+	get := func(name, target string) {
+		emit(request{Name: name, Method: "GET", Target: target})
+	}
+	json := func(name, target, body string) {
+		emit(request{Name: name, Method: "POST", Target: target,
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    body})
+	}
+
+	// Filenames with several dots. The double-extension rule reads every dot in
+	// a path, so ordinary multi-dot names are the traffic that proves it is
+	// reading them correctly.
+	for _, p := range []string{
+		"/static/lib/libssl.so.1.1", "/static/lib/libcrypto.so.3",
+		"/vendor/db.inc.php", "/wp-content/plugins/cache/config.inc.php",
+		"/dist/app.min.js.map", "/dist/vendor.bundle.js.gz",
+		"/releases/gwaf-1.4.2.tar.gz", "/releases/agent.v2.1.0.zip",
+		"/docs/rfc.2616.section.4.html", "/i18n/en.US.json",
+		"/media/holiday.2026.07.14.jpg", "/backups.html",
+	} {
+		get("multi-dot asset "+p, p)
+	}
+
+	// Spreadsheet-shaped field values. The formula rule requires a leading
+	// =, +, -, @ *and* an external call, and these are the half that has the
+	// prefix and nothing else -- a negative number, a phone number, a handle, a
+	// date range, and a genuinely ordinary spreadsheet formula.
+	for i, v := range []string{
+		"-5", "-1250.75", "+62 812 3456 7890", "+1 (555) 010-9999",
+		"@alice", "@here", "=SUM(A1:A20)", "=B2*1.11", "=AVERAGE(C:C)",
+		"-- pending --", "=A1&\" \"&B1",
+	} {
+		json(fmt.Sprintf("spreadsheet cell %d", i+1), "/api/v1/sheets/rows",
+			fmt.Sprintf(`{"row":%d,"value":%q}`, i+1, v))
+	}
+
+	// URLs and scheme-shaped values in parameters. The script-URI rule requires
+	// a call after the scheme, so ordinary links, mail links, and prose about
+	// the attack itself all have to pass.
+	for i, v := range []string{
+		"https://example.com/docs/xss", "mailto:security@example.com",
+		"tel:+6281234567890", "data:image/png;base64,iVBORw0KGgo=",
+		"we block javascript: URIs in user profiles",
+		"see the javascript: scheme section of the OWASP cheat sheet",
+		"/relative/path?next=/dashboard",
+	} {
+		json(fmt.Sprintf("link value %d", i+1), "/api/v1/profile/links",
+			fmt.Sprintf(`{"label":"link %d","href":%q}`, i+1, v))
+	}
+	for i, v := range []string{
+		"https://cdn.example.com/a.js", "https://example.com/r?u=" + url.QueryEscape("https://example.org/x"),
+	} {
+		get(fmt.Sprintf("redirect param %d", i+1), "/go?to="+url.QueryEscape(v))
+	}
+
+	// Header values around the CRLF rule. It matches a raw CR or LF in a header
+	// value, so the corpus carries the values most likely to be mistaken for
+	// one: long comma-joined lists, quoted strings, and base64 that ends in
+	// characters near the control range.
+	emit(request{Name: "long accept header", Method: "GET", Target: "/api/v1/reports",
+		Headers: map[string]string{
+			"Accept":          "application/json, text/plain, */*;q=0.8, application/vnd.api+json;q=0.9",
+			"Accept-Language": "en-US,en;q=0.9,id;q=0.8,fr;q=0.7",
+			"Cookie":          "session=YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=; theme=dark; tz=Asia/Jakarta",
+			"User-Agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+			"If-None-Match":   `W/"3f8a-Nq8kLm+PzQ/1aB2cD3e"`,
+		}})
+
+	// Upload metadata that names a file with a benign extension. This is the
+	// traffic the double-extension rule exists to sit beside without touching.
+	for i, f := range []string{
+		"invoice.pdf", "photo.jpeg", "notes.txt", "archive.tar.gz",
+		"presentation.v3.pptx", "data.2026-07.csv", "logo.svg",
+	} {
+		json(fmt.Sprintf("upload metadata %d", i+1), "/api/v1/uploads",
+			fmt.Sprintf(`{"filename":%q,"size":%d}`, f, 1024*(i+1)))
+	}
+}

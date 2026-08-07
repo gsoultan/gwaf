@@ -82,6 +82,14 @@ var dangerFuncs = map[string]bool{
 	// Extraction primitives. These are how a blind injection reads data one
 	// character at a time, and they are also perfectly ordinary function names,
 	// so they stay in the attachment-required tier.
+	// Geometry constructors, used for error-based exfiltration the same way as
+	// the group above -- but these stay in the attachment tier, because
+	// "polygon" and "linestring" are ordinary words in a GIS application and
+	// gwaf has no way to know it is not looking at one.
+	"polygon": true, "multipoint": true, "linestring": true,
+	"multilinestring": true, "geometrycollection": true, "multipolygon": true,
+	"exp": true,
+
 	"substring": true, "substr": true, "mid": true, "ascii": true,
 	"ord": true, "hex": true, "unhex": true, "group_concat": true,
 	"string_agg": true, "find_in_set": true, "starts_with": true,
@@ -135,6 +143,20 @@ var osAccessFuncs = map[string]bool{
 	"sqlite_compileoption_used": true, "sqlite_compileoption_get": true,
 	"sqlite_source_id": true, "load_extension": true, "readfile": true,
 	"writefile": true, "edit": true, "fts3_tokenizer": true,
+
+	// Error-based exfiltration primitives. These belong in the always-dangerous
+	// tier rather than the attachment-required one because, unlike "sleep" or
+	// "substring", none of them is a word in any other language: an input
+	// containing "gtid_subset" is naming a MySQL internal, and there is no
+	// second reading of that.
+	//
+	// Each works the same way -- pass a subquery where a typed value is
+	// expected, and the type error returns the subquery's result in the message.
+	// It is how a blind injection becomes a fast one when the application leaks
+	// database errors, and rule 6003 flags the other half of that exchange.
+	"gtid_subset": true, "gtid_subtract": true, "name_const": true,
+	"dbms_xmlgen": true, "xmltype": true, "ctxsys": true, "drithsx": true,
+	"json_arrayagg": true, "extractvalue_": true,
 }
 
 // dmlKeywords are the statements that matter after a statement separator.

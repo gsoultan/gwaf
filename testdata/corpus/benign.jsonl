@@ -10438,3 +10438,43 @@
 {"name":"adjacent/notation note 1","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"a:2 ratio applies to the b:3 column\",\"author_id\":200}"}
 {"name":"adjacent/notation note 2","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"o:1 is the override flag; s:4 is the shard\",\"author_id\":201}"}
 {"name":"adjacent/notation note 3","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"timestamp 12:04:59, offset +07:00\",\"author_id\":202}"}
+{"name":"adjacent-upload/multi-dot asset /static/lib/libssl.so.1.1","method":"GET","target":"/static/lib/libssl.so.1.1"}
+{"name":"adjacent-upload/multi-dot asset /static/lib/libcrypto.so.3","method":"GET","target":"/static/lib/libcrypto.so.3"}
+{"name":"adjacent-upload/multi-dot asset /vendor/db.inc.php","method":"GET","target":"/vendor/db.inc.php"}
+{"name":"adjacent-upload/multi-dot asset /wp-content/plugins/cache/config.inc.php","method":"GET","target":"/wp-content/plugins/cache/config.inc.php"}
+{"name":"adjacent-upload/multi-dot asset /dist/app.min.js.map","method":"GET","target":"/dist/app.min.js.map"}
+{"name":"adjacent-upload/multi-dot asset /dist/vendor.bundle.js.gz","method":"GET","target":"/dist/vendor.bundle.js.gz"}
+{"name":"adjacent-upload/multi-dot asset /releases/gwaf-1.4.2.tar.gz","method":"GET","target":"/releases/gwaf-1.4.2.tar.gz"}
+{"name":"adjacent-upload/multi-dot asset /releases/agent.v2.1.0.zip","method":"GET","target":"/releases/agent.v2.1.0.zip"}
+{"name":"adjacent-upload/multi-dot asset /docs/rfc.2616.section.4.html","method":"GET","target":"/docs/rfc.2616.section.4.html"}
+{"name":"adjacent-upload/multi-dot asset /i18n/en.US.json","method":"GET","target":"/i18n/en.US.json"}
+{"name":"adjacent-upload/multi-dot asset /media/holiday.2026.07.14.jpg","method":"GET","target":"/media/holiday.2026.07.14.jpg"}
+{"name":"adjacent-upload/multi-dot asset /backups.html","method":"GET","target":"/backups.html"}
+{"name":"adjacent-upload/spreadsheet cell 1","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":1,\"value\":\"-5\"}"}
+{"name":"adjacent-upload/spreadsheet cell 2","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":2,\"value\":\"-1250.75\"}"}
+{"name":"adjacent-upload/spreadsheet cell 3","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":3,\"value\":\"+62 812 3456 7890\"}"}
+{"name":"adjacent-upload/spreadsheet cell 4","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":4,\"value\":\"+1 (555) 010-9999\"}"}
+{"name":"adjacent-upload/spreadsheet cell 5","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":5,\"value\":\"@alice\"}"}
+{"name":"adjacent-upload/spreadsheet cell 6","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":6,\"value\":\"@here\"}"}
+{"name":"adjacent-upload/spreadsheet cell 7","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":7,\"value\":\"=SUM(A1:A20)\"}"}
+{"name":"adjacent-upload/spreadsheet cell 8","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":8,\"value\":\"=B2*1.11\"}"}
+{"name":"adjacent-upload/spreadsheet cell 9","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":9,\"value\":\"=AVERAGE(C:C)\"}"}
+{"name":"adjacent-upload/spreadsheet cell 10","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":10,\"value\":\"-- pending --\"}"}
+{"name":"adjacent-upload/spreadsheet cell 11","method":"POST","target":"/api/v1/sheets/rows","headers":{"Content-Type":"application/json"},"body":"{\"row\":11,\"value\":\"=A1\u0026\\\" \\\"\u0026B1\"}"}
+{"name":"adjacent-upload/link value 1","method":"POST","target":"/api/v1/profile/links","headers":{"Content-Type":"application/json"},"body":"{\"label\":\"link 1\",\"href\":\"https://example.com/docs/xss\"}"}
+{"name":"adjacent-upload/link value 2","method":"POST","target":"/api/v1/profile/links","headers":{"Content-Type":"application/json"},"body":"{\"label\":\"link 2\",\"href\":\"mailto:security@example.com\"}"}
+{"name":"adjacent-upload/link value 3","method":"POST","target":"/api/v1/profile/links","headers":{"Content-Type":"application/json"},"body":"{\"label\":\"link 3\",\"href\":\"tel:+6281234567890\"}"}
+{"name":"adjacent-upload/link value 4","method":"POST","target":"/api/v1/profile/links","headers":{"Content-Type":"application/json"},"body":"{\"label\":\"link 4\",\"href\":\"data:image/png;base64,iVBORw0KGgo=\"}"}
+{"name":"adjacent-upload/link value 5","method":"POST","target":"/api/v1/profile/links","headers":{"Content-Type":"application/json"},"body":"{\"label\":\"link 5\",\"href\":\"we block javascript: URIs in user profiles\"}"}
+{"name":"adjacent-upload/link value 6","method":"POST","target":"/api/v1/profile/links","headers":{"Content-Type":"application/json"},"body":"{\"label\":\"link 6\",\"href\":\"see the javascript: scheme section of the OWASP cheat sheet\"}"}
+{"name":"adjacent-upload/link value 7","method":"POST","target":"/api/v1/profile/links","headers":{"Content-Type":"application/json"},"body":"{\"label\":\"link 7\",\"href\":\"/relative/path?next=/dashboard\"}"}
+{"name":"adjacent-upload/redirect param 1","method":"GET","target":"/go?to=https%3A%2F%2Fcdn.example.com%2Fa.js"}
+{"name":"adjacent-upload/redirect param 2","method":"GET","target":"/go?to=https%3A%2F%2Fexample.com%2Fr%3Fu%3Dhttps%253A%252F%252Fexample.org%252Fx"}
+{"name":"adjacent-upload/long accept header","method":"GET","target":"/api/v1/reports","headers":{"Accept":"application/json, text/plain, */*;q=0.8, application/vnd.api+json;q=0.9","Accept-Language":"en-US,en;q=0.9,id;q=0.8,fr;q=0.7","Cookie":"session=YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=; theme=dark; tz=Asia/Jakarta","If-None-Match":"W/\"3f8a-Nq8kLm+PzQ/1aB2cD3e\"","User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"}}
+{"name":"adjacent-upload/upload metadata 1","method":"POST","target":"/api/v1/uploads","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"invoice.pdf\",\"size\":1024}"}
+{"name":"adjacent-upload/upload metadata 2","method":"POST","target":"/api/v1/uploads","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"photo.jpeg\",\"size\":2048}"}
+{"name":"adjacent-upload/upload metadata 3","method":"POST","target":"/api/v1/uploads","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"notes.txt\",\"size\":3072}"}
+{"name":"adjacent-upload/upload metadata 4","method":"POST","target":"/api/v1/uploads","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"archive.tar.gz\",\"size\":4096}"}
+{"name":"adjacent-upload/upload metadata 5","method":"POST","target":"/api/v1/uploads","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"presentation.v3.pptx\",\"size\":5120}"}
+{"name":"adjacent-upload/upload metadata 6","method":"POST","target":"/api/v1/uploads","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"data.2026-07.csv\",\"size\":6144}"}
+{"name":"adjacent-upload/upload metadata 7","method":"POST","target":"/api/v1/uploads","headers":{"Content-Type":"application/json"},"body":"{\"filename\":\"logo.svg\",\"size\":7168}"}

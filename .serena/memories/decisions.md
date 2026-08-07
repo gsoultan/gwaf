@@ -1719,3 +1719,52 @@ distinction decided it.
 The transform switch returns on the *first* unsupported name, so each fix
 reveals the next one hiding behind it: utf8toUnicode(25) hid jsDecode(28) hid
 cmdLine(8). A "25 directives" estimate was really "25 visible directives".
+
+## SHIPPED: zero false positives, by shape rather than by exception
+
+Goal was "increase detection and make the false positive 0%". Both, measured:
+**271/271 evasion (was 244), 0/10,473 benign (was 6/10,433 = 0.06%)**. Pentest
+suite 189/189 blocked, 0/62 FP.
+
+**The six false positives were all rule 1008, and the fix was a discriminator,
+not a tolerance.** A backup artifact is a copy of a file the app serves, so it
+keeps its source extension — `wp-config.php.bak`, `index.php~`. A storage product
+serving `quarterly-notes.bak` has no source extension in front, because that is
+what the user named their file. Requiring the *doubled* extension removed all six
+without losing a single corpus case. `.sql` has no extension to double, so dumps
+are decided by directory (`/backup/`, `/dumps/`) instead.
+
+**Rule 4017 is the same insight inverted, and it is the one an adopter needed.**
+`shell.php.jpg` is a source extension followed by a *harmless* one: the upload
+filter reads `.jpg`, Apache resolves `.php`. Two guards were needed before it was
+safe, and the corpus supplied both: a numeric tail is a version (`libssl.so.1.1`)
+and an executable *final* extension is not a disguise (`db.inc.php`).
+
+### The corpus found a false positive that had been shipping
+`data:image/png;base64,…` scored as command injection — `;` is a separator and
+`base64` is in the command list because `echo …|base64 -d|sh` is real. **Any app
+accepting an inline image was being blocked, and no test covered it.** Fixed
+structurally: `;` after a *registered* IANA top-level type, followed by an actual
+parameter (`name=` or `base64` before a comma), is a media-type separator. Both
+halves are required, because `uploads/img.png;cat /etc/passwd` and
+`text/plain;cat /etc/passwd` must both still fire — and they do.
+
+### Prefilter literals must encode the requirement, not the substring
+Registering bare `.php`/`.sh`/`.so` for rule 4017 cost **3.4% on benign POST
+JSON** — those appear in ordinary bodies, so the operator ran constantly for
+nothing. Registering `.php.`, `.php;`, `.php/`… (extension *with* delimiter, the
+thing the operator actually requires) took it back to 0.9%, inside noise. More
+literals, fewer candidates. This is what CLAUDE.md §2's "declares its required
+literals" is for.
+
+### Three new operators, all allocation-free
+`lower := make([]byte, len(v))` was in each draft. Replaced with `indexOfFold` /
+`hasSuffixFold` / `matchFoldSkipping`, which fold one byte at a time during the
+compare. Benign GET stays 0 allocs.
+
+### Confirmed still-correct rejections (do not "fix" these)
+Probing 35 out-of-corpus attacks left 7 misses, and **every one is by design**:
+`#{7*7}` and `@(1+2)` are the score-2 delimiter tradeoff; `X-Forwarded-Host`
+needs to know the legitimate host (embedder); loopback SSRF is deliberately
+opt-in; mass assignment is the schema tier's job; a lone `TE: chunked` is legal
+HTTP. Two of the 35 were bogus test cases of mine.

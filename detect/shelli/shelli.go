@@ -423,6 +423,10 @@ func separatorAt(src []byte, i int) (n int, backtick bool) {
 		if i+1 < len(src) && src[i+1] == src[i] {
 			return 2, false
 		}
+		if src[i] == ';' && mediaTypeParamAt(src, i) {
+			// Not a command separator: a media-type parameter separator.
+			return 0, false
+		}
 		return 1, false
 	case '`':
 		return 1, true
@@ -432,6 +436,110 @@ func separatorAt(src []byte, i int) (n int, backtick bool) {
 		}
 	}
 	return 0, false
+}
+
+// ianaTopLevelTypes is the complete registry of top-level media types.
+//
+// It is closed and has not grown in years, which is what makes it usable as a
+// discriminator: "image/png" is a media type and "uploads/img.png" is a path,
+// and only the first half tells them apart.
+// Kept as a slice of byte strings rather than a map because this is hot-path
+// code and a map lookup would need a []byte-to-string conversion (CLAUDE.md §4).
+var ianaTopLevelTypes = [][]byte{
+	[]byte("application"), []byte("audio"), []byte("font"), []byte("example"),
+	[]byte("image"), []byte("message"), []byte("model"), []byte("multipart"),
+	[]byte("text"), []byte("video"), []byte("haptics"),
+}
+
+// equalFoldASCII compares without allocating, which strings.EqualFold on a
+// converted []byte would not manage.
+func equalFoldASCII(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if x >= 'A' && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if y >= 'A' && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+// mediaTypeParamAt reports whether the semicolon at i separates media-type
+// parameters rather than shell commands.
+//
+// "data:image/png;base64,iVBOR..." was a false positive, and a bad one: the
+// semicolon is a separator, "base64" is in the command list because
+// "echo …|base64 -d|sh" is a real technique, and the two together read as
+// command injection. An avatar upload, an inline logo, or any embedded image is
+// that shape, and the benign corpus found it the day it first contained one.
+//
+// Suppressing it needs to be narrow in *both* directions, because a semicolon
+// after a slash-separated token is also how real injection reaches a file
+// parameter -- "?f=uploads/img.png;cat /etc/passwd". So both sides must match
+// the media-type grammar of RFC 2045: a registered top-level type before the
+// semicolon, and an actual parameter after it. "text/plain;cat /etc/passwd"
+// fails the second test and is still reported.
+func mediaTypeParamAt(src []byte, i int) bool {
+	// Left: <toplevel>/<subtype>, immediately before the semicolon.
+	j := i
+	for j > 0 && isSpace(src[j-1]) {
+		j--
+	}
+	end := j
+	for j > 0 && (isWordByte(src[j-1]) || src[j-1] == '.' || src[j-1] == '+' || src[j-1] == '-') {
+		j--
+	}
+	if j == end || j == 0 || src[j-1] != '/' {
+		return false
+	}
+	slash := j - 1
+	k := slash
+	for k > 0 && isWordByte(src[k-1]) {
+		k--
+	}
+	if k == slash {
+		return false
+	}
+	known := false
+	for _, t := range ianaTopLevelTypes {
+		if equalFoldASCII(src[k:slash], t) {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return false
+	}
+
+	// Right: "base64" ending the parameter, or a name=value pair.
+	r := i + 1
+	for r < len(src) && isSpace(src[r]) {
+		r++
+	}
+	st := r
+	for r < len(src) && (isWordByte(src[r]) || src[r] == '-') {
+		r++
+	}
+	if r == st {
+		return false
+	}
+	if r < len(src) && src[r] == '=' {
+		return true // charset=utf-8, boundary=..., filename=...
+	}
+	if equalFoldASCII(src[st:r], []byte("base64")) {
+		// The transfer encoding, which must be followed by the data comma or
+		// end the value. ";base64 -d" is not this.
+		return r == len(src) || src[r] == ',' || src[r] == ';'
+	}
+	return false
 }
 
 // isInvocation reports whether what follows a command name looks like an actual

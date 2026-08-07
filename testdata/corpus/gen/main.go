@@ -88,6 +88,7 @@ var archetypes = []archetype{
 	// Not an application shape. Traffic chosen to sit next to a specific rule,
 	// so widening one fails the build instead of an adopter. See adjacent.go.
 	{"adjacent", emitAdjacent},
+	{"adjacent-upload", emitAdjacentUploadAndExport},
 }
 
 func main() {

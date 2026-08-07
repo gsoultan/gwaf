@@ -231,8 +231,8 @@ The comparison this repository actually owes, and does not yet have:
    positives against Coraza's 80.6% at 36.4%, so roughly 60% of the detection
    for about a quarter of the false positives. The bridge now translates 192 of
    788 directives, and the remaining gap is bridge coverage rather than engine
-   capability. On 10,433 ordinary API requests the
-   false-positive rates are **gwaf 0.06%, untuned CRS 36.4%**, which is equally
+   capability. On 10,473 ordinary API requests the
+   false-positive rates are **gwaf 0.00%, untuned CRS 36.4%**, which is equally
    one-sided in the other direction because that corpus is gwaf's. Read
    [test/headtohead/README.md](../test/headtohead/README.md) before quoting
    either.

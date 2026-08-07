@@ -125,6 +125,9 @@ const (
 	IDRemoteFileInclusion types.RuleID = 4014
 	IDServerConfigUpload  types.RuleID = 4015
 	IDPHPPregReplaceEval  types.RuleID = 4016
+	IDDoubleExtension     types.RuleID = 4017
+	IDHeaderCRLF          types.RuleID = 1012
+	IDScriptURI           types.RuleID = 3011
 	IDSQLiSemantic        types.RuleID = 2010
 	IDXSSSemantic         types.RuleID = 3010
 	IDScannerUserAgent    types.RuleID = 5001
@@ -173,6 +176,12 @@ const (
 	// No model, no network call, no state (CLAUDE.md §1).
 	IDPromptInjection  types.RuleID = 13001
 	IDSystemPromptLeak types.RuleID = 13002
+
+	// 14,000-14,999: injection that executes somewhere other than this server.
+	// The request is stored here and interpreted by a spreadsheet, a shell, or a
+	// desktop application later. Still per-request and still decidable from the
+	// value alone, so it is in scope.
+	IDFormulaInjection types.RuleID = 14001
 
 	// 10002 is graphql.IntrospectionRule and is deliberately NOT here.
 	//
@@ -751,19 +760,22 @@ func requestRules() rules.Set {
 			// backup service, and those applications would be broken by a rule
 			// that ships at Certain.
 			//
-			// The corpus showed zero matches for both groups until a storage
-			// archetype was added to it; this rule then matched 6 of 10,430
-			// benign requests (0.058%), and the other one still matches none.
-			// That is the tier difference, measured rather than asserted.
+			// Matched by *shape*, not by extension alone, and that is what took
+			// this rule from six false positives to none.
+			//
+			// A backup artifact is a leftover copy of a file the application
+			// serves: "wp-config.php.bak", "index.php~", "app.js.old". The
+			// source extension is still there, because the editor or the deploy
+			// script appended to the real name. A file-storage product serving
+			// "quarterly-notes.bak" has no source extension in front of it,
+			// because that is simply what the user called their file — and those
+			// six requests were the only false positives gwaf had left.
 			//
 			// A file-storage or backup product should scope an exception to the
 			// route that serves user filenames -- the same answer detect/shelli
 			// gives a CI platform that carries shell commands as data. Reporting
 			// the finding is right; certainty about it is not available.
-			Op: op.ContainsAny(
-				".sql", ".sql.gz", ".bak", ".swp", ".swo",
-				".old", ".orig", ".save", ".backup", ".dump",
-			),
+			Op:         backupArtifact(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityWarning,
 			Confidence: types.High,
@@ -1090,6 +1102,110 @@ func requestRules() rules.Set {
 			Tags:       []string{"prototype-pollution", "javascript", "owasp-a08"},
 		},
 		{
+			ID:      IDDoubleExtension,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: append([]types.Target{{Kind: types.TargetRequestURI}}, argTargets...),
+			// Deliberately the *decode* chain rather than the path chain: the
+			// point of "shell.php%00.jpg" is that the null byte survives to
+			// whatever does the extension check and truncates there.
+			Transforms: decodeChain,
+			// An executable extension that is not the last one.
+			//
+			// This is the upload filter bypass that put a web shell in an
+			// adopter's WordPress. The uploader checks the final extension,
+			// sees ".jpg", and stores the file; Apache with a legacy
+			// AddHandler, or mod_mime resolving right-to-left, then finds
+			// ".php" earlier in the name and executes it. "shell.php.jpg",
+			// "x.php.", "a.asp;.jpg" and "b.php%00.png" are the same trick
+			// against four different parsers.
+			//
+			// The inverse of IDBackupArtifact, and worth stating because the two
+			// look alike: there, a source extension followed by a backup suffix
+			// is the attack, because the copy discloses the original. Here, a
+			// source extension followed by a *harmless-looking* one is the
+			// attack, because the harmless one is what the filter reads.
+			Op:         doubleExtension(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Executable extension behind a benign one",
+			Tags:       []string{"rce", "webshell", "upload", "owasp-a03"},
+		},
+		{
+			ID:      IDHeaderCRLF,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: []types.Target{{Kind: types.TargetRequestHeaders}},
+			// No transforms. A CR or LF that arrives *already decoded* in a
+			// header value is the finding; decoding first would invent one.
+			//
+			// A bare CR or LF inside a header value cannot occur in a
+			// well-formed request: RFC 9110 makes it the field terminator, so
+			// its presence means either the embedder's parser accepted a folded
+			// or smuggled field, or the value was assembled from user input
+			// upstream. Both are header injection, and there is no benign
+			// reading -- which is what makes this Certain rather than a
+			// heuristic.
+			//
+			// Distinct from the opt-in CRLF *argument* rule: an argument
+			// containing a newline is ordinary (a textarea), whereas a header
+			// value containing one is not.
+			Op:         op.ContainsAny("\r", "\n"),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Line terminator in a request header value",
+			Tags:       []string{"header-injection", "response-splitting", "owasp-a03"},
+		},
+		{
+			ID:         IDScriptURI,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// A script URI that actually calls something.
+			//
+			// Reflected into an href, a form action, or window.location, this
+			// executes on click -- the classic route from "open redirect" to
+			// stored XSS. The XSS detector already catches it inside a parsed
+			// href attribute; a bare parameter value never reaches that path,
+			// which is the gap this closes.
+			//
+			// The call is required, not just the scheme. "javascript:" alone
+			// appears in documentation, in MDN links, and in every article about
+			// this exact attack, and blocking the word is how a firewall becomes
+			// an obstacle to the people fixing the bug.
+			Op:         scriptURI(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.High,
+			Msg:        "Script URI with a call in request value",
+			Tags:       []string{"xss", "script-uri", "owasp-a03"},
+		},
+		{
+			ID:         IDFormulaInjection,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Spreadsheet formula injection, narrowed to the executing forms.
+			//
+			// A value stored here, exported to CSV, and opened in Excel or
+			// LibreOffice is evaluated as a formula. The naive rule -- flag any
+			// value starting with =, +, - or @ -- is unusable: "-5", "+1 555",
+			// and "@handle" are ordinary form input, and it would have been the
+			// largest false-positive source in the ruleset.
+			//
+			// So the operator requires the formula *and* a mechanism that leaves
+			// the spreadsheet: DDE (cmd, msexcel, powershell), or one of the
+			// three functions that reach the network. A cell that only does
+			// arithmetic is left alone, because arithmetic in a cell is what a
+			// spreadsheet is for.
+			Op:         formulaInjection(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.High,
+			Msg:        "Spreadsheet formula with an external call",
+			Tags:       []string{"csv-injection", "formula-injection", "owasp-a03"},
+		},
+		{
 			ID:         IDSSRFMetadata,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
@@ -1104,9 +1220,20 @@ func requestRules() rules.Set {
 			// attacker-controlled name that resolves to 169.254.169.254 is not
 			// covered and cannot be. DNS is a network call, and the third
 			// ownership test puts it with the embedder.
+			//
+			// The numeric forms are the same address written the four other ways
+			// inet_aton accepts -- decimal, hex, octal, and the IPv4-mapped IPv6
+			// form. Go's net.ParseIP rejects most of them, but libcurl, PHP, and
+			// Java do not, and a rule that only knew the dotted-quad was one
+			// base conversion away from being bypassed.
 			Op: op.ContainsAny(
 				"169.254.169.254", "metadata.google.internal",
 				"169.254.170.2", "100.100.100.200", "metadata.tencentyun.com",
+				"2852039166",          // decimal
+				"0xa9fea9fe",          // hex, packed
+				"0251.0376.0251.0376", // octal, dotted
+				"[::ffff:169.254.169.254]",
+				"[::ffff:a9fe:a9fe]",
 			),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -1936,4 +2063,410 @@ func phpUnderWPContent() rules.Operator {
 		}
 		return false
 	}).WithLiterals("/wp-content/")
+}
+
+// backupArtifact reports a request for a leftover copy of an application file.
+//
+// The signal is a *doubled* extension — a backup suffix appended to a name that
+// still carries its source extension — because that is what an editor, a deploy
+// script, or a careless copy actually produces: "wp-config.php.bak",
+// "index.php~", "settings.py.orig". The original name survives, which is
+// precisely why fetching it discloses the original file.
+//
+// A bare name plus a backup suffix is not that. "quarterly-notes.bak" and
+// "draft.old" are what a user called a file in a storage product, and matching
+// them was this rule's entire false-positive rate: six requests in 10,433, all
+// from the storage archetype, and all of them gwaf's only remaining false
+// positives.
+//
+// Database dumps are handled separately below, because a .sql file has no
+// source extension to double and the discriminator has to be the directory.
+func backupArtifact() rules.Operator {
+	// Suffixes an editor or a deploy leaves behind.
+	suffixes := []string{
+		".bak", ".backup", ".old", ".orig", ".save", ".swp", ".swo",
+		".tmp", ".copy", ".rej", ".dist",
+	}
+	// Extensions worth disclosing: source, configuration, and templates. A
+	// backup of a .jpg is not an incident.
+	source := []string{
+		".php", ".phtml", ".asp", ".aspx", ".jsp", ".js", ".ts", ".py", ".rb",
+		".pl", ".sh", ".go", ".java", ".cs", ".c", ".cpp", ".sql",
+		".conf", ".config", ".cfg", ".ini", ".env", ".yml", ".yaml", ".toml",
+		".json", ".xml", ".properties", ".htaccess", ".htpasswd", ".pem", ".key",
+	}
+	// Directories that exist to hold dumps and backups. A .sql served from one
+	// of these is a database dump; a .sql in a storage API is a user's file.
+	dumpDirs := []string{
+		"/backup/", "/backups/", "/dump/", "/dumps/", "/db/", "/database/",
+		"/sql/", "/_backup/", "/old/", "/archive/",
+	}
+
+	return op.Func("backup_artifact", func(v []byte) bool {
+		path := v
+		for i := 0; i < len(path); i++ {
+			if path[i] == '?' || path[i] == '#' {
+				path = path[:i]
+				break
+			}
+		}
+
+		// "index.php~" -- the editor tilde needs no separate suffix list.
+		if len(path) > 0 && path[len(path)-1] == '~' {
+			return hasAnySuffix(path[:len(path)-1], source)
+		}
+
+		for _, suf := range suffixes {
+			if !hasSuffixBytes(path, suf) {
+				continue
+			}
+			// The doubled extension is the whole test.
+			return hasAnySuffix(path[:len(path)-len(suf)], source)
+		}
+
+		// A dump has no doubled extension, so the directory decides.
+		if hasSuffixBytes(path, ".sql") || hasSuffixBytes(path, ".sql.gz") ||
+			hasSuffixBytes(path, ".dump") || hasSuffixBytes(path, ".mdb") {
+			for _, d := range dumpDirs {
+				if indexOf(path, d) >= 0 {
+					return true
+				}
+			}
+		}
+		return false
+	}).WithLiterals(append(append([]string{}, suffixes...), ".sql", ".dump", ".mdb", "~")...)
+}
+
+func hasSuffixBytes(b []byte, suf string) bool {
+	return len(b) >= len(suf) && string(b[len(b)-len(suf):]) == suf
+}
+
+func hasAnySuffix(b []byte, suffixes []string) bool {
+	for _, s := range suffixes {
+		if hasSuffixBytes(b, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// doubleExtension reports an executable extension that is not the final one.
+//
+// The upload filter reads the last extension and sees ".jpg". The web server
+// resolves the name right-to-left, or truncates at a null byte, or stops at a
+// semicolon, and finds ".php" instead. Every one of those is a different parser
+// disagreeing about where the name ends, which is the same shape as the
+// canonicalization bug class in CLAUDE.md §2 — so the operator does not pick one
+// reading, it checks whether a dangerous extension appears anywhere before the
+// end with a delimiter after it.
+func doubleExtension() rules.Operator {
+	// Extensions a server will hand to an interpreter.
+	exec := []string{
+		".php", ".php3", ".php4", ".php5", ".php7", ".php8", ".phps", ".phtml",
+		".pht", ".phar", ".inc",
+		".asp", ".aspx", ".asa", ".asax", ".ashx", ".asmx", ".cer",
+		".jsp", ".jspx", ".jsw", ".jsv", ".jspf",
+		".cgi", ".pl", ".py", ".rb", ".sh", ".bash", ".exe", ".dll", ".so",
+		".shtml", ".swf", ".htaccess",
+	}
+	return op.Func("double_extension", func(v []byte) bool {
+		path := v
+		for i := 0; i < len(path); i++ {
+			if path[i] == '?' || path[i] == '#' {
+				path = path[:i]
+				break
+			}
+		}
+		lower := path // folded per byte by indexOfFold/hasSuffixFold below
+		for _, e := range exec {
+			from := 0
+			for {
+				j := indexOfFold(lower[from:], e)
+				if j < 0 {
+					break
+				}
+				at := from + j
+				from = at + 1
+
+				// The character before must end a name component, so ".phpx"
+				// and "graph.phone" do not read as ".php".
+				end := at + len(e)
+				if end >= len(lower) {
+					continue // final extension: an ordinary request for a script
+				}
+				switch c := foldByte(lower[end]); c {
+				case ';', '\\', ' ', '\t', '%', 0, ':', ',':
+					// Truncation and parser-confusion characters. None of these
+					// appears in a filename by convention, so no further test is
+					// needed: "x.asp;.jpg" (IIS), "x.php%00.png" (null
+					// truncation), "x.php:.jpg" (NTFS streams).
+					return true
+				case '/':
+					// nginx PATH_INFO: "/x.php/anything" is handed to PHP-FPM as
+					// a script even though the request names a directory.
+					return true
+				case '.':
+					// The plain dot is the ambiguous one, and it needs two
+					// guards or it flags ordinary filenames.
+					rest := lower[end+1:]
+					if len(rest) == 0 {
+						return true // "x.php." -- Windows strips the trailing dot
+					}
+					// "lib.so.6", "app.min.js.2" -- a numeric component is a
+					// version, not an extension a filter would be reading.
+					allDigits := true
+					for _, d := range rest {
+						if d == '.' || d == '/' {
+							break
+						}
+						if d < '0' || d > '9' {
+							allDigits = false
+							break
+						}
+					}
+					if allDigits {
+						continue
+					}
+					// "include.inc.php", "config.php.php" -- when the *final*
+					// extension is itself executable, nothing is being disguised
+					// as benign. It is an ordinary request for a script, and
+					// ".inc.php" is a PHP naming convention old enough to vote.
+					for _, e2 := range exec {
+						if hasSuffixFold(lower, e2) {
+							return false
+						}
+					}
+					return true
+				}
+			}
+		}
+		return false
+	}).WithLiterals(execWithDelimiter(exec)...)
+}
+
+// execWithDelimiter builds the prefilter literals for doubleExtension.
+//
+// Registering the bare extensions was measurably wrong. ".php" and ".sh" occur
+// in ordinary traffic — a docs link, a filename in an upload manifest, a path in
+// a JSON config — so every one of them made the rule a candidate and ran the
+// operator for nothing. It cost 3.4% on the benign POST JSON benchmark, which is
+// the whole point of CLAUDE.md §2's rule that an operator declares the literals
+// it *requires*: the requirement here is not ".php", it is ".php followed by
+// something that ends the name", and that is what belongs in the automaton.
+//
+// The literal count goes up and the candidate count goes down. Aho-Corasick is
+// linear in the input either way, the extensions share their prefixes in the
+// trie, and a benign "/docs/index.php" now matches nothing at all.
+func execWithDelimiter(exec []string) []string {
+	// The delimiters the operator accepts, in the same order it tests them.
+	delims := []string{".", ";", "/", "\\", " ", "\t", "%", "\x00", ":", ","}
+	out := make([]string, 0, len(exec)*len(delims))
+	for _, e := range exec {
+		for _, d := range delims {
+			out = append(out, e+d)
+		}
+	}
+	return out
+}
+
+// scriptURI reports a "javascript:" or "vbscript:" URI that calls something.
+//
+// The scheme alone is not the finding. It appears in documentation, in security
+// advisories, and in the bug reports that describe this very attack, and a rule
+// that blocked the word would block the people fixing it. What has no benign
+// reading is the scheme followed by an identifier and an opening delimiter —
+// that is a script URI with a call in it, and a URI with a call in it is code.
+//
+// Whitespace and comments between the scheme and the call are stripped first,
+// because "java\tscript:" and "javascript:/*x*/alert(1)" both execute.
+func scriptURI() rules.Operator {
+	schemes := []string{"javascript:", "vbscript:", "livescript:", "mocha:", "data:text/html"}
+	return op.Func("script_uri", func(v []byte) bool {
+		for _, sc := range schemes {
+			for i := 0; i < len(v); i++ {
+				after, ok := matchFoldSkipping(v, i, sc)
+				if !ok {
+					continue
+				}
+				if sc[0] == 'd' {
+					return true // data:text/html has no benign reading in a parameter
+				}
+				// "javascript://x%0aalert(1)" -- the slashes and the comment
+				// body are both ignorable to a browser here.
+				j := skipIgnorable(v, after)
+				for j < len(v) && v[j] == '/' {
+					j = skipIgnorable(v, j+1)
+				}
+				// An identifier, then something that invokes it.
+				k := j
+				for k < len(v) {
+					c := foldByte(v[k])
+					if c == '_' || c == '$' || c == '.' ||
+						(c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+						k++
+						continue
+					}
+					break
+				}
+				if k == j {
+					continue
+				}
+				k = skipIgnorable(v, k)
+				if k >= len(v) {
+					continue
+				}
+				switch v[k] {
+				case '(', '`', '=':
+					return true
+				}
+			}
+		}
+		return false
+	}).WithLiterals("javascript", "vbscript", "livescript", "mocha:", "text/html")
+}
+
+// skipIgnorable advances past bytes a browser discards inside a URI: control
+// characters and space. "java\tscript:" and "java\nscript:" both execute.
+func skipIgnorable(v []byte, i int) int {
+	for i < len(v) && (v[i] <= 0x20 || v[i] == 0x7f) {
+		i++
+	}
+	return i
+}
+
+// matchFoldSkipping matches needle against v starting at i, case-insensitively
+// and ignoring the control characters a browser strips. It returns the index
+// just past the match.
+//
+// Written as a skipping compare rather than "build a cleaned copy, then search"
+// because the cleaned copy is an allocation on the request path, and the whole
+// point of the operator is to be cheap enough to run on every argument.
+func matchFoldSkipping(v []byte, i int, needle string) (int, bool) {
+	for j := 0; j < len(needle); {
+		i = skipIgnorable(v, i)
+		if i >= len(v) || foldByte(v[i]) != needle[j] {
+			return 0, false
+		}
+		i++
+		j++
+	}
+	return i, true
+}
+
+// formulaInjection reports a spreadsheet formula that reaches outside the sheet.
+//
+// The value is stored by this application, exported to CSV, and evaluated when
+// someone opens it in Excel or LibreOffice — the execution happens on a
+// colleague's laptop, days later, which is why it is so often missed.
+//
+// The naive form of this rule flags any value beginning with =, +, - or @. That
+// is unusable: "-5", "+62 812", and "@alice" are ordinary form input, and it
+// would have been the single largest false-positive source in the ruleset. So
+// the formula prefix is necessary but not sufficient — the value must also
+// contain a mechanism that leaves the spreadsheet, which is DDE or one of the
+// three functions that make a network request. A cell doing arithmetic is what a
+// spreadsheet is for and is left alone.
+func formulaInjection() rules.Operator {
+	// Self-evidencing: each of these carries the formula syntax with it, so no
+	// prefix test is needed and none is applied. "cmd|" is DDE, and the import
+	// family are the three functions that make a network request from a cell.
+	//
+	// The prefix is deliberately not required here, and the corpus is why: a
+	// leading "+" arrives from a form as a space, because "+" is how a space is
+	// encoded in a query string. "+cmd|'/c calc'!A1" therefore reaches the rule
+	// as " cmd|'/c calc'!A1" with the prefix gone. Requiring it would have made
+	// the rule depend on which encoding the attacker happened to pick.
+	strong := []string{
+		"cmd|", "msexcel|", "=hyperlink(", "=webservice(", "=importxml(",
+		"=importdata(", "=importhtml(", "=dde(", "=rtd(", "|'/c ", "!a0", "'!a1",
+	}
+	// Ordinary words on their own, so these are only a finding when the value is
+	// also shaped like a formula.
+	weak := []string{"powershell", "cmd/c", "cmd /c", "=exec(", "=shell("}
+
+	return op.Func("formula_injection", func(v []byte) bool {
+		lower := v // folded per byte by indexOfFold below
+		for _, e := range strong {
+			if indexOfFold(lower, e) >= 0 {
+				return true
+			}
+		}
+
+		// The weak tier needs the value to actually open a formula. Leading
+		// quotes and whitespace are skipped because a JSON or CSV field carries
+		// them and the spreadsheet does not.
+		i := 0
+		for i < len(lower) && (lower[i] == ' ' || lower[i] == '\t' || lower[i] == '\r' ||
+			lower[i] == '\n' || lower[i] == '"' || lower[i] == '\'') {
+			i++
+		}
+		if i >= len(lower) {
+			return false
+		}
+		switch foldByte(lower[i]) {
+		case '=', '+', '-', '@':
+		default:
+			return false
+		}
+		for _, e := range weak {
+			if indexOfFold(lower, e) >= 0 {
+				return true
+			}
+		}
+		return false
+	}).WithLiterals("cmd|", "msexcel|", "hyperlink(", "webservice(", "importxml(",
+		"importdata(", "importhtml(", "dde(", "rtd(", "powershell", "cmd/c", "cmd /c",
+		"exec(", "shell(", "!a0", "!a1")
+}
+
+// foldByte lowercases ASCII and leaves every other byte alone.
+func foldByte(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
+}
+
+// indexOfFold is indexOf, case-insensitively, without materialising a lowercase
+// copy of the haystack.
+//
+// The copy is what this exists to avoid. These operators run on the request path
+// and a "lower := make([]byte, len(v))" in each of them is an allocation per
+// candidate value, which CLAUDE.md §4 rules out — the needles are already
+// lowercase constants, so folding one byte at a time during the compare costs
+// nothing and allocates nothing.
+func indexOfFold(hay []byte, needle string) int {
+	if len(needle) == 0 || len(hay) < len(needle) {
+		return -1
+	}
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		if foldByte(hay[i]) != needle[0] {
+			continue
+		}
+		ok := true
+		for j := 1; j < len(needle); j++ {
+			if foldByte(hay[i+j]) != needle[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return i
+		}
+	}
+	return -1
+}
+
+// hasSuffixFold is hasSuffixBytes, case-insensitively and without a copy.
+func hasSuffixFold(b []byte, suf string) bool {
+	if len(b) < len(suf) {
+		return false
+	}
+	b = b[len(b)-len(suf):]
+	for i := range suf {
+		if foldByte(b[i]) != suf[i] {
+			return false
+		}
+	}
+	return true
 }
