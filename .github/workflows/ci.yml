@@ -7,11 +7,23 @@
 
 name: CI
 
+# Every branch, not just main.
+#
+# The gates below had never run once. The repository was created on 2026-08-06,
+# ten jobs were defined, and the API reported zero workflow runs — because all
+# the work happens on feature branches and this only fired on main. A gate that
+# runs after the branch is merged is a gate that reports on work already shipped,
+# which is the same failure as a check that skips when its tool is missing
+# (CLAUDE.md §6): a green tick nobody earned.
+#
+# workflow_dispatch is here so a human can prove CI still works without inventing
+# a commit to do it with.
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
