@@ -112,6 +112,33 @@ func scale(d time.Duration, factor float64) time.Duration {
 	return time.Duration(float64(d) * factor * sloTolerance)
 }
 
+// clockResolution returns the smallest non-zero interval time.Now() can report.
+//
+// Windows made this necessary. Its timer granularity is around a millisecond, so
+// the first CI run there reported p50 and p90 of exactly 0s for every workload
+// and a p99 of 1.3ms — not because gwaf is instantaneous and then catastrophic,
+// but because every operation lands either inside one tick or across it. The
+// distribution was quantisation, and asserting a tail against it was asserting
+// against the clock.
+//
+// Detected by measurement rather than by GOOS, because the property that matters
+// is "can this clock resolve the thing being measured", and that is a question
+// about the host, not the operating system's name.
+func clockResolution() time.Duration {
+	best := time.Duration(1<<62 - 1)
+	for i := 0; i < 32; i++ {
+		start := time.Now()
+		var d time.Duration
+		for d == 0 {
+			d = time.Since(start)
+		}
+		if d < best {
+			best = d
+		}
+	}
+	return best
+}
+
 func TestLatencyDistribution(t *testing.T) {
 	if testing.Short() {
 		t.Skip("latency distribution takes a few seconds")
@@ -198,10 +225,24 @@ func TestLatencyDistribution(t *testing.T) {
 		mode = "strict: published targets binding"
 	}
 
+	// A clock that cannot resolve the operation cannot bound it either.
+	res := clockResolution()
+	smallest := workloads[0].p50
+	for _, wl := range workloads {
+		if wl.p50 < smallest {
+			smallest = wl.p50
+		}
+	}
+	unresolvable := res > smallest/10
+
 	var report strings.Builder
 	fmt.Fprintf(&report, "\nlatency distribution — %s/%s, %d samples per workload\n",
 		runtime.GOOS, runtime.GOARCH, latencySamples)
 	fmt.Fprintf(&report, "%s\n", mode)
+	fmt.Fprintf(&report, "clock resolution %v\n", res)
+	if unresolvable {
+		fmt.Fprintf(&report, "TIMINGS NOT ASSERTED: clock cannot resolve a %v target; the distribution below is quantisation, not latency\n", smallest)
+	}
 	fmt.Fprintf(&report, "%-34s %9s %9s %9s %9s %9s\n",
 		"workload", "p50", "p90", "p99", "p99.9", "max")
 
@@ -211,6 +252,9 @@ func TestLatencyDistribution(t *testing.T) {
 		fmt.Fprintf(&report, "%-34s %9s %9s %9s %9s %9s\n",
 			wl.name, d.p50, d.p90, d.p99, d.p999, d.max)
 
+		if unresolvable {
+			continue
+		}
 		p50, p99 := scale(wl.p50, factor), scale(wl.p99, factor)
 		if d.p50 > p50 {
 			t.Errorf("%s: p50 = %v, ceiling %v (published target %v, %s)",
