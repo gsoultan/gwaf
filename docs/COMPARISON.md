@@ -137,17 +137,22 @@ Stated plainly, because a comparison that only lists wins is marketing.
 |---|---|---|
 | **Production deployments** | **none known** | Coraza, CrowdSec, Sophos all run in production at scale |
 | **Version** | pre-1.0, API may break | Coraza v3 stable; Sophos shipping for years |
-| **Ready-to-run proxy** | **does not exist yet** | SafeLine, CrowdSec, Sophos are deployable today |
+| **Ready-to-run proxy** | `proxy/` (reference, ~325 LOC) | SafeLine, CrowdSec, Sophos ship more featureful ones |
 | **Rule ecosystem** | 66 first-party rules | CRS is thousands of rules, twenty years of tuning |
 | **Managed rule updates** | none | CrowdSec ships crowd-sourced blocklists; vendors ship managed rules |
 | **Commercial support** | none | Sophos, CrowdSec, Wallarm, Imperva |
 | **Adversarial track record** | one session of self-testing | CRS has had two decades of public bypass research |
 | **Non-Go embedding** | none | Coraza has WASM/Envoy/Caddy/Traefik connectors |
 
-The proxy gap is the sharpest one in practice. **gwaf cannot currently protect a
-PHP, Python, or Node application**, because there is no binary that fronts one —
-only a Go library and framework middleware. Protecting WordPress with gwaf today
-means writing a small Go reverse proxy yourself.
+The proxy gap **has since been closed**: `proxy/` is a reference reverse proxy
+that fronts a PHP, Python, or Node application, verified end to end against a
+WordPress-shaped target. It is deliberately minimal — glue over the library, no
+config format, no plugin system — so it is a starting point rather than a
+competitor to SafeLine's or CrowdSec's deployment tooling.
+
+What remains genuinely behind is everything around detection: no known
+production deployments, a pre-1.0 API, 66 rules against twenty years of CRS
+tuning, no managed rule updates, and no commercial support.
 
 ---
 
@@ -174,7 +179,7 @@ corpus (`make corpus`); other columns are from vendor documentation and are
 | Rate limiting / bot mgmt | **no — by design** | no | **yes** | yes | yes | yes |
 | Crowd-sourced threat intel | **no** | no | **yes** | no | no | yes |
 | Managed rule updates | **no** | CRS releases | **yes** | yes | yes | yes |
-| Deployable today, no code | **no** | via connectors | **yes** | **yes** | **yes** | **yes** |
+| Deployable today, no code | **yes** (`proxy/`) | via connectors | **yes** | **yes** | **yes** | **yes** |
 
 The "no — by design" rows are the scope line, not gaps. gwaf answers *"is this
 request an attack?"* using one request and no memory. Rate limiting, reputation,

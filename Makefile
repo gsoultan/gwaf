@@ -9,7 +9,7 @@ FUZZTIME ?= 30s
 # the split silently stops being checked -- which is worse than not splitting,
 # because the invariant then only appears to hold.
 MODULES ?= . ./middleware ./examples ./schema/openapi ./schema/grpc ./seclang \
-           ./adapters/gin ./adapters/echo ./adapters/fiber \
+           ./adapters/gin ./adapters/echo ./adapters/fiber ./proxy \
            ./test/extension
 
 # Tools are resolved through GOPATH/bin as well as PATH.

@@ -150,6 +150,24 @@ attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
 | [GATEON-MIGRATION.md](docs/GATEON-MIGRATION.md) | First adopter: replacing Coraza |
 | [CLAUDE.md](CLAUDE.md) | Project guidelines, structure, standards |
 
+## Protecting an app that is not written in Go
+
+A library protects only the process that imports it. `proxy/` is the reference
+reverse proxy that puts gwaf in front of anything else — PHP, Node, Python, a
+WordPress install:
+
+```
+go build -o gwaf-proxy ./proxy
+./gwaf-proxy -upstream http://127.0.0.1:8080 -listen :80
+
+./gwaf-proxy -upstream http://127.0.0.1:8080 -detect-only -v   # measure first
+```
+
+It is **pure glue, ~325 lines**, capped at ~500, with no detection logic, no
+rules of its own, and no config file it discovers ([CLAUDE.md](CLAUDE.md) §1
+tier 3). If it ever needs a feature, the library is missing an API and the fix
+goes there. See [proxy/README.md](proxy/README.md).
+
 ## Positive security: what no signature can catch
 
 A signature answers *"does this value look like an attack?"*. Some of the most
@@ -236,6 +254,7 @@ dependencies**, and that is the one property no competing WAF library offers.
 | `schema/openapi` | YAML needs a parser core will not carry |
 | `schema/grpc` | protobuf descriptors need `google.golang.org/protobuf` |
 | `seclang` | CRS migration links a regex engine |
+| `proxy` | the reference reverse proxy; glue, not library |
 
 `staticcheck` and `govulncheck` run over **every** module in `make check`, not
 just core — core is the one module that cannot have a dependency CVE, so

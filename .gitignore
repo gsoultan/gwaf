@@ -13,3 +13,8 @@ graphify-out/
 # Compiled corpus generator. Build it with `go run ./testdata/corpus/gen`;
 # a 2.9 MB prebuilt executable was committed here once and should not be again.
 /gen
+
+# Compiled reference proxy. Build with `go build -o gwaf-proxy ./proxy`;
+# a stray binary from `go build ./...` was staged once and must not recur.
+/proxy/proxy
+gwaf-proxy

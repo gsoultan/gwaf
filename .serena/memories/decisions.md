@@ -1326,3 +1326,36 @@ the full net/http path, not the detector in isolation. The nested-pollution and
 entity-scheme gaps were genuine; the Apache one was half measurement-artifact
 (net/http 400) and half real (gwaf-as-proxy), and separating those two halves is
 what kept the fix and the harness both honest.
+
+## SHIPPED: proxy/ — the reference reverse proxy (tier 3)
+
+gwaf could not protect a PHP, Node, or WordPress app, because a library protects
+only the process that imports it. `proxy/` closes that: ~325 lines, own module,
+pure glue over gwaf + middleware, no detection logic, no rules, no config file
+it discovers, no plugin system, no metrics endpoint. Under the ~500 LOC cap.
+
+**Verified end to end with the real binary**, not just tests: health 200 without
+the upstream up, benign forwarded to the backend, and SQLi / `wp-content/uploads
+/shell.php` / Log4Shell-in-User-Agent all 403.
+
+### staticcheck caught a security bug, not just a lint warning
+`httputil.ReverseProxy.Director` is deprecated in Go 1.26 (SA1019). The fix is
+not cosmetic: `Rewrite` + `SetXForwarded()` **overwrites** client-supplied
+`X-Forwarded-For`, while the Director idiom *appends* to it — which lets a client
+forge its own address into the upstream's logs and access rules. This is the
+first finding from wiring staticcheck properly (it had been silently skipped for
+the life of the project), and it landed on the first new module added after.
+
+### Why a separate module, and why the cap
+The module boundary makes tier 3 enforceable: the proxy cannot reach gwaf's
+internals even by accident, and an embedder importing gwaf never inherits
+httputil or these flags. The LOC cap is the tripwire — a config format, a plugin
+system, or a metrics endpoint appearing here means the *library* is missing an
+API, and the fix goes there. A PR adding non-glue code to proxy/ is a design bug
+report against gwaf.
+
+### It also de-risks the gateon embedding
+The proxy and gateon are two drivers over the same tier-1 API. The proxy is the
+cheap embedder; gateon is the expensive one. Any API gap surfaces here at ~325
+LOC of cost rather than deep in another repo — the same forcing function that
+made examples/customrules find two API bugs no unit test caught.
