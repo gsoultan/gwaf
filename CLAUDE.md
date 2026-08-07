@@ -528,3 +528,19 @@ Write a memory when a decision cost real work — especially a rejection.
 - Commit messages explain **why**, in prose, the way the rest of this file does. The subject is a
   sentence, not a label. A body that only restates the diff is not worth writing — the diff is
   already there.
+
+### Enforcement, not just the rule above
+
+`.githooks/commit-msg` strips AI attribution lines from every commit message, and
+`core.hooksPath` is set to `.githooks` so it runs for everyone who clones. A
+fresh clone needs it once:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook exists because the prose rule was not enough. An agent harness instructed
+to append `Co-Authored-By: Claude ...` did so on 17 commits; 15 reached GitHub and
+had to be rewritten out of public history. This is the same standard §6 applies to
+the security gates: a rule that depends on whoever is reading it that day is a rule
+that reports compliance it did not earn.

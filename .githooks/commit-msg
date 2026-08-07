@@ -1,0 +1,30 @@
+#!/bin/sh
+# Strip AI co-authorship trailers from every commit message.
+#
+# CLAUDE.md §6 forbids them, and that was not enough: an agent harness instructed
+# to add "Co-Authored-By: Claude ..." added it to 17 commits, 15 of which reached
+# GitHub and had to be rewritten out of public history. A rule that lives only in
+# prose is a rule that depends on whoever is reading it that day.
+#
+# This is the same principle the project applies to its own security gates: a
+# check that can be skipped reports success it did not earn. The commit author is
+# the human who shipped the work. Tooling is not a contributor.
+msg="$1"
+[ -f "$msg" ] || exit 0
+
+# grep -c prints a count and exits 1 when that count is zero, so an "|| echo 0"
+# fallback appends a *second* zero and the arithmetic test then fails. Take the
+# printed count and normalise it instead.
+before=$(grep -ciE '^(co-authored-by:[[:space:]]*claude|.*generated with \[?claude code)' "$msg" 2>/dev/null)
+case "$before" in ''|*[!0-9]*) before=0 ;; esac
+[ "$before" -eq 0 ] && exit 0
+
+tmp="$msg.tmp.$$"
+grep -viE '^(co-authored-by:[[:space:]]*claude|.*generated with \[?claude code|🤖 generated with)' "$msg" > "$tmp" && mv "$tmp" "$msg"
+
+# Collapse the blank lines the removal leaves behind.
+tmp="$msg.tmp.$$"
+awk 'BEGIN{b=0} /^[[:space:]]*$/{b++; next} {while(b>0 && NR>1){print ""; b--}; b=0; print} END{}' "$msg" > "$tmp" && mv "$tmp" "$msg"
+
+echo "commit-msg: removed $before AI attribution line(s); see CLAUDE.md §6" >&2
+exit 0
