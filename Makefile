@@ -10,7 +10,7 @@ FUZZTIME ?= 30s
 # because the invariant then only appears to hold.
 MODULES ?= . ./middleware ./examples ./schema/openapi ./schema/grpc ./seclang \
            ./adapters/gin ./adapters/echo ./adapters/fiber ./proxy \
-           ./test/extension
+           ./test/extension ./test/conformance
 
 # Tools are resolved through GOPATH/bin as well as PATH.
 #
@@ -95,6 +95,22 @@ calibrate:
 .PHONY: lint-rules
 lint-rules:
 	$(GO) run ./cmd/gwaf lint
+
+## conformance: run the go-ftw suite.
+##
+## Bundled tests always run. The external OWASP CRS corpus is opt-in, because it
+## is thousands of files this repository does not vendor and a suite that
+## silently passes when its input is missing is worse than one that is absent:
+##
+##   git clone --depth 1 https://github.com/coreruleset/coreruleset /tmp/crs
+##   CRS_TESTS=/tmp/crs/tests/regression/tests make conformance
+##
+## Add CRS_RULES=/tmp/crs/rules to switch to exact rule-ID comparison through
+## the seclang bridge, which is the stricter claim.
+.PHONY: conformance
+conformance:
+	@cd test/conformance && $(GO) test -v ./... 2>&1 | \
+		grep -E 'conformance \[|loaded|--- (PASS|FAIL|SKIP)|^(ok|FAIL)'
 
 ## corpus: detection rate and false-positive rate, reported together.
 .PHONY: corpus

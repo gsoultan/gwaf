@@ -1,0 +1,111 @@
+---
+meta:
+  author: "gwaf"
+  description: >
+    False-positive controls in FTW format.
+
+    A conformance suite that only asserts detections measures half the problem.
+    A WAF that blocks everything passes every attack case and is useless, so
+    every one of these asserts a *pass* — and a failure here is a false positive,
+    which CLAUDE.md §6 treats as a build-failing regression rather than a
+    tuning note.
+  enabled: true
+  name: "gwaf-benign"
+
+tests:
+  - test_title: "benign-plain-query"
+    desc: "an ordinary product lookup"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/products?id=42"
+          headers:
+            Host: "localhost"
+        output:
+          status: 200
+
+  - test_title: "benign-union-in-prose"
+    desc: >
+      "the union selected a new representative" contains both SQL keywords and
+      is a sentence. A signature list blocks it; a grammar does not.
+    stages:
+      - input:
+          method: "GET"
+          uri: "/search?q=the%20union%20selected%20a%20new%20representative"
+          headers:
+            Host: "localhost"
+        output:
+          status: 200
+
+  - test_title: "benign-onerror-in-prose"
+    desc: "the word 'onerror' outside a tag is a word"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/search?q=the%20onerror%20callback%20fires%20when%20loading%20fails"
+          headers:
+            Host: "localhost"
+        output:
+          status: 200
+
+  - test_title: "benign-relative-path"
+    desc: "a relative path in a note is not traversal"
+    stages:
+      - input:
+          method: "POST"
+          uri: "/api/notes"
+          headers:
+            Host: "localhost"
+            Content-Type: "application/json"
+          data: '{"text":"see ../shared/2026/q3-summary.pdf for details"}'
+        output:
+          status: 200
+
+  - test_title: "benign-markdown-backtick"
+    desc: >
+      a bare word in backticks is Markdown inline code, and blocking it makes
+      the firewall an obstacle to whoever documents the system
+    stages:
+      - input:
+          method: "GET"
+          uri: "/search?q=use%20the%20%60id%60%20field%20to%20reference%20it"
+          headers:
+            Host: "localhost"
+        output:
+          status: 200
+
+  - test_title: "benign-template-placeholder"
+    desc: "{{ user.name }} is Vue, Angular, Handlebars, Jinja and Liquid"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/search?q=the%20%7B%7B%20user.name%20%7D%7D%20placeholder"
+          headers:
+            Host: "localhost"
+        output:
+          status: 200
+
+  - test_title: "benign-prompt-injection-prose"
+    desc: "prose describing prompt injection is not prompt injection"
+    stages:
+      - input:
+          method: "POST"
+          uri: "/api/chat"
+          headers:
+            Host: "localhost"
+            Content-Type: "application/json"
+          data: '{"message":"The attack works by telling the model to ignore previous instructions"}'
+        output:
+          status: 200
+
+  - test_title: "benign-normal-user-agent"
+    desc: "an ordinary browser"
+    stages:
+      - input:
+          method: "GET"
+          uri: "/"
+          headers:
+            Host: "localhost"
+            User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0"
+        output:
+          status: 200

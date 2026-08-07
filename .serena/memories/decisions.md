@@ -1406,3 +1406,56 @@ double-adding a query parameter because SetRequestLine already parses one.
 string evaluates exactly 1 rule, not 0. Pre-existing, verified by stashing. The
 "0 rules evaluated" claim is true of the no-query case and rounds the other down;
 the example now states both numbers rather than the flattering one.
+
+## SHIPPED: go-ftw conformance — and the number is 31.5%
+
+Built test/conformance (own module; YAML needs a dependency core will not carry)
+and ran the real OWASP CRS corpus: 323 files, 5,066 stages.
+
+**Result: 1598/5066 (31.5%), 31 skipped.** That is the honest headline and it is
+far below every number gwaf publishes about itself. It is also the point of the
+exercise — every other figure is measured against a corpus gwaf wrote.
+
+### The split is what matters
+- **3,416 missed detections**
+- **52 false positives** (about 1%)
+
+So the gap is *coverage*, not *precision*. gwaf blocks less than CRS expects; it
+does not block things it shouldn't.
+
+### Three qualifications, none of which rescue the number
+1. Some families are out of scope by design: session fixation (943) needs
+   cross-request state; method/protocol enforcement (911/920) is the schema tier.
+2. **~70 RESPONSE-95x misses are the runner's fault, not gwaf's** — it drives
+   request phases only, so response-phase rules never got a chance. Fixable.
+3. Some CRS "attacks" are application-bug triggers rather than injection:
+   `2.2250738585072011e-308` is the PHP float DoS, `4294967296` an overflow
+   probe. gwaf does not have those rules by choice.
+
+### The finding worth acting on: DBMS-specific function-call injection
+Sampling missed 942 cases shows one clear class gwaf does not detect — a bare
+call to a dangerous built-in, with no UNION, no OR 1=1, no keyword:
+
+    lo_import('/etc' || '/pass' || 'wd')        PostgreSQL file read
+    sqlite_compileoption_used(id)               SQLite fingerprinting
+    starts_with(password,'a')::int              PostgreSQL boolean extraction
+    jsonb_pretty(json_build_object(1,password)) PostgreSQL JSON exfiltration
+    FIND_IN_SET('22', Category)                 MySQL
+
+gwaf reads SQL *grammar*, which is why it beats signature lists on encoding
+evasion — and this is the flip side: a bare call to a dangerous built-in is
+grammatically ordinary. CRS covers it by naming hundreds of functions, which is
+the enumeration gwaf avoids everywhere else, so **the fix is a design question,
+not a list to paste in.** Highest-value open detection work.
+
+### Runner decisions
+- **In-process, not over a socket.** A socket test measures the socket too — a
+  400 from net/http reads as "gwaf missed it" when gwaf never saw it, which this
+  project already hit for real with CVE-2021-42013.
+- **Skips are excluded from the denominator, never counted as passes**, enforced
+  by a test. A suite that skips half its cases and reports 100% is lying.
+- **The benign controls are proven to assert something**: a block-everything
+  configuration must fail the suite, or the FP half is decoration.
+- Two modes kept apart — detection parity (IDs ignored) vs seclang bridge
+  fidelity (exact CRS IDs) — because reporting one and implying the other is how
+  a conformance number becomes marketing.
