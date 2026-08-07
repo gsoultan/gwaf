@@ -35,6 +35,11 @@ type Transaction struct {
 	// suppresses one finding rather than a rule everywhere.
 	reqPath string
 
+	// lineBuf holds the reconstructed request line. Retained on the transaction
+	// so SetRequestLine does not allocate one per request; it is reset, not
+	// freed, when the transaction is reused.
+	lineBuf []byte
+
 	values []engine.Value
 
 	// spans records where each value's key and data live in the arena, so both
@@ -167,6 +172,7 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.bodyErr = nil
 	tx.bodyParseFailed = ""
 	tx.reqPath = ""
+	tx.lineBuf = tx.lineBuf[:0]
 	tx.contentType = ""
 	tx.contentEncoding = ""
 	tx.grpcEncoding = ""
@@ -272,11 +278,37 @@ func (tx *Transaction) Decision() Decision {
 	return allow(ReasonNoMatch, tx.score, tx.evaluated)
 }
 
+// maxRequestLineLen bounds the reconstructed start line. Servers cap the real
+// thing well below this (nginx defaults to 8 KiB for the whole header block), so
+// anything longer is not a request line a rule needs to reason about — and the
+// bound is what keeps a hostile URI from growing the transaction's arena.
+const maxRequestLineLen = 8 << 10
+
 // SetRequestLine records the method, target, and protocol.
 func (tx *Transaction) SetRequestLine(method, target, proto string) {
 	tx.addValue(types.Target{Kind: types.TargetRequestMethod}, "", method)
 	tx.addValue(types.Target{Kind: types.TargetRequestURI}, "", target)
 	tx.addValue(types.Target{Kind: types.TargetRequestProtocol}, "", proto)
+
+	// The start line as it appeared on the wire. Built rather than captured
+	// because the API takes the three parts separately, and rebuilt with single
+	// spaces because that is the only form RFC 9112 permits — a rule asserting
+	// the line is well-formed must not be handed a line this library malformed.
+	//
+	// Skipped entirely when no rule reads it, which is the common case: only
+	// SecLang imports use REQUEST_LINE and the core ruleset has none. Building
+	// it unconditionally charged every embedder ~50 bytes of extra prefilter
+	// scan per request for a target a CRS bridge alone needs, and that was
+	// enough to push the benign POST p50 past its budget.
+	if tx.rs.Reads(types.TargetRequestLine) &&
+		len(method)+len(target)+len(proto)+2 <= maxRequestLineLen {
+		tx.lineBuf = append(tx.lineBuf[:0], method...)
+		tx.lineBuf = append(tx.lineBuf, ' ')
+		tx.lineBuf = append(tx.lineBuf, target...)
+		tx.lineBuf = append(tx.lineBuf, ' ')
+		tx.lineBuf = append(tx.lineBuf, proto...)
+		tx.addValueBytes(types.Target{Kind: types.TargetRequestLine}, "", tx.lineBuf)
+	}
 
 	path, query := target, ""
 	if i := indexByte(target, '?'); i >= 0 {

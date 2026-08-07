@@ -1662,6 +1662,8 @@ a superset that can widen a match but never miss one.
 
 ### The number that changed the conclusion
 gwaf+CRS false positives went **51.3% -> 9.87%**, with detection *up* to 49.6%.
+(Corrected later to **7.56%** — see the REQUEST_LINE entry below; 9.87% was
+inflated by a bridge bug of ours, not by CRS.)
 
 The cause is the previous commit, not this one: with paranoia gates interpreted,
 a rule CRS placed behind PL2 arrives as Medium and is filtered exactly as CRS at
@@ -1768,3 +1770,42 @@ Probing 35 out-of-corpus attacks left 7 misses, and **every one is by design**:
 needs to know the legitimate host (embedder); loopback SSRF is deliberately
 opt-in; mass assignment is the schema tier's job; a lone `TE: chunked` is legal
 HTTP. Two of the 35 were bogus test cases of mine.
+
+## FIXED: REQUEST_LINE was the URI, so CRS 920100 fired on every request
+
+An adopter sent a real request that their current WAF false-positives on, and
+asked whether gwaf blocks it. gwaf passed it on every method and shape with
+**score 0**. Running it through the CRS bridge to explain *their* false positive
+instead found one of ours.
+
+`REQUEST_LINE` mapped to `TargetRequestURI`. An earlier fix had moved it off
+`REQUEST_BODY` (which made CRS fail to load at all) and stopped there. **CRS
+920100 is a negated match — `!@rx` against the full `METHOD URI PROTOCOL`
+form — so handing it a URI meant the regex could never match, the negation
+always fired, and every request through the bridge scored 3 for "Invalid HTTP
+Request Line".**
+
+Now `types.TargetRequestLine`, built from the three parts with single spaces
+(RFC 9112's only legal form — a rule asserting the line is well-formed must not
+be handed a line *we* malformed).
+
+**Corrected measurement: gwaf+CRS on the benign corpus is 7.56%, not the 9.87%
+recorded above.** 920100 never blocked alone, but +3 on every request pushed
+borderline ones over the threshold. gwaf core is 0.00% on the same corpus.
+
+### The compiler already knew this was unnecessary work
+Building the line for every request cost ~50 bytes of extra prefilter scan and
+pushed benign POST p50 from 14.9µs to 15.04µs, past its budget. Only SecLang
+imports read REQUEST_LINE; the core ruleset has none. Added `Ruleset.Reads(kind)`
+— a union of the per-group target masks that already existed — and the
+transaction now skips building a value nothing will look at. p50 back to 14.9µs.
+**A target an embedder's ruleset never reads should cost that embedder nothing.**
+
+### Three wrong test harnesses in a row on one fix
+Worth recording because the pattern repeats: (1) the test regex omitted CRS's
+`(?i)`, so it required a lowercase method and "fired" on everything — identical
+symptom to the bug; (2) the assertion used `Blocked()`, but 920100 is a scoring
+rule that never reaches the threshold alone, so it passed for both a working rule
+and a silenced one; (3) the FP sweep passed an empty method for corpus entries
+that omit the field, building a genuinely malformed line and blaming gwaf for
+catching it. **Each time the harness was the broken side.**

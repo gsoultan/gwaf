@@ -459,7 +459,15 @@ func targetKind(name string) (types.TargetKind, bool) {
 		//
 		// Found by running the CRS corpus through the bridge rather than by
 		// reading it: no in-tree test imported a REQUEST_LINE rule.
-		return types.TargetRequestURI, true
+		//
+		// That fix was half of one. Pointing it at REQUEST_URI made the ruleset
+		// load, but still handed the rule the wrong bytes, and CRS 920100 is a
+		// *negated* match against the full "METHOD URI PROTOCOL" form — so a URI
+		// never matched it, the negation fired, and every single request through
+		// the bridge scored 3 for "Invalid HTTP Request Line". Found on a real
+		// request an adopter sent in, which is also why the head-to-head
+		// false-positive figure for gwaf+CRS was overstated.
+		return types.TargetRequestLine, true
 	case "REQUEST_BODY", "MULTIPART_FILENAME", "FILES", "FILES_NAMES":
 		return types.TargetRequestBody, true
 	case "REQUEST_COOKIES":

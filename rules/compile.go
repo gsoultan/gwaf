@@ -96,6 +96,7 @@ type ChainGroup struct {
 }
 
 // Reads reports whether any rule in this group inspects the given target kind.
+//
 func (g *ChainGroup) Reads(k types.TargetKind) bool {
 	return k < 64 && g.targets&(1<<uint(k)) != 0
 }
@@ -235,6 +236,10 @@ type Ruleset struct {
 	all    []*CompiledRule
 	byID   map[types.RuleID]*CompiledRule
 	report Report
+
+	// targets is the union of every group's target mask, across all phases. See
+	// Reads for why the transaction needs it.
+	targets uint64
 }
 
 // maxPhases sizes the phase-indexed array. Phase values start at 1.
@@ -366,6 +371,7 @@ func Compile(set Set, opts Options) (*Ruleset, error) {
 		for _, t := range r.Targets {
 			if t.Kind < 64 {
 				g.targets |= 1 << uint(t.Kind)
+				rs.targets |= 1 << uint(t.Kind)
 			}
 			if t.Kind == types.TargetResolved {
 				if plan.resolved == nil {
@@ -517,6 +523,20 @@ func validate(set Set, opts Options) error {
 }
 
 // Report returns the compile summary.
+// Reads reports whether any rule in the ruleset, in any phase, inspects the
+// given target kind.
+//
+// The transaction uses this to skip *building* a value nothing will look at.
+// REQUEST_LINE is the case that motivated it: only SecLang rules read it, the
+// core ruleset has none, and reconstructing "METHOD URI PROTOCOL" for every
+// request charged every embedder for a target only a CRS import uses. It cost
+// enough to push the benign POST p50 past its 15µs budget, which is the kind of
+// thing the compiler is supposed to notice at build time rather than pay for at
+// request time (docs/CONCEPT.md).
+func (rs *Ruleset) Reads(k types.TargetKind) bool {
+	return k < 64 && rs.targets&(1<<uint(k)) != 0
+}
+
 func (rs *Ruleset) Report() Report { return rs.report }
 
 // Len returns the number of compiled rules.

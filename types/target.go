@@ -17,6 +17,16 @@ const (
 	TargetRequestURI      // full request target, including query
 	TargetRequestPath     // path only, query stripped
 	TargetRequestProtocol // e.g. HTTP/1.1
+
+	// TargetRequestLine is the whole start line, "GET /path HTTP/1.1".
+	//
+	// Distinct from REQUEST_URI, and the difference is not cosmetic. SecLang's
+	// REQUEST_LINE rules are written against the full three-token form, and the
+	// most important of them — CRS 920100 — is a *negated* match: it fires when
+	// the line does not look like a well-formed request line. Feeding it the URI
+	// alone means the regex can never match, so the negation fires on every
+	// request, and it did.
+	TargetRequestLine
 	TargetRequestHeaders  // header values
 	TargetRequestHeaderNames
 	TargetArgs // query and body arguments, merged
@@ -91,6 +101,8 @@ func (k TargetKind) String() string {
 		return "REQUEST_PATH"
 	case TargetRequestProtocol:
 		return "REQUEST_PROTOCOL"
+	case TargetRequestLine:
+		return "REQUEST_LINE"
 	case TargetRequestHeaders:
 		return "REQUEST_HEADERS"
 	case TargetRequestHeaderNames:
@@ -281,6 +293,8 @@ func (k TargetKind) ConstName() string {
 		return "TargetRequestPath"
 	case TargetRequestProtocol:
 		return "TargetRequestProtocol"
+	case TargetRequestLine:
+		return "TargetRequestLine"
 	case TargetRequestHeaders:
 		return "TargetRequestHeaders"
 	case TargetRequestHeaderNames:
