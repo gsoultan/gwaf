@@ -108,9 +108,39 @@ cover:
 	$(GO) test -coverprofile=coverage.out -coverpkg=./... ./...
 	$(GO) tool cover -func=coverage.out | tail -1
 
+## bench-guard: refuse to measure on a machine that is already busy.
+##
+## A vulnerability scanner left running in another terminal made a benign GET
+## read 880ns against a 734ns baseline -- a 20% "regression" that was entirely
+## the scanner, and that a paired measurement (with and without the change, back
+## to back) immediately showed was not real. Recording that number as the
+## baseline would have raised the bar permanently and hidden a real regression
+## later, which is the failure this guard exists to prevent.
+##
+## Set FORCE=1 to measure anyway. The threshold is a quarter of the cores,
+## because a benchmark wants the machine, not a share of it.
+.PHONY: bench-guard
+bench-guard:
+	@cpus=$$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); \
+	load=$$(uptime | sed -e 's/.*load averages*://' -e 's/,/ /g' | awk '{print $$1}'); \
+	if [ -n "$$FORCE" ]; then \
+		echo "bench-guard: FORCE set, measuring at load $$load on $$cpus cores"; \
+	else \
+		awk -v l="$$load" -v c="$$cpus" 'BEGIN{ if (l > c/4) exit 1; exit 0 }' || { \
+			echo "bench-guard: load $$load on $$cpus cores -- too busy to measure."; \
+			echo "  A benchmark taken here is not comparable to the baseline, and"; \
+			echo "  saving it would hide a future regression. Close what is running,"; \
+			echo "  or set FORCE=1 if you know the number is only indicative."; \
+			echo "  To judge a change without a quiet machine, measure it paired"; \
+			echo "  (with and without, back to back) or use structural metrics:"; \
+			echo "      go run ./cmd/gwaf lint   # literals, automaton states, unconditional"; \
+			exit 1; \
+		}; \
+	fi
+
 ## bench: run the benchmark suite.
 .PHONY: bench
-bench:
+bench: bench-guard
 	$(GO) test -run=XXX -bench=. -benchmem ./...
 
 ## bench-publish: everything docs/BENCHMARKS.md reports, with provenance.
@@ -137,8 +167,11 @@ bench-publish:
 	@$(GO) run ./cmd/gwaf calibrate 2>&1 | grep -E 'corpus:|power:|every rule' || true
 
 ## bench-save: record a baseline for regression comparison.
+##
+## Guarded hardest of the three: this one is written down and every later
+## comparison is made against it.
 .PHONY: bench-save
-bench-save:
+bench-save: bench-guard
 	@mkdir -p bench
 	$(GO) test -run=XXX -bench=. -benchmem -count=10 ./... > bench/baseline.txt
 	@echo "baseline written to bench/baseline.txt"
@@ -148,7 +181,7 @@ bench-save:
 ## The SLOs in CLAUDE.md §2 are gated here. A >5% regression fails the build;
 ## see docs/PERFORMANCE.md.
 .PHONY: bench-check
-bench-check:
+bench-check: bench-guard
 	@if [ ! -f bench/baseline.txt ]; then echo "no baseline; run 'make bench-save'"; exit 1; fi
 	@if ! command -v benchstat >/dev/null 2>&1; then \
 		echo "benchstat not installed (go install golang.org/x/perf/cmd/benchstat@latest)"; exit 1; \
