@@ -395,6 +395,14 @@ func scanCommandPositions(src []byte, mark func(Signal, int, int)) {
 			// Backtick substitution around a single bare word is Markdown far
 			// more often than it is an attack, so it needs a real invocation:
 			// a second token, a path, or another separator.
+			//
+			// A concatenation heuristic -- flag it when the backtick is joined to
+			// preceding data, since prose is space-delimited -- was built and
+			// measured, and rejected: it false-positived on 9/9 realistic benign
+			// values, because "localhost`id`" (attack) and "config`env`" (a JS
+			// tagged template) are the same shape word`command`, distinguishable
+			// only by field context this detector deliberately does not keep. See
+			// TestBacktickLimitIsDeliberate and .serena/memories/decisions.md.
 			if backtick && !isInvocation(src, end) {
 				continue
 			}

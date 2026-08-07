@@ -161,6 +161,39 @@ func TestBacktickLimitIsDeliberate(t *testing.T) {
 	}
 }
 
+// TestConcatenatedBacktickStaysUnflagged guards a rejected optimization.
+//
+// A concatenation heuristic was proposed to catch "localhost`id`": flag a bare
+// command word in backticks when the backtick is joined to preceding data,
+// since prose ("use the `id` field") is space-delimited and an injection is
+// appended. It was built and measured, and it false-positived on 9 of 9
+// realistic benign values -- because "localhost`id`" and "config`env`" (a JS
+// tagged template) are the same shape word`command`, and a minified
+// "the`id`column" is too. The bytes are identical; only field context, which
+// this detector deliberately does not keep, distinguishes them. So the bare-word
+// backtick stays unflagged, and this test fails if that heuristic is ever
+// re-added, because it would resurrect those false positives.
+func TestConcatenatedBacktickStaysUnflagged(t *testing.T) {
+	d := New()
+	benign := []string{
+		"sh`id`", "t`ls`", "config`env`", "the`id`column", "click`more`here",
+		"the`head`section", "a`node`server", "run`php`inline", "see`less`output",
+		"localhost`id`", // the attack we accept as the cost of not blocking the rest
+	}
+	for _, b := range benign {
+		if d.Analyze([]byte(b)).Detected() {
+			t.Errorf("bare-word backtick flagged (rejected concatenation heuristic is back?): %q", b)
+		}
+	}
+	// The invocation forms are still caught -- the tradeoff is scoped to a lone
+	// bare word, not to backticks in general.
+	for _, a := range []string{"localhost`cat /etc/passwd`", "x`id;whoami`", "host`id -a`"} {
+		if !d.Analyze([]byte(a)).Detected() {
+			t.Errorf("backtick invocation missed: %q", a)
+		}
+	}
+}
+
 // TestInterpreterPathsAreCaseSensitive records why, and guards the prefilter.
 //
 // "/bin/SH" does not resolve on a case-sensitive filesystem, so folding case

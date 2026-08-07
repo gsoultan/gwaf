@@ -1249,3 +1249,31 @@ A gate that skips when a tool is missing reports success it did not earn. If a
 check cannot run, that is a failure, not a warning. And "imported but not
 called" vulnerabilities matter here specifically, because gwaf ships adapters —
 an adopter inherits our transitive pins whether or not we call the bad path.
+
+## REJECTED: backtick concatenation heuristic for command injection
+
+A pentest harness (test/pentest) confirmed `localhost`id`` reaches the backend:
+detect/shelli deliberately does not flag a bare command word in backticks,
+because ``id`` is also how Markdown writes inline code ("use the `id` field"),
+and blocking it blocks documentation. Invocation forms (``cat /etc/passwd``,
+``id;whoami``, `$(id)`, `;id`) are all caught.
+
+Proposed fix: flag the bare word when the opening backtick is **concatenated to
+preceding data** (`isWordByte(src[i-1])`), on the theory that prose is
+space-delimited and an injection is appended to the value already there. Built
+it, then measured the false-positive cost against a realistic benign corpus.
+
+**Result: 9/9 false positives.** `sh`id``, `t`ls``, `config`env`` (JS tagged
+template literals) and `the`id`column`, `a`node`server`, `see`less`output`
+(minified inline code) all tripped. The reason is structural, not tunable:
+`localhost`id`` (attack) and `config`env`` (benign) are the *same shape*
+`word`command``, and the command set overlaps ordinary vocabulary heavily —
+id, env, head, tail, more, less, node, php, ps. Only field context — is this a
+place backticks are legitimate? — separates them, and gwaf is stateless and
+field-agnostic by design, so it cannot have that context.
+
+**There is no FP-safe structural heuristic here.** The bare-word backtick
+tradeoff is fundamental, not merely conservative. Locked by
+detect/shelli TestConcatenatedBacktickStaysUnflagged, which fails if the
+heuristic is re-added. If this ever needs revisiting, it belongs to the embedder
+(who knows the field) via a per-route policy, not to core detection.
