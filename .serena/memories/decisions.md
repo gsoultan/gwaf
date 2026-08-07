@@ -1516,3 +1516,50 @@ are genuine coverage gaps, not runner artifacts.**
 *one rule* does not fire, not that nothing does — several of those payloads carry
 a real shell command. Reading it as "must pass" filed correct blocks as FPs. The
 runner now classifies them separately: **3 true false positives, 50 ambiguous**.
+
+## SHIPPED: latency profiling, CRS Java coverage, and the head-to-head
+
+### P0 latency: measured first, and the profile redirected the work
+Profile put `Automaton.Scan` at 31.7% and `stages.apply` at 30.2%. Split the
+scan's root path into its own tight spin — benign traffic spends nearly every
+byte at the root, and it was paying two `state == 0` branches per byte.
+**Measured paired: GET -4.9%, POST JSON -2.2%.** Real, smaller than the profile
+suggested, because it removes branch overhead rather than bytes scanned.
+
+**Ruled out, so nobody repeats it:** the four chain groups cannot be merged.
+`[lowercase]` exists because rules 1001 and 1005 must match *before* decoding —
+an encoded traversal sequence is the signal, so decoding first destroys it.
+Merging automata across groups fails because each group scans different bytes.
+`growTo` is already a cap check. **Further gains need fewer bytes scanned
+(schema Inert on real traffic), not a faster loop.**
+
+### P1 CRS Java: one vocabulary, 176 stages
+944240 is built entirely on ysoserial's Commons-Collections gadget names —
+`clonetransformer`, `forclosure`, `invokertransformer`. Adding them took
+conformance **31.6% -> 35.1%** with zero new false positives. Named individually
+rather than by a `runtime.` prefix, because that prefix is an ordinary JSON
+field name.
+
+### P2 head-to-head: the number I nearly published wrong
+Built `test/headtohead` — gwaf and Coraza+CRS, same corpus, same process.
+
+**First run said Coraza had an 87% false-positive rate. That was my harness.**
+The corpus records carry only the headers gwaf cares about, so replayed requests
+had no Host, User-Agent, or Accept, and CRS correctly fired 920280 "Request
+Missing a Host Header". A request with no Host is malformed under HTTP/1.1.
+Supplying real browser headers took it to 36.4%; loading the official
+`crs-setup.conf.example` instead of hand-written SecActions left it unchanged,
+which is what confirmed the remainder is Coraza's behaviour rather than mine.
+
+**Publishing 87% would have been exactly the dishonest comparison the file
+exists to prevent. A number about a competitor gets verified before it ships.**
+
+Final, both published because each corpus is one engine's home turf:
+- CRS regression corpus (CRS's turf): **coraza 80.6% vs gwaf 20.0% detection**
+- 10,433 ordinary API requests (gwaf's turf): **gwaf 0.06% vs untuned CRS 36.4%
+  false positives**
+
+Coraza winning detection on its own test suite is fair and is stated plainly.
+gwaf winning FP on its own calibration corpus is close to tautological and is
+stated just as plainly. The caveats travel in the test output itself so the
+numbers cannot be quoted bare.

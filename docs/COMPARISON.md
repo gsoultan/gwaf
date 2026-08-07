@@ -221,10 +221,15 @@ rule compatibility, commercial support, or a track record.
 
 The comparison this repository actually owes, and does not yet have:
 
-1. **A head-to-head benchmark.** gwaf and Coraza, same corpus, same hardware,
-   published methodology, re-runnable by a reader. Coraza's own benchmark page
-   has been "under renovation" since April 2026; that vacuum is ours to fill,
-   and only with numbers that survive scrutiny.
+1. ~~**A head-to-head benchmark.**~~ **Built** — `test/headtohead`, same corpus,
+   same machine, same process, re-runnable with one `make` target. The first
+   result is not flattering and is published anyway: on the CRS regression
+   corpus **Coraza + CRS detects 80.6% against gwaf's 20.0%**, which is fair —
+   that corpus is CRS's own test suite. On 10,433 ordinary API requests the
+   false-positive rates are **gwaf 0.06%, untuned CRS 36.4%**, which is equally
+   one-sided in the other direction because that corpus is gwaf's. Read
+   [test/headtohead/README.md](../test/headtohead/README.md) before quoting
+   either.
 2. **A shared detection corpus.** Running gwaf's 216-case evasion corpus against
    Coraza + CRS and publishing both detection *and* false-positive rates. A
    detection number without an FP number beside it is not a result.

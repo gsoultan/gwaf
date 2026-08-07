@@ -112,6 +112,18 @@ conformance:
 	@cd test/conformance && $(GO) test -v ./... 2>&1 | \
 		grep -E 'conformance \[|loaded|--- (PASS|FAIL|SKIP)|^(ok|FAIL)'
 
+## headtohead: gwaf vs Coraza + CRS on the same corpus. Requires a CRS checkout.
+##
+##   git clone --depth 1 https://github.com/coreruleset/coreruleset /tmp/crs
+##   CRS_TESTS=/tmp/crs/tests/regression/tests CRS_RULES=/tmp/crs/rules make headtohead
+##
+## Read test/headtohead/README.md before quoting either number: each corpus is
+## one engine's home turf, and both are reported for that reason.
+.PHONY: headtohead
+headtohead:
+	@cd test/headtohead && $(GO) test -v -timeout 25m ./... 2>&1 | \
+		grep -E 'detection|false positives|engine |gwaf |coraza|CAVEAT|^\s+[0-9]\.|--- (PASS|FAIL|SKIP)'
+
 ## corpus: detection rate and false-positive rate, reported together.
 .PHONY: corpus
 corpus:

@@ -862,6 +862,22 @@ func requestRules() rules.Set {
 				"javax.management.badattributevalueexpexception",
 				"org.apache.commons.collections.functors",
 				"com.mchange.v2.c3p0.jndi",
+
+				// The Commons-Collections gadget chain (CVE-2015-4852), which
+				// is what ysoserial actually emits and what CRS 944240 matches.
+				//
+				// These are transformer and closure class names, and they are
+				// the payload rather than a description of it: a serialized
+				// object naming InvokerTransformer is one step from
+				// Runtime.exec, and nothing legitimate sends the word
+				// "clonetransformer" in a request. Named individually rather
+				// than by a "runtime." prefix because that prefix is also an
+				// ordinary field name in perfectly innocent JSON.
+				"clonetransformer", "forclosure", "instantiatefactory",
+				"instantiatetransformer", "invokertransformer",
+				"prototypeclonefactory", "prototypeserializationfactory",
+				"whileclosure", "chainedtransformer", "constanttransformer",
+				"lazymap", "tiedmapentry", "keepalivecache",
 			),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,

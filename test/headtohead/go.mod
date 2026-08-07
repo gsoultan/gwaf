@@ -1,0 +1,43 @@
+// The head-to-head comparison is its own module because it depends on Coraza.
+//
+// Nothing in gwaf may depend on a competitor, and an embedder must never
+// inherit one. Keeping the comparison here means the dependency stops at the
+// module boundary while the measurement still runs against the real library.
+module github.com/gsoultan/gwaf/test/headtohead
+
+go 1.26.5
+
+replace github.com/gsoultan/gwaf => ../../
+
+replace github.com/gsoultan/gwaf/test/conformance => ../conformance
+
+replace github.com/gsoultan/gwaf/seclang => ../../seclang
+
+require (
+	github.com/corazawaf/coraza/v3 v3.7.0
+	github.com/gsoultan/gwaf v0.0.0
+	github.com/gsoultan/gwaf/test/conformance v0.0.0-00010101000000-000000000000
+)
+
+require (
+	github.com/corazawaf/libinjection-go v0.3.2 // indirect
+	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/goccy/go-yaml v1.18.0 // indirect
+	github.com/gotnospirit/makeplural v0.0.0-20180622080156-a5f48d94d976 // indirect
+	github.com/gotnospirit/messageformat v0.0.0-20221001023931-dfe49f1eb092 // indirect
+	github.com/gsoultan/gwaf/seclang v0.0.0-00010101000000-000000000000 // indirect
+	github.com/kaptinlin/go-i18n v0.1.4 // indirect
+	github.com/kaptinlin/jsonschema v0.4.6 // indirect
+	github.com/magefile/mage v1.17.0 // indirect
+	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/valllabh/ocsf-schema-golang v1.0.3 // indirect
+	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+	rsc.io/binaryregexp v0.2.0 // indirect
+)

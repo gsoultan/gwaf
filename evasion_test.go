@@ -511,6 +511,16 @@ var evasions = []evasion{
 		body: `{"@type":"org.springframework.context.support.ClassPathXmlApplicationContext"}`},
 	{name: "gadget/templatesimpl", technique: "none",
 		arg: "com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl"},
+	// The Commons-Collections chain ysoserial emits (CVE-2015-4852). CRS 944240
+	// is built entirely on these names, and they were the single largest block
+	// of missed conformance stages: one vocabulary, 176 tests.
+	{name: "gadget/invokertransformer", technique: "body",
+		body: `{"payload":"org.apache.commons.collections.functors.InvokerTransformer"}`},
+	{name: "gadget/clonetransformer", technique: "none", arg: "runtime.CloneTransformer"},
+	{name: "gadget/forclosure", technique: "none", arg: "runtime.ForClosure"},
+	{name: "gadget/chainedtransformer", technique: "body",
+		body: `{"x":"ChainedTransformer"}`},
+	{name: "gadget/lazymap", technique: "none", arg: "org.apache.commons.collections.map.LazyMap"},
 
 	// ---- PHP dynamic evaluation / web shells --------------------------------
 	{name: "phpeval/china chopper", technique: "body", body: `{"c":"<?php @eval($_POST['pass']); ?>"}`},
@@ -934,7 +944,7 @@ var declaredClasses = map[string]int{
 	"llm":       8,
 	"artifact":  8,
 	"elinj":     5,
-	"gadget":    3,
+	"gadget":    7,
 	"phpeval":   5,
 	"phpcode":   5,
 	"rfi":       4,
