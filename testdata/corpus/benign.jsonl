@@ -10432,6 +10432,9 @@
 {"name":"adjacent/technical note 1","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"The report runs java.lang.String.format on every row.\",\"author_id\":400}"}
 {"name":"adjacent/technical note 2","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"We removed the last create_function call during the PHP 8 upgrade.\",\"author_id\":401}"}
 {"name":"adjacent/technical note 3","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"Jackson needs default typing disabled; see the deserialization ticket.\",\"author_id\":402}"}
+{"name":"adjacent/encoded relative path 1","method":"GET","target":"/api/v1/search?q=see+..%2Fshared%2F2026%2Fq3-summary.pdf+for+details"}
+{"name":"adjacent/encoded relative path 2","method":"GET","target":"/api/v1/search?q=the+file+lives+at+..%2Fdocs%2Freadme.md+in+the+repo"}
+{"name":"adjacent/encoded relative path 3","method":"GET","target":"/api/v1/search?q=move+it+to+..%2Farchive%2F2025+when+you+are+done"}
 {"name":"adjacent/notation note 1","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"a:2 ratio applies to the b:3 column\",\"author_id\":200}"}
 {"name":"adjacent/notation note 2","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"o:1 is the override flag; s:4 is the shard\",\"author_id\":201}"}
 {"name":"adjacent/notation note 3","method":"POST","target":"/api/v1/notes","headers":{"Content-Type":"application/json"},"body":"{\"text\":\"timestamp 12:04:59, offset +07:00\",\"author_id\":202}"}

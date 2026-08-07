@@ -1459,3 +1459,60 @@ not a list to paste in.** Highest-value open detection work.
 - Two modes kept apart — detection parity (IDs ignored) vs seclang bridge
   fidelity (exact CRS IDs) — because reporting one and implying the other is how
   a conformance number becomes marketing.
+
+## SHIPPED: SQL function-call detection, response-phase conformance, extreme phases
+
+### The two-tier danger function, which is the design answer to enumeration
+CRS conformance found gwaf missing DBMS function-call injection —
+`lo_import('/etc'||'/pass'||'wd')`, `sqlite_compileoption_used(id)`,
+`utl_http.request(...)`. The mechanism already existed (`SignalDangerFunction`);
+what was wrong was `attachedToSQL`, which requires surrounding SQL. These
+payloads *are* the whole parameter value, substituted into the origin's WHERE
+clause, so there is no boolean connector to attach to.
+
+**Split into two tiers rather than pasting CRS's list:**
+- `osAccessFuncs` — functions that leave the database (filesystem, command,
+  network, build introspection). Fire **without** attachment, because no
+  parameter value legitimately contains `pg_read_file(`.
+- `dangerFuncs` — dangerous only in context (`substring`, `char`, `sleep`).
+  Still require attachment, which is what keeps "use substring(0,5)" out.
+
+Plus `isPackagedDangerCall` for Oracle's `package.function(` form, which the
+tokenizer splits on the dot so the package is never the token before `(`.
+
+### Two false positives the pentest harness found that the corpus could not
+Both were **transport-shaped**: the value alone was clean, the URI form fired.
+
+1. **`?q=sleep(8h) is the recommendation`** blocked. `attachedToSQL` walked back
+   from `sleep` and found the `=` of the *query string*, treating a parameter
+   assignment as SQL context. Fixed with `isQueryAssignment` (`?name=` / `&name=`).
+2. **`?q=see ../shared/q3.pdf`** blocked by rule 1001. `curl --data-urlencode`
+   correctly encodes `/` as `%2F`, producing `..%2f` — which the rule matched as
+   evasion. **But `..%2f` is what every browser form and JS client produces**,
+   while `%2e%2e` is not: no encoder escapes a literal `.`. Dropped `..%2f` and
+   `..%5c`; kept the encoded-dot forms.
+
+**Why the corpus missed both:** it carried the same prose in a *JSON body*,
+where no URL encoding happens. The `adjacent` archetype now carries the encoded
+query-value shape. **Lesson: a value and the URI it arrives in are different
+inputs, and a corpus that only tests one is testing half the surface.**
+
+### The cost, stated
+Narrowing rule 1001 traded **21 CRS conformance stages** (1623 -> 1602) for
+eliminating an FP class that affects every URL-encoded form field. That is the
+right trade — a false positive on ordinary prose is worse than missing a
+traversal that the decoded-value rules still catch — but it is a trade, not a
+free win.
+
+### Response phases in the conformance runner
+The runner drove request phases only, so ~70 RESPONSE-95x misses were its fault.
+It now honours the CRS reflect convention (`{"body":"..."}` echoed back) and
+drives status/headers/body. Verified working — a SQL-error leak blocks. The
+number moved only +2, which is the useful part: **the remaining RESPONSE misses
+are genuine coverage gaps, not runner artifacts.**
+
+### A conformance reporting correction
+"52 false positives" was **wrong**. CRS `no_expect_ids: [932230]` asserts that
+*one rule* does not fire, not that nothing does — several of those payloads carry
+a real shell command. Reading it as "must pass" filed correct blocks as FPs. The
+runner now classifies them separately: **3 true false positives, 50 ambiguous**.

@@ -66,11 +66,75 @@ var logicWords = map[string]bool{
 
 // dangerFuncs are functions whose only purpose in injected input is to prove
 // execution or exfiltrate. A call to one of these is high-confidence on its own.
+// dangerFuncs are functions that are dangerous *in a SQL context*.
+//
+// They are matched only when attached to surrounding SQL — after a boolean
+// connector, a keyword, an operator, a separator — because every name here is
+// also an ordinary English word or an ordinary function in some other language.
+// "sleep(8h) is the recommendation" and "use substring(0,5)" are prose, and
+// requiring attachment is what keeps them out.
 var dangerFuncs = map[string]bool{
 	"sleep": true, "benchmark": true, "load_file": true, "pg_sleep": true,
 	"extractvalue": true, "updatexml": true, "dbms_pipe": true,
 	"waitfor": true, "randomblob": true, "char": true, "chr": true,
 	"exec": true, "execute": true, "xp_cmdshell": true, "openrowset": true,
+
+	// Extraction primitives. These are how a blind injection reads data one
+	// character at a time, and they are also perfectly ordinary function names,
+	// so they stay in the attachment-required tier.
+	"substring": true, "substr": true, "mid": true, "ascii": true,
+	"ord": true, "hex": true, "unhex": true, "group_concat": true,
+	"string_agg": true, "find_in_set": true, "starts_with": true,
+
+	// PostgreSQL JSON exfiltration: the modern way to return a whole table in
+	// one scalar. Ordinary in a reporting query, so attachment is required.
+	"json_build_object": true, "jsonb_build_object": true,
+	"row_to_json": true, "jsonb_pretty": true, "jsonb_object_keys": true,
+	"query_to_xml": true, "database_to_xml": true,
+}
+
+// osAccessFuncs reach outside the database: the filesystem, a command, the
+// network, or the engine's own build configuration.
+//
+// Unlike dangerFuncs these fire *without* requiring attachment to surrounding
+// SQL, and that difference is the finding this list exists to fix.
+//
+// The CRS conformance run showed gwaf missing payloads like
+// "id=lo_import('/etc' || '/pass' || 'wd')" and "id=sqlite_compileoption_used(id)".
+// They have no boolean connector and no keyword because the *whole parameter
+// value* is the injected expression — it is substituted into "WHERE id = <value>"
+// and the surrounding SQL is the origin's, not the attacker's. Requiring
+// attachment is correct for a name like "substring" and wrong here.
+//
+// What makes it safe to drop the requirement is the vocabulary, not the
+// grammar: none of these names has a benign reading as a parameter value.
+// Nothing legitimate sends "pg_read_file(" in a query string. A list is being
+// used because dangerousness genuinely is a property of the name — no grammar
+// can tell you lo_import reads a file — but it is kept to the functions that
+// leave the database rather than the hundreds CRS enumerates.
+var osAccessFuncs = map[string]bool{
+	// PostgreSQL: filesystem and large objects.
+	"lo_import": true, "lo_export": true, "pg_read_file": true,
+	"pg_read_binary_file": true, "pg_ls_dir": true, "pg_stat_file": true,
+	"pg_file_read": true, "pg_logdir_ls": true,
+
+	// MySQL / MariaDB.
+	"load_file": true, "sys_exec": true, "sys_eval": true,
+
+	// SQL Server: command execution and remote data sources.
+	"xp_cmdshell": true, "xp_regread": true, "xp_regwrite": true,
+	"xp_dirtree": true, "xp_fileexist": true, "xp_subdirs": true,
+	"openrowset": true, "opendatasource": true, "openquery": true,
+
+	// Oracle: file, HTTP, and DNS egress.
+	"utl_file": true, "utl_http": true, "utl_inaddr": true,
+	"utl_smtp": true, "dbms_ldap": true, "dbms_lock": true,
+
+	// SQLite: build introspection, whose only use in input is fingerprinting
+	// the engine before choosing a payload.
+	"sqlite_compileoption_used": true, "sqlite_compileoption_get": true,
+	"sqlite_source_id": true, "load_extension": true, "readfile": true,
+	"writefile": true, "edit": true, "fts3_tokenizer": true,
 }
 
 // dmlKeywords are the statements that matter after a statement separator.

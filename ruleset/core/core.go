@@ -302,7 +302,22 @@ func requestRules() rules.Set {
 			// URI has no legitimate use, whereas the decoded form does appear
 			// in ordinary relative links.
 			Transforms: []rules.Transform{transform.Lowercase},
-			Op:         op.ContainsAny("%2e%2e%2f", "%2e%2e/", "..%2f", "%2e%2e%5c", "..%5c"),
+			// Only the forms where the *dots* are encoded.
+			//
+			// "..%2f" and "..%5c" were here and were removed: they are what a
+			// correct URL encoder produces for a value containing "../". A text
+			// field holding "see ../shared/q3.pdf" is encoded by curl, by every
+			// browser form, and by every JS client as "..%2Fshared", so matching
+			// it made ordinary prose a critical block — found by a pentest benign
+			// control, and invisible to the corpus because the corpus carried
+			// that text in a JSON body rather than a query value.
+			//
+			// "%2e%2e%2f" stays, and the distinction is the whole point: no
+			// encoder escapes a literal "." in a value, so encoded dots are not
+			// transport, they are somebody hiding a traversal from a matcher.
+			// The decoded form is still covered by the traversal and
+			// sensitive-file rules reading ARGS.
+			Op:         op.ContainsAny("%2e%2e%2f", "%2e%2e/", "%2e%2e%5c", "%2e%2e\\"),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,

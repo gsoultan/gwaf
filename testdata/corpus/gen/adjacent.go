@@ -2,7 +2,10 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+)
 
 // emitAdjacent emits benign traffic that sits deliberately close to a rule
 // added in the SSRF / deserialization / Log4j pass.
@@ -138,6 +141,22 @@ func emitAdjacent(emit func(request)) {
 			fmt.Sprintf(`{"text":%q,"author_id":%d}`, t, 400+i))
 	}
 
+	// URL-encoded text containing "../".
+	//
+	// This is what every browser form, every JS client, and curl produce for a
+	// value holding a relative path: "/" becomes "%2F" while "." is left alone.
+	// Rule 1001 matched "..%2f" and turned that into a critical block. The
+	// corpus had the same prose in a JSON body, where no encoding happens, so
+	// the shape was invisible until a pentest control sent it as a query value.
+	for i, v := range []string{
+		"see ../shared/2026/q3-summary.pdf for details",
+		"the file lives at ../docs/readme.md in the repo",
+		"move it to ../archive/2025 when you are done",
+	} {
+		emit(request{Name: fmt.Sprintf("encoded relative path %d", i+1), Method: "GET",
+			Target: "/api/v1/search?q=" + urlValue(v)})
+	}
+
 	// Colon-separated values that are not PHP serialization. The predicate
 	// requires a digit run and the right delimiter, and these are what would
 	// notice if that ever loosened into "contains a colon".
@@ -150,3 +169,8 @@ func emitAdjacent(emit func(request)) {
 			fmt.Sprintf(`{"text":%q,"author_id":%d}`, v, 200+i))
 	}
 }
+
+// urlValue encodes a value the way a browser form or an HTTP client does: "/"
+// becomes "%2F" and "." is left alone. That asymmetry is exactly why "..%2f"
+// cannot be treated as evasion.
+func urlValue(s string) string { return url.QueryEscape(s) }

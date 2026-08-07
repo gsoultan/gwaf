@@ -323,8 +323,8 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 			// boolean connector, a keyword, or a statement separator is a
 			// payload. Requiring attachment is what keeps "sleep(8h) is the
 			// recommendation" out of the results.
-			if dangerFuncs[w] && i+1 < len(toks) && toks[i+1].kind == tkLParen &&
-				attachedToSQL(toks, i) {
+			if (i+1 < len(toks) && toks[i+1].kind == tkLParen &&
+				isDangerCall(w, toks, i)) || isPackagedDangerCall(toks, i) {
 				sigs |= SignalDangerFunction
 			}
 			// WAITFOR DELAY has no parentheses.
@@ -339,8 +339,8 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 		case tkIdent:
 			// Danger functions are not all keywords; a bare identifier
 			// immediately followed by "(" is a call.
-			if dangerFuncs[lowerWord(t.text)] && i+1 < len(toks) &&
-				toks[i+1].kind == tkLParen && attachedToSQL(toks, i) {
+			if (i+1 < len(toks) && toks[i+1].kind == tkLParen &&
+				isDangerCall(lowerWord(t.text), toks, i)) || isPackagedDangerCall(toks, i) {
 				sigs |= SignalDangerFunction
 			}
 
@@ -478,13 +478,60 @@ func attachedToSQL(toks []token, i int) bool {
 		switch toks[j].kind {
 		case tkComment:
 			continue // whitespace to a parser; keep looking
-		case tkLogic, tkKeyword, tkSemi, tkOperator, tkComma, tkLParen:
+		case tkOperator:
+			// An "=" that assigns a query-string parameter is not SQL context.
+			//
+			// The detector reads REQUEST_URI as well as the decoded arguments,
+			// and in a URI every value is preceded by "name=" — so "?q=sleep(8h)
+			// is the recommendation" looked attached to an operator and scored,
+			// while the identical text as an argument value did not. A pentest
+			// benign control caught it; the corpus had never carried the shape.
+			//
+			// A parameter assignment is recognised by what precedes the name: the
+			// "?" that opens a query string or the "&" that separates one.
+			if isQueryAssignment(toks, j) {
+				return false
+			}
+			return true
+		case tkLogic, tkKeyword, tkSemi, tkComma, tkLParen:
 			return true
 		default:
 			return false
 		}
 	}
 	return false
+}
+
+// isQueryAssignment reports whether the operator at toks[j] is the "=" of a
+// query-string parameter rather than a SQL operator.
+//
+// The shape is "?name=" or "&name=": an "=", an identifier before it, and a
+// query separator before that. Requiring all three is what keeps a real
+// comparison — "id=1 AND sleep(5)" — attached, because there the "=" is
+// followed by SQL rather than opening the value.
+func isQueryAssignment(toks []token, j int) bool {
+	if len(toks[j].text) != 1 || toks[j].text[0] != '=' {
+		return false
+	}
+	if j == 0 {
+		return false
+	}
+	name := j - 1
+	if toks[name].kind != tkIdent && toks[name].kind != tkKeyword {
+		return false
+	}
+	if name == 0 {
+		// "name=value" with nothing before it: the whole value is a parameter
+		// assignment, which is how a form body arrives.
+		return true
+	}
+	sep := toks[name-1]
+	if sep.kind == tkOperator && len(sep.text) == 1 &&
+		(sep.text[0] == '&' || sep.text[0] == '?') {
+		return true
+	}
+	// "?" may not be an operator token; accept any single-byte separator.
+	return len(sep.text) == 1 && (sep.text[0] == '?' || sep.text[0] == '&')
 }
 
 // skipNoise advances past comment tokens, reporting whether any were skipped.
@@ -564,3 +611,47 @@ func (o *operator) Literals() ([]string, bool) {
 // Cost prices one analysis. Tokenization runs three times over the value, so
 // this is higher than a literal match and lower than a regex.
 func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 6 }
+
+// isDangerCall reports whether a call to name at toks[i] is a danger function.
+//
+// Two tiers, and the difference between them is the whole point.
+//
+// A name in osAccessFuncs reaches outside the database — the filesystem, a
+// command, the network, the engine's build configuration — and fires wherever it
+// appears. It needs no attachment to surrounding SQL because the attacker often
+// supplies no surrounding SQL: when the whole parameter value is
+// "lo_import('/etc'||'/pass'||'wd')", the query around it belongs to the origin,
+// and there is no boolean connector to attach to. Nothing legitimate sends
+// "pg_read_file(" as a parameter, so the name alone carries the verdict.
+//
+// A name in dangerFuncs is dangerous only in context. "substring", "char", and
+// "sleep" are ordinary words and ordinary functions in other languages, so those
+// still require attachment — which is what keeps "use substring(0,5)" and
+// "sleep(8h) is the recommendation" out of the results.
+func isDangerCall(name string, toks []token, i int) bool {
+	if osAccessFuncs[name] {
+		return true
+	}
+	return dangerFuncs[name] && attachedToSQL(toks, i)
+}
+
+// isPackagedDangerCall reports an Oracle-style "package.function(" call.
+//
+// Oracle's dangerous built-ins are packages, not bare functions:
+// "utl_http.request(...)", "dbms_lock.sleep(...)", "utl_file.fopen(...)". The
+// tokenizer sees the package name, a dot, and the member, so the package is
+// never the token immediately before "(" and the plain check misses it. The
+// package name alone carries the verdict for the same reason the bare names do:
+// nothing legitimate sends "utl_http." in a parameter.
+func isPackagedDangerCall(toks []token, i int) bool {
+	if i+3 >= len(toks) {
+		return false
+	}
+	if !osAccessFuncs[lowerWord(toks[i].text)] {
+		return false
+	}
+	// package . member (
+	return toks[i+1].kind == tkDot &&
+		(toks[i+2].kind == tkIdent || toks[i+2].kind == tkKeyword) &&
+		toks[i+3].kind == tkLParen
+}

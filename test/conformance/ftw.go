@@ -283,6 +283,26 @@ func unsupported(st Stage) (string, bool) {
 	return "", false
 }
 
+// ruleScopedPass reports a stage whose pass-assertion names a specific CRS rule
+// rather than asserting the request is clean overall.
+//
+// This is a correction to an earlier reading that inflated the false-positive
+// count. "no_expect_ids: [932230]" asserts that *rule 932230* does not fire; it
+// does not assert that nothing fires. CRS writes these as tuning cases — a
+// payload that legitimately trips other rules while proving one specific rule
+// does not over-match. Reading it as "this request must pass" turned a stage
+// where gwaf correctly blocked a shell command into a reported false positive.
+//
+// Detection mode ignores rule IDs by design, so the assertion is unanswerable
+// there and the stage is skipped. Rule-ID mode answers it exactly, which is
+// where it belongs.
+func ruleScopedPass(out Output) bool {
+	if out.Status == 200 {
+		return false // an explicit "nothing should block" is answerable
+	}
+	return len(out.Log.NoExpectIDs) > 0 || out.Log.NoMatchRegex != "" || out.NoLogContains != ""
+}
+
 // inspect runs one input through gwaf and returns the decision plus every rule
 // that fired.
 func inspect(waf *gwaf.WAF, in Input) (gwaf.Decision, map[uint32]bool) {
@@ -316,6 +336,28 @@ func inspect(waf *gwaf.WAF, in Input) (gwaf.Decision, map[uint32]bool) {
 		tx.SetRequestBody([]byte(body))
 		d = tx.ProcessRequestBody()
 	}
+	// Response phases. The CRS harness reflects a body back: a test posts
+	// {"body":"..."} to /reflect and the origin echoes it, which is how the
+	// RESPONSE-95x families exercise leak detection. Honouring that convention
+	// is what gives gwaf's response-phase rules a chance — without it those
+	// stages were reported as gwaf missing something it was never shown, which
+	// is the runner's fault rather than a detection gap.
+	if !d.Blocked() {
+		if reflected, ok := reflectedBody(in); ok {
+			tx.SetResponseStatus(200)
+			tx.AddResponseHeader("Content-Type", "text/html")
+			if rd := tx.ProcessResponseHeaders(); !rd.Blocked() {
+				if wd := tx.WriteResponseBody(reflected); !wd.Blocked() {
+					d = tx.ProcessResponseBody()
+				} else {
+					d = wd
+				}
+			} else {
+				d = rd
+			}
+		}
+	}
+
 	if !d.Blocked() {
 		d = tx.Decision()
 	}
@@ -339,8 +381,22 @@ func judgeByDetection(out Output, d gwaf.Decision) Result {
 		return Result{Reason: "expected a detection, request was allowed"}
 	}
 	if d.Blocked() {
+		// A stage whose only pass-assertion is "rule N must not fire" is not
+		// asserting the request is clean. CRS writes these as tuning cases, and
+		// several carry a real shell command or a real traversal — gwaf blocking
+		// one is a *different* rule doing its job, not a false positive.
+		//
+		// Detection mode cannot tell the two apart, because it does not have CRS
+		// rule IDs. So the block is reported with the ambiguity named rather than
+		// filed as a false positive it may not be. Rule-ID mode answers it exactly.
+		if ruleScopedPass(out) {
+			return Result{Reason: fmt.Sprintf(
+				"blocked by rule %d (%s) where CRS expects only a specific rule "+
+					"not to fire -- ambiguous without CRS IDs", d.RuleID(), d.Message())}
+		}
 		return Result{Reason: fmt.Sprintf(
-			"expected a pass, blocked by rule %d (%s)", d.RuleID(), d.Message())}
+			"false positive: expected a clean pass, blocked by rule %d (%s)",
+			d.RuleID(), d.Message())}
 	}
 	return Result{Passed: true}
 }
@@ -368,4 +424,41 @@ func judgeByRuleID(out Output, fired map[uint32]bool) Result {
 		return Result{Reason: "rules fired that should not: " + strings.Join(unexpected, ",")}
 	}
 	return Result{Passed: true}
+}
+
+// reflectedBody extracts the content the CRS harness echoes back as a response.
+//
+// The convention is a JSON body of the form {"body":"..."} posted to a
+// reflecting endpoint; the harness returns that string, and the RESPONSE-95x
+// tests assert on what a leak-detection rule makes of it. Parsed by hand rather
+// than with encoding/json because the payloads are deliberately malformed --
+// they carry unescaped quotes and control bytes, which is the point of them --
+// and a strict parser would reject exactly the cases worth running.
+func reflectedBody(in Input) ([]byte, bool) {
+	body := in.Data
+	if body == "" {
+		body = in.EncodedData
+	}
+	const key = `"body"`
+	i := strings.Index(body, key)
+	if i < 0 {
+		return nil, false
+	}
+	rest := body[i+len(key):]
+	// Skip the colon and any spacing.
+	j := 0
+	for j < len(rest) && (rest[j] == ':' || rest[j] == ' ' || rest[j] == '\t') {
+		j++
+	}
+	if j >= len(rest) || rest[j] != '"' {
+		return nil, false
+	}
+	rest = rest[j+1:]
+	// Take everything up to the last quote, which is the closing one for a
+	// value that may itself contain quotes.
+	k := strings.LastIndexByte(rest, '"')
+	if k < 0 {
+		return nil, false
+	}
+	return []byte(rest[:k]), true
 }
