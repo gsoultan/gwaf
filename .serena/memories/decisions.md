@@ -1359,3 +1359,50 @@ The proxy and gateon are two drivers over the same tier-1 API. The proxy is the
 cheap embedder; gateon is the expensive one. Any API gap surfaces here at ~325
 LOC of cost rather than deep in another repo — the same forcing function that
 made examples/customrules find two API bugs no unit test caught.
+
+## SHIPPED: prompt injection, shadow-API discovery, audit, telemetry, examples
+
+Four items executed together, each gated. Research-driven rather than guessed:
+the OWASP LLM Top 10 2026 (7,714 incidents) still ranks prompt injection #1 and
+adds System Prompt Leakage; the API-security literature names shadow APIs as the
+most common gap; and standalone WAF has consolidated into WAAP, which validates
+gwaf-as-engine + gateon-as-platform rather than growing gwaf into a platform.
+
+### detect/promptinjection: structure, not vocabulary
+Same design as detect/ssti and for the same reason. An imperative aimed at the
+model scores; a sentence describing one does not. `SignalPromptContext` is
+weighted **zero** so prose about prompt injection — every bug report, tutorial,
+and this decision entry — cannot fire. Ships High, not Certain: a red-team
+console or prompt library produces true matches that are not attacks.
+
+**The end-to-end test caught what unit tests could not.** Wired with decodeChain
+every multi-word phrase silently stopped matching, because that chain strips
+whitespace and "ignore all previous instructions" arrives as one run of letters.
+Uses URLDecode only. This is the third time this session that a whitespace-
+stripping chain broke a multi-word literal (java.lang.processbuilder was the
+first). **Rule of thumb: a multi-word literal and decodeChain are incompatible.**
+
+### Shadow-API discovery: report the bit, refuse the inventory
+`Transaction.UndeclaredRoute` returns one bool about one request. Aggregating is
+memory and memory is the embedder's (ownership test 1) — a WAF keeping a running
+endpoint inventory needs eviction, cardinality caps, and persistence, which is a
+database growing inside a request filter. Reporting works in **both** open and
+closed schemas, so the signal survives the switch to enforcement.
+
+### audit/ and telemetry/: the "no UI" corollary, delivered
+No dashboard, but every datum a dashboard needs is reachable. audit renders the
+narrowest exception as data so a false positive is a scoped fix. telemetry keeps
+counters with no unbounded label cardinality, because that is how a metrics
+endpoint becomes the outage. **Neither imports OTel** — an exporter is a
+dependency the embedder did not choose (ownership test 5); Sink is one method.
+
+### Examples found three wrong claims in one sitting
+Zero runnable examples existed despite §2b making them binding. Writing nine
+found: a `rules.ResolverFunc` that does not exist (Resolver is an interface with
+iter.Seq2), `Reason` rendering as "schema_violation" not "schema", and an example
+double-adding a query parameter because SetRequestLine already parses one.
+
+**And they surfaced an honest measurement**: a benign request with *any* query
+string evaluates exactly 1 rule, not 0. Pre-existing, verified by stashing. The
+"0 rules evaluated" claim is true of the no-query case and rounds the other down;
+the example now states both numbers rather than the flattering one.

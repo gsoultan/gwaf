@@ -202,6 +202,41 @@ and is a test, so the claims stay true.
 Read [`Schema.Closed`](schema/schema.go) before enabling it: a closed schema is
 only correct once the schema is complete.
 
+## Observability
+
+gwaf writes nothing anywhere — it returns a `Decision` and the embedder owns what
+happens next. What it owes is the *shape*, and two packages provide it with zero
+dependencies:
+
+```go
+rec := audit.NewRecord(d, audit.Context{Method: r.Method, Path: r.URL.Path}, time.Now())
+sink.Write(rec)          // line-delimited JSON, fan-out, severity filtering
+
+metrics.Observe(d, elapsed)
+snap := metrics.Snapshot()   // blocked/allowed, per-rule counts, TopRules, latency
+```
+
+An audit record carries the matched bytes, the transform chain, and the
+**narrowest exception** that would suppress the finding — so a false positive is
+a scoped fix rather than a rule somebody disables wholesale. OpenTelemetry is
+deliberately absent: an exporter is a dependency you did not choose, and `Sink`
+is one method so wiring your own is small.
+
+## Shadow-API discovery
+
+You cannot protect endpoints you do not know about. gwaf reports that a request
+went somewhere the schema does not describe; you keep the inventory, because
+aggregating is memory and memory is the embedder's:
+
+```go
+middleware.OnUndeclaredRoute(func(r *http.Request) {
+    inventory.Observe(r.Method, r.URL.Path)
+})
+```
+
+It reports in both open and closed schemas, so discovery does not stop the moment
+enforcement starts.
+
 ## Optional rules
 
 Everything in the core ruleset is `Certain` or `High` confidence, so

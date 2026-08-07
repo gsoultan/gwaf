@@ -53,6 +53,7 @@ type Option func(*config)
 type config struct {
 	onBlock      BlockHandler
 	onDecision   func(*http.Request, gwaf.Decision)
+	onUndeclared func(*http.Request)
 	inspectResp  bool
 	maxRespBytes int
 }
@@ -77,6 +78,22 @@ func WithBlockHandler(h BlockHandler) Option {
 // request that produced it. It runs on the request path and must not block.
 func OnDecision(fn func(*http.Request, gwaf.Decision)) Option {
 	return func(c *config) { c.onDecision = fn }
+}
+
+// OnUndeclaredRoute registers a callback for requests that matched no operation
+// in the configured schema — a shadow endpoint.
+//
+// It fires once per request, before the body is read, and only when a schema is
+// configured. Use it to build the inventory gwaf deliberately does not keep:
+//
+//	middleware.OnUndeclaredRoute(func(r *http.Request) {
+//	    shadowAPIs.Observe(r.Method, r.URL.Path)
+//	})
+//
+// Aggregating is memory, and memory is the embedder's (CLAUDE.md §1). gwaf
+// reports the bit; what you count and how long you keep it is yours.
+func OnUndeclaredRoute(fn func(*http.Request)) Option {
+	return func(c *config) { c.onUndeclared = fn }
 }
 
 // WithResponseInspection enables response-phase analysis.
@@ -141,6 +158,13 @@ func serve(waf *gwaf.WAF, cfg *config, next http.Handler, w http.ResponseWriter,
 	defer tx.Close()
 
 	populateRequest(tx, r)
+
+	// Reported before the phase runs, so a shadow endpoint is observed even when
+	// the request is then blocked for something else — the inventory should not
+	// have holes shaped like "these endpoints were also attacked".
+	if cfg.onUndeclared != nil && tx.UndeclaredRoute() {
+		cfg.onUndeclared(r)
+	}
 
 	if d := tx.ProcessRequestHeaders(); d.Blocked() {
 		report(cfg, r, d)

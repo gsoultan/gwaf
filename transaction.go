@@ -1613,6 +1613,40 @@ func (tx *Transaction) blockDecision(reason Reason, status int, rule *rules.Comp
 // JSON rather than discovering it as a coverage gap later.
 func (tx *Transaction) BodyParseError() string { return tx.bodyParseFailed }
 
+// UndeclaredRoute reports whether a schema is configured and this request
+// matched none of its operations — a *shadow endpoint*, in API-security terms.
+//
+// # Why this is only half the feature, on purpose
+//
+// "You cannot protect APIs you do not know about" is the most common gap in API
+// security programmes, and the endpoints nobody documented are where it lives.
+// Finding them needs two things: noticing that one request went somewhere
+// undeclared, and remembering that across requests to produce a list.
+//
+// gwaf does the first and refuses the second. Aggregating is memory, and memory
+// is the embedder's by the first ownership test (CLAUDE.md §1) — a WAF that kept
+// a running inventory would need eviction, cardinality limits, and persistence,
+// which is a database growing inside a request filter. So this reports one bit
+// about one request and the embedder counts:
+//
+//	if tx.UndeclaredRoute() {
+//	    inventory.Observe(r.Method, r.URL.Path) // the embedder's map, not gwaf's
+//	}
+//
+// # Relationship to Schema.Closed
+//
+// They are the two ends of the same observation. A closed schema *rejects* an
+// undeclared route; this *reports* one. Discovery is what you run first — in an
+// open schema, to learn which endpoints exist — and closing the schema is what
+// you do once the inventory is complete. Reporting works in both modes, so the
+// signal does not disappear at the moment enforcement starts.
+//
+// It returns false when no schema is configured, because without one every route
+// is undeclared and the answer would be noise rather than a finding.
+func (tx *Transaction) UndeclaredRoute() bool {
+	return tx.waf.cfg.schema != nil && tx.op == nil
+}
+
 // budgetExhausted applies the configured fail mode.
 //
 // The ruleset was only partially evaluated, so this is not a statement that the

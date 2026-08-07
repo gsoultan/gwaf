@@ -6,6 +6,47 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Added
+
+- **`detect/promptinjection` and system-prompt-leakage (rules 13001/13002).**
+  Prompt injection is number one on the OWASP Top 10 for LLM Applications,
+  including the 2026 edition grounded in 7,714 real incidents, and CLAUDE.md has
+  listed it in scope since it was written while `detect/` had nothing. It scores
+  *imperative structure*, not vocabulary: "ignore all previous instructions"
+  fires, "the attack works by telling the model to ignore previous instructions"
+  scores zero, and both are in the corpus. Ships at High — a red-team console or
+  prompt library produces true matches that are not attacks.
+
+- **Shadow-API discovery.** `Transaction.UndeclaredRoute` reports that one
+  request went to a route no schema operation describes;
+  `middleware.OnUndeclaredRoute` surfaces it per request. Aggregating is memory
+  and memory is the embedder's, so gwaf reports the bit and the embedder keeps
+  the inventory. Works in both open and closed schemas, so the signal does not
+  disappear at the moment enforcement starts.
+
+- **`audit/`** — a decision rendered as a record complete enough to act on:
+  matched bytes (bounded), transform chain, and the *narrowest exception* that
+  would suppress the finding. Sinks for line-delimited JSON, fan-out, and
+  severity filtering. Zero dependencies: OTel is deliberately not here, because
+  an exporter is a dependency the embedder did not choose — `Sink` is one method
+  so implementing it over your own is small.
+
+- **`telemetry/`** — counters an operator actually watches: requests, blocked,
+  allowed, budget exhaustion, undeclared routes, per-rule and per-severity
+  counts, mean/max latency, and `TopRules`. No unbounded label cardinality,
+  because that is how a metrics endpoint becomes the outage.
+
+- **Nine runnable godoc examples** (previously zero), covering `New`,
+  `Explain`, `WithMode`, `WithSchema`, `WithRuleset`, `WithException`,
+  `AddResolver`, `UndeclaredRoute`, and `RulesEvaluated`. CLAUDE.md §2b makes
+  these binding; they are tests, so the API cannot drift from its documentation.
+
+  Writing them found three wrong claims immediately: a `Resolver` API that does
+  not exist, a `Reason` string that is `schema_violation` rather than `schema`,
+  and an example that added a query parameter twice because `SetRequestLine`
+  already parses the query string.
+
+
 ### Fixed
 
 - **Nested prototype pollution in JSON bodies.** `{"constructor":{"prototype":
