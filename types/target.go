@@ -27,7 +27,7 @@ const (
 	// alone means the regex can never match, so the negation fires on every
 	// request, and it did.
 	TargetRequestLine
-	TargetRequestHeaders  // header values
+	TargetRequestHeaders // header values
 	TargetRequestHeaderNames
 	TargetArgs // query and body arguments, merged
 	TargetArgNames

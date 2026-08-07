@@ -96,7 +96,6 @@ type ChainGroup struct {
 }
 
 // Reads reports whether any rule in this group inspects the given target kind.
-//
 func (g *ChainGroup) Reads(k types.TargetKind) bool {
 	return k < 64 && g.targets&(1<<uint(k)) != 0
 }
