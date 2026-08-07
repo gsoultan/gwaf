@@ -381,7 +381,13 @@ func TestFalsePositivesOnOrdinaryTraffic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("coraza: %v", err)
 	}
-	engines := []engine{gwafEngine{waf: g}, corazaEngine{waf: cz}}
+	gc, cov, err := newGwafWithCRS(rulesDir)
+	if err != nil {
+		t.Fatalf("gwaf+crs: %v", err)
+	}
+	t.Logf("gwaf+crs %s", cov)
+
+	engines := []engine{gwafEngine{waf: g}, gwafCRSEngine{gwafEngine{waf: gc}}, corazaEngine{waf: cz}}
 
 	var total int
 	fps := make([]int, len(engines))

@@ -39,6 +39,17 @@ for those rules. An engine that did not pass its own tests would be broken.
 |---|---|
 | gwaf | **6 / 10,433 (0.06%)** |
 | coraza + CRS | 3798 / 10,433 (36.4%) |
+| gwaf + CRS | 5355 / 10,433 (51.3%) |
+
+**Adding CRS to gwaf costs more than it buys, and this is the number that says
+so.** Detection goes 20.0% to 57.6%; false positives go 0.06% to 51.3%. One
+request in two. The regexes come with their false positives attached, and an
+eighth of CRS is enough to import the imprecision without importing the
+coverage.
+
+That is the case against "just adopt CRS", made with a measurement rather than
+an argument. It is also why the bridge is a migration path and an opt-in bundle
+rather than the core ruleset.
 
 ## Read both, or neither
 
