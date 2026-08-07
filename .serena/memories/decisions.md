@@ -1649,3 +1649,33 @@ number beat a higher wrong one.
   bodies for XXE, so the parse exists and the addressing does not.
 - **@pmFromFile (12)** and **transformations (6)** — small and mechanical.
 - The rest is deliberate and should stay unconverted.
+
+## SHIPPED: XML mapped, and the false-positive story inverted
+
+`XML:/*` and `XML://@*` are 145 of CRS's directives and essentially all of its
+XML usage — and neither is general XPath. Both are substrings of the request
+body, which gwaf already inspects for an XML content type (verified: SQL
+injection inside an element blocks on the body rule). Mapped to REQUEST_BODY as
+a superset that can widen a match but never miss one.
+
+**Bridge 107 -> 192 rules. Variable failures 202 -> 57.**
+
+### The number that changed the conclusion
+gwaf+CRS false positives went **51.3% -> 9.87%**, with detection *up* to 49.6%.
+
+The cause is the previous commit, not this one: with paranoia gates interpreted,
+a rule CRS placed behind PL2 arrives as Medium and is filtered exactly as CRS at
+PL1 would filter it. **Most of CRS's apparent imprecision under gwaf was rules
+being run that CRS itself would never have run.** The earlier 51.3% was an
+artefact of a flat, untiered import — a measurement of my bridge, not of CRS.
+
+So the trade is now real rather than obviously bad: gwaf+CRS gives roughly 60%
+of Coraza's detection at about a quarter of its false positives. Still an opt-in
+bundle, not a default, but a defensible choice for a deployment wanting breadth.
+
+### What is left, and why it stops here
+57 variable failures, 55 unknown directives, 55 chains, 29 collection counts, 25
+t:utf8toUnicode, 20 exclusions. The chains, exclusions, unconditional actions and
+encoding validation are deliberate architecture — converting them would mean
+being more permissive than the original or importing cross-request state. The
+honest ceiling is short of 100% and that is a design outcome, not a defect.

@@ -16,18 +16,19 @@ CRS_TESTS=/tmp/crs/tests/regression/tests CRS_RULES=/tmp/crs/rules \
 | engine | detection |
 |---|---|
 | coraza + CRS | **3246 / 4025 (80.6%)** |
-| gwaf + CRS | 2320 / 4025 (57.6%) |
+| gwaf + CRS | 1995 / 4025 (49.6%) |
 | gwaf | 807 / 4025 (20.0%) |
 
-**Does gwaf + CRS close the gap? Partly — 20.0% to 57.6% — and not enough.**
-The reason is one number: the SecLang bridge translates **105 of 788 CRS
-directives**, leaving 580 untranslated. gwaf running CRS is running an eighth of
-CRS. The remaining 23 points to Coraza are the rules the bridge cannot yet
-express, not a difference in how the two engines match.
+**Does gwaf + CRS close the gap? Partly, and the trade is now a real one.**
+The SecLang bridge translates 192 of 788 CRS directives. gwaf + CRS reaches
+49.6% detection at **9.9% false positives**, against Coraza's 80.6% at 36.4% —
+roughly 60% of the detection for about a quarter of the false positives.
 
-That makes the bridge's coverage, not the engine, the thing to improve for
-anyone whose goal is CRS parity — and it is printed beside the score for exactly
-that reason.
+Two changes produced that. Paranoia gates are now *interpreted*: a rule CRS
+placed behind PL2 arrives as Medium rather than High, and is filtered exactly as
+CRS at PL1 would filter it — which removed most of the false positives an
+untiered import created. And `XML:/*` / `XML://@*` now map to the request body,
+which gwaf already inspects, roughly doubling the translated ruleset.
 
 **Coraza wins this decisively and the result is fair to state.** The corpus is
 CRS's own regression suite — one test per CRS rule, written over twenty years
@@ -39,17 +40,19 @@ for those rules. An engine that did not pass its own tests would be broken.
 |---|---|
 | gwaf | **6 / 10,433 (0.06%)** |
 | coraza + CRS | 3798 / 10,433 (36.4%) |
-| gwaf + CRS | 5355 / 10,433 (51.3%) |
+| gwaf + CRS | 1030 / 10,433 (9.9%) |
 
-**Adding CRS to gwaf costs more than it buys, and this is the number that says
-so.** Detection goes 20.0% to 57.6%; false positives go 0.06% to 51.3%. One
-request in two. The regexes come with their false positives attached, and an
-eighth of CRS is enough to import the imprecision without importing the
-coverage.
+**Adding CRS to gwaf costs 165x its false-positive rate and buys 30 points of
+detection.** 0.06% to 9.9%, against 20.0% to 49.6%. That is a defensible trade
+for a deployment that wants CRS breadth and can absorb the tuning; it is not one
+to make by default, which is why the bridge is a migration path and an opt-in
+bundle rather than the core ruleset.
 
-That is the case against "just adopt CRS", made with a measurement rather than
-an argument. It is also why the bridge is a migration path and an opt-in bundle
-rather than the core ruleset.
+An earlier measurement put the same figure at 51.3%. That was an import with no
+paranoia tiers, where every rule arrived as High and ran regardless of the level
+CRS had placed it behind. Interpreting the gates took it to 9.9% — most of
+CRS's apparent imprecision was rules being run that CRS itself would not have
+run at PL1.
 
 ## Read both, or neither
 

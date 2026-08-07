@@ -373,6 +373,34 @@ func (c *compiler) targets(vars []string) ([]types.Target, string) {
 		}
 
 		name, qualifier, _ := strings.Cut(v, ":")
+
+		// XML is addressed by XPath in SecLang and by nothing in gwaf, but the
+		// two expressions CRS actually uses are not general XPath: "XML:/*" is
+		// every element's text and "XML://@*" is every attribute's value.
+		// Between them they cover 145 of CRS's directives and essentially all
+		// of its XML usage.
+		//
+		// Both are substrings of the request body, which gwaf already inspects
+		// for an XML content type -- verified: SQL injection inside an element
+		// blocks on the body-phase rule. So they map to REQUEST_BODY, a
+		// superset that can widen a match but never miss one.
+		//
+		// The imprecision is real and worth stating: the body also contains tag
+		// names and markup, so an imported rule may match text an XPath would
+		// have excluded. For rules that are calibrated after import that is the
+		// right trade against dropping them, and the alternative -- a real
+		// XPath engine over a DOM -- is a parser and an allocation model that
+		// the hot path does not want.
+		if strings.EqualFold(strings.TrimSpace(name), "XML") {
+			q := strings.TrimSpace(qualifier)
+			if q == "" || q == "/*" || q == "//@*" || q == "/*|//@*" {
+				out = append(out, types.Target{Kind: types.TargetRequestBody})
+				continue
+			}
+			return nil, fmt.Sprintf("XML XPath %q is not one of the whole-document "+
+				"forms gwaf can map to the request body", q)
+		}
+
 		kind, ok := targetKind(strings.ToUpper(strings.TrimSpace(name)))
 		if !ok {
 			return nil, fmt.Sprintf("variable %q has no gwaf equivalent", name)
