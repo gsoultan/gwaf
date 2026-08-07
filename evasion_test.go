@@ -64,6 +64,12 @@ var evasions = []evasion{
 	{name: "sqli/plain tautology", technique: "none", arg: "1' OR 1=1--"},
 	{name: "xss/plain script", technique: "none", arg: "<script>alert(1)</script>"},
 	{name: "traversal/plain", technique: "none", target: "/f?p=../../etc/passwd"},
+	// Apache double-percent-encode (CVE-2021-42013): "%%32%65" is a malformed
+	// escape Apache collapses to "%2e" and then "." on a second pass. gwaf
+	// evaluates the doubly-decoded reading, so the traversal is seen even when
+	// no sensitive-file name is present to catch it by literal.
+	{name: "traversal/apache-double-pct", technique: "double-encode", target: "/cgi-bin/.%%32%65%2f.%%32%65%2fconfig/app.ini"},
+	{name: "traversal/apache-double-pct-full", technique: "double-encode", target: "/cgi-bin/%%32%65%%32%65%2fapp.conf"},
 	{name: "rce/plain", technique: "none", arg: "x; cat /etc/passwd"},
 
 	// ---- case variation ----------------------------------------------------

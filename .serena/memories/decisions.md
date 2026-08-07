@@ -1277,3 +1277,52 @@ tradeoff is fundamental, not merely conservative. Locked by
 detect/shelli TestConcatenatedBacktickStaysUnflagged, which fails if the
 heuristic is re-added. If this ever needs revisiting, it belongs to the embedder
 (who knows the field) via a per-route policy, not to core detection.
+
+## FIXED: three gaps the pentest harness found (all handled by gwaf)
+
+The cve/java/nodejs/golang/xss/malscript phases surfaced three real gaps. All
+three are now closed; each fix was measured cost-neutral against the SLO.
+
+### 1. Nested constructor.prototype pollution in JSON bodies
+Flat `__proto__` was caught; `{"constructor":{"prototype":{...}}}` was not,
+because the JSON parser emits each nesting level as a separate ARGS_NAMES value
+(`constructor`, `prototype`, `isAdmin`) so none contains the literal
+`constructor.prototype`. A query string already flattens to
+`constructor.prototype`, which is why the query form was caught and the JSON form
+diverged.
+
+Fix: `Transaction.recordArgName` additionally records the *full dotted path* for
+a nested key — but **only when the key is a positional primitive** (`prototype`,
+`__proto__`, `constructor`). The first attempt joined every key and measured a
+**28% regression** on benign JSON (the parent repeats for every child, inflating
+the bytes every rule scans), caught by a paired before/after benchmark. Gating
+on the three primitive names via length-checked compares made it free for
+ordinary keys. NoSQL is unaffected — it scans a name for `$` anywhere.
+
+### 2. HTML-entity-encoded scheme in an XSS href
+`java&Tab;script:` and `javascript&colon;` evaded: `matchesSchemeFolded` skipped
+raw control bytes but not their entity forms. Added `decodeCharRef` (numeric
+`&#58;`/`&#x3a;` plus the named refs that obfuscate a scheme: tab, newline,
+colon, sol), so the matcher decodes a reference and treats a control/space code
+point as skippable and any other as a folded scheme byte. Fuzz clean at 16M
+execs; benign `&amp;`, querystring `&`, and `&colon;` in prose all still pass.
+
+### 3. Apache double-percent-encode traversal (CVE-2021-42013)
+`%%32%65` is a malformed escape a strict decoder leaves alone and a permissive
+one (Apache) collapses to `%2e` then `.`. `interpret.Detect` marked
+`ClassDoubleEncoded` only on `%25`; added `%%` as a second trigger, so the
+doubly-decoded reading is produced and rule 1004 sees `../`.
+
+**Scope note that mattered:** against a *Go* origin this payload never reaches
+gwaf — net/http returns 400 for the malformed encoding first. So the pentest
+harness does not send it through the Go target (that would measure net/http);
+it is gated directly in the evasion corpus, where gwaf sees the raw bytes as a
+proxy in front of Apache would. A 400 is a defense, just not gwaf's — counting
+it as a gwaf miss would have been dishonest.
+
+### The meta-lesson
+Two of the three were found only because the harness ran real payloads through
+the full net/http path, not the detector in isolation. The nested-pollution and
+entity-scheme gaps were genuine; the Apache one was half measurement-artifact
+(net/http 400) and half real (gwaf-as-proxy), and separating those two halves is
+what kept the fix and the harness both honest.

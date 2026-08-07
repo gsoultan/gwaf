@@ -6,6 +6,25 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Fixed
+
+- **Nested prototype pollution in JSON bodies.** `{"constructor":{"prototype":
+  {"isAdmin":true}}}` passed while the flat `__proto__` form was caught, because
+  the JSON parser emits each nesting level as a separate name. The full dotted
+  path is now recorded for the positional primitives (`prototype`, `__proto__`,
+  `constructor`), gated by length-checked comparisons so ordinary keys pay
+  nothing — the unconditional form measured a 28% regression on benign JSON.
+- **HTML-entity-encoded schemes in an XSS href.** `java&Tab;script:` and
+  `javascript&colon;alert(1)` evaded, because the scheme matcher skipped raw
+  control bytes but not their entity forms. It now decodes numeric and the
+  scheme-relevant named character references.
+- **Apache double-percent-encode traversal (CVE-2021-42013).** `%%32%65`
+  collapses to `%2e` then `.` under a permissive decoder; `interpret.Detect` now
+  marks the `%%` lead as double-encoded and evaluates the doubly-decoded reading.
+  (A Go origin's net/http rejects the malformed escape with 400 before gwaf; this
+  matters for gwaf proxying to a non-Go backend.)
+
+
 ### Added
 
 - **`IDPHPPregReplaceEval` (4016)** — `preg_replace` with the `/e` modifier,

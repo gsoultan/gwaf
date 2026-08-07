@@ -506,6 +506,8 @@ func matchesSchemeFolded(src []byte, i int, want string) bool {
 	w := 0
 	for i < len(src) && w < len(want) {
 		c := src[i]
+		// A raw control or whitespace byte is ignored by the URL parser, so
+		// "java\tscript:" reaches the interpreter and has to match here.
 		if c < 0x21 && c != 0 {
 			i++
 			continue
@@ -514,6 +516,26 @@ func matchesSchemeFolded(src []byte, i int, want string) bool {
 			i++
 			continue
 		}
+		// An HTML character reference is decoded by the browser before it parses
+		// the scheme, so "java&Tab;script:" and "javascript&colon;alert(1)" both
+		// execute. Decode it and treat the result the same as a raw byte: a
+		// control/space code point is skipped, and any other is folded and
+		// matched. Without this the entity broke the scan and the payload passed.
+		if c == '&' {
+			if r, next, ok := decodeCharRef(src, i); ok {
+				if r < 0x21 {
+					i = next
+					continue
+				}
+				if r < 0x80 && fold(byte(r)) == want[w] {
+					i = next
+					w++
+					continue
+				}
+				return false
+			}
+			return false
+		}
 		if fold(c) != want[w] {
 			return false
 		}
@@ -521,6 +543,97 @@ func matchesSchemeFolded(src []byte, i int, want string) bool {
 		w++
 	}
 	return w == len(want)
+}
+
+// decodeCharRef decodes the HTML character reference at src[i], which must be
+// '&'. It returns the code point, the index just past the reference, and whether
+// one was found. A literal ampersand that is not a reference reports ok=false,
+// so it is treated as an ordinary byte.
+//
+// Numeric references (&#58; and &#x3a;) are decoded in full. Named references
+// are limited to the handful that obfuscate a scheme -- tab, newline, colon,
+// slash -- because a full HTML entity table does not belong on this path and
+// those are the ones an attacker reaches for. The trailing semicolon is optional
+// because browsers accept it missing.
+func decodeCharRef(src []byte, i int) (rune, int, bool) {
+	j := i + 1 // past '&'
+	if j < len(src) && src[j] == '#' {
+		j++
+		hex := false
+		if j < len(src) && (src[j] == 'x' || src[j] == 'X') {
+			hex = true
+			j++
+		}
+		start := j
+		var v rune
+		for j < len(src) {
+			c := src[j]
+			var d rune
+			switch {
+			case c >= '0' && c <= '9':
+				d = rune(c - '0')
+			case hex && c >= 'a' && c <= 'f':
+				d = rune(c-'a') + 10
+			case hex && c >= 'A' && c <= 'F':
+				d = rune(c-'A') + 10
+			default:
+				c = 0 // sentinel: stop
+			}
+			if c == 0 {
+				break
+			}
+			base := rune(10)
+			if hex {
+				base = 16
+			}
+			v = v*base + d
+			if v > 0x10FFFF {
+				return 0, 0, false
+			}
+			j++
+		}
+		if j == start {
+			return 0, 0, false
+		}
+		if j < len(src) && src[j] == ';' {
+			j++
+		}
+		return v, j, true
+	}
+	for _, ref := range schemeNamedRefs {
+		if hasFoldedPrefixAt(src, j, ref.name) {
+			k := j + len(ref.name)
+			if k < len(src) && src[k] == ';' {
+				k++
+			}
+			return ref.cp, k, true
+		}
+	}
+	return 0, 0, false
+}
+
+// schemeNamedRefs are the named character references that obfuscate a scheme.
+var schemeNamedRefs = []struct {
+	name string
+	cp   rune
+}{
+	{"newline", '\n'}, // longest first, so "newline" is tried before "new"
+	{"tab", '\t'},
+	{"colon", ':'},
+	{"sol", '/'},
+}
+
+// hasFoldedPrefixAt reports whether src[i:] begins with want, case-insensitively.
+func hasFoldedPrefixAt(src []byte, i int, want string) bool {
+	if i+len(want) > len(src) {
+		return false
+	}
+	for k := 0; k < len(want); k++ {
+		if fold(src[i+k]) != want[k] {
+			return false
+		}
+	}
+	return true
 }
 
 // skipAttrValue advances past a quoted or bare attribute value.

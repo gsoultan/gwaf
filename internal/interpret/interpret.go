@@ -160,6 +160,15 @@ func Detect(src []byte) Class {
 			if i+2 < len(src) && src[i+1] == '2' && (src[i+2] == '5' || src[i+2] == '5'-32) {
 				c |= ClassDoubleEncoded
 			}
+			// "%%32%65" is a malformed escape a strict decoder leaves alone but a
+			// permissive one (Apache, CVE-2021-42013) collapses: the leading '%'
+			// joins the decoded "2e" to form "%2e", which a second pass turns
+			// into ".". A '%' immediately followed by another '%' is the lead of
+			// that form, so it is a plausible double-decoding and gets its own
+			// reading. A benign "%%" costs one extra reading, never a bypass.
+			if i+1 < len(src) && src[i+1] == '%' {
+				c |= ClassDoubleEncoded
+			}
 			// %00 is a NUL that a C-backed origin may truncate at.
 			if i+2 < len(src) && src[i+1] == '0' && src[i+2] == '0' {
 				c |= ClassNullTruncate
