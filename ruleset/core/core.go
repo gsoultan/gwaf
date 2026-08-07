@@ -19,6 +19,7 @@ import (
 	"github.com/gsoultan/gwaf/detect/graphql"
 	"github.com/gsoultan/gwaf/detect/ldapi"
 	"github.com/gsoultan/gwaf/detect/nosqli"
+	"github.com/gsoultan/gwaf/detect/promptinjection"
 	"github.com/gsoultan/gwaf/detect/shelli"
 	"github.com/gsoultan/gwaf/detect/sqli"
 	"github.com/gsoultan/gwaf/detect/ssti"
@@ -44,6 +45,7 @@ import (
 //	10,000–10,999 GraphQL abuse
 //	11,000–11,999 server-side request forgery
 //	12,000–12,999 prototype pollution
+//	13,000–13,999 AI/LLM prompt injection and system-prompt leakage
 //
 // An authored ID must end below 100 within its band, because the generated
 // body-phase counterpart is the ID plus 900 (see bodyPhaseOffset) and has to
@@ -164,6 +166,13 @@ const (
 
 	// 12,000-12,999: JavaScript prototype pollution.
 	IDPrototypePollution types.RuleID = 12001
+
+	// 13,000-13,999: AI/LLM. In scope because it is decidable from one request
+	// with no memory -- the payload is text in the body and the question "does
+	// this try to override the model's instructions?" is answered by the text.
+	// No model, no network call, no state (CLAUDE.md §1).
+	IDPromptInjection  types.RuleID = 13001
+	IDSystemPromptLeak types.RuleID = 13002
 
 	// 10002 is graphql.IntrospectionRule and is deliberately NOT here.
 	//
@@ -1141,6 +1150,76 @@ func requestRules() rules.Set {
 		// application for which the content is the product — a paste bin, an
 		// error-tracking API, a database console — and those deployments should
 		// scope an exception rather than have the tier lowered for everyone.
+		{
+			ID:      IDPromptInjection,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// URLDecode only, and the omissions are both deliberate.
+			//
+			// decodeChain strips whitespace, which is right for a SQL keyword
+			// and fatal here: "ignore all previous instructions" arrives as one
+			// run of letters, so every multi-word phrase stops matching and the
+			// imperative structure the detector reads is gone. Lowercase is
+			// omitted because the detector folds case itself, and reusing the
+			// chain detect/shelli already uses avoids paying for a new
+			// (chain × target) materialisation over every request.
+			Transforms: []rules.Transform{transform.URLDecode},
+			// Prompt injection: text that tries to override the instructions an
+			// LLM was given. Number one on the OWASP Top 10 for LLM Applications
+			// since the list existed, including the 2026 edition grounded in
+			// 7,714 real incidents.
+			//
+			// The detector scores *imperative structure*, not vocabulary, for
+			// the same reason detect/ssti scores what is evaluated rather than
+			// the delimiters around it. "Ignore all previous instructions"
+			// fires; "the attack works by telling the model to ignore previous
+			// instructions" does not, and the benign corpus asserts it.
+			Op:      promptinjection.Operator(),
+			Actions: []rules.Action{rules.Block},
+			// Warning rather than Critical: the consequence is the model doing
+			// something it should not, which is real but is not the origin
+			// executing attacker code.
+			Severity: types.SeverityWarning,
+			// High, not Certain, and the distinction is honest rather than
+			// cautious. An application whose whole purpose is discussing prompts
+			// -- a red-team console, an evaluation harness, a prompt library --
+			// produces true matches that are not attacks. Those deployments
+			// scope an exception to the field carrying prompts, the same answer
+			// detect/shelli gives a CI platform carrying shell commands as data.
+			Confidence: types.High,
+			Msg:        "Prompt injection in request value",
+			Tags:       []string{"llm", "prompt-injection", "owasp-llm01", "semantic"},
+		},
+		{
+			ID:         IDSystemPromptLeak,
+			Phase:      types.PhaseResponseBody,
+			Targets:    responseTargets,
+			Transforms: []rules.Transform{transform.Lowercase},
+			// System Prompt Leakage -- a new entry in the 2026 OWASP LLM list --
+			// caught on the way out. The request-side rule above blocks the ask;
+			// this blocks the answer, which is the half that still matters when
+			// the ask arrived in a form nobody anticipated.
+			//
+			// The markers are the framing of a system prompt rather than its
+			// content, because the content is different for every deployment and
+			// the framing is not: a response that starts explaining "you are a
+			// helpful assistant. you must never" is reciting instructions, not
+			// answering a question.
+			Op: op.ContainsAny(
+				"you are a helpful assistant", "your system prompt is",
+				"my system prompt is", "my instructions are as follows",
+				"you must never reveal", "do not reveal these instructions",
+				"<|im_start|>system", "### system:",
+			),
+			Actions:  []rules.Action{rules.Block},
+			Severity: types.SeverityWarning,
+			// High for the same reason as above, plus one specific to responses:
+			// documentation about building assistants legitimately quotes this
+			// phrasing, and a docs site is a plausible thing to sit behind gwaf.
+			Confidence: types.High,
+			Msg:        "System prompt disclosed in response",
+			Tags:       []string{"llm", "disclosure", "owasp-llm07"},
+		},
 		{
 			ID:         IDLeakPrivateKey,
 			Phase:      types.PhaseResponseHeaders,
