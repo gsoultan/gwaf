@@ -1603,3 +1603,49 @@ benign corpus and the ones that exceed their tier's ceiling can be demoted or
 dropped. That is the path to "CRS breadth at gwaf's false-positive rate" —
 convert, calibrate, keep what survives — and it is a curation exercise, not an
 import.
+
+## SHIPPED: paranoia gates are interpreted, not translated
+
+"Make sure all CRS converts" is not achievable, and the analysis of why is more
+useful than the attempt. Full skip breakdown across all 27 CRS rule files:
+
+    386 variable has no gwaf equivalent   (TX 235, XML 145)
+     55 unknown/unsupported directive
+     55 chained SecRule
+     29 counting a collection (&ARGS)
+     20 variable exclusions (!ARGS:x)
+     12 @pmFromFile
+      7 unconditional actions
+      5 encoding validation
+      6 transformations
+
+**Several of these are deliberate architecture, not gaps.** A chain is a
+conjunction across variables and importing only the head would be *more
+permissive than the original* — refusing is correctness. Variable exclusions
+belong in rules.Exception where they are visible and tunable. Unconditional
+actions are cross-request state, which is the embedder's. Encoding validation is
+gwaf's canonicalization tier and runs before rules rather than as one. **100%
+conversion would mean abandoning those decisions.**
+
+### What was fixed: 184 of the 235 TX directives
+200 of them are `SecRule TX:DETECTION_PARANOIA_LEVEL "@lt N" skipAfter:MARKER` —
+CRS expressing paranoia as *runtime control flow*. gwaf expresses the same idea
+as a compile-time confidence tier, so the gate is now **interpreted rather than
+translated**: the compiler reads the level, and every rule up to the marker
+arrives at `ConfidenceFromParanoiaLevel(N)` instead of a flat default.
+
+Variable failures 386 -> 202. Reporting those as untranslatable was accurate and
+useless: they are not detection, and gwaf already implements what they do.
+
+### Detection went DOWN, and that is the correct outcome
+gwaf+CRS 57.6% -> 47.8%. Before, every imported rule arrived as High and ran;
+now PL2/PL3/PL4 rules arrive as Medium/Low/Heuristic and are filtered by the
+default minimum confidence — which is what CRS at PL1 does too. **The old number
+was inflated by running rules CRS itself would not have run.** A lower honest
+number beat a higher wrong one.
+
+### Still open, in order of leverage
+- **XML (145)** — needs an XML variable with XPath. gwaf already parses XML
+  bodies for XXE, so the parse exists and the addressing does not.
+- **@pmFromFile (12)** and **transformations (6)** — small and mechanical.
+- The rest is deliberate and should stay unconverted.

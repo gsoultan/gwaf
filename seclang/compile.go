@@ -24,6 +24,57 @@ type compiler struct {
 	// defaults carries SecDefaultAction, which applies to rules that do not
 	// state their own disruptive action.
 	defaults []action
+
+	// paranoia is the level the rules currently being read belong to, and
+	// endMarker is the SecMarker that closes that block.
+	//
+	// CRS expresses paranoia as *runtime control flow*: a rule tests
+	// TX:DETECTION_PARANOIA_LEVEL and jumps past a block of rules when the
+	// level is too low. gwaf expresses the same idea as a compile-time
+	// confidence tier, so the gate is interpreted rather than translated —
+	// reading it here is what lets an imported rule arrive at the tier CRS
+	// intended instead of all of them arriving at one flat default.
+	//
+	// Two hundred of CRS's directives are these gates. Reporting them as
+	// untranslatable was accurate and useless: they are not detection, and
+	// gwaf already implements what they do.
+	paranoia  int
+	endMarker string
+}
+
+// paranoiaGate reports the level a TX:DETECTION_PARANOIA_LEVEL gate guards, and
+// the marker it jumps to, for a directive of the shape
+//
+//	SecRule TX:DETECTION_PARANOIA_LEVEL "@lt 2" "id:942013,...,skipAfter:END-X"
+//
+// The "@lt N" form means "skip the block unless the level is at least N", so the
+// rules that follow belong to paranoia level N.
+func paranoiaGate(d directive) (level int, marker string, ok bool) {
+	if len(d.Args) < 3 {
+		return 0, "", false
+	}
+	v := strings.ToUpper(d.Args[0])
+	if !strings.Contains(v, "TX:DETECTION_PARANOIA_LEVEL") &&
+		!strings.Contains(v, "TX:BLOCKING_PARANOIA_LEVEL") {
+		return 0, "", false
+	}
+	op := strings.TrimSpace(d.Args[1])
+	if !strings.HasPrefix(strings.ToLower(op), "@lt ") {
+		return 0, "", false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(op[4:]))
+	if err != nil || n < 1 || n > 4 {
+		return 0, "", false
+	}
+	for _, a := range d.Args[2:] {
+		for _, part := range strings.Split(a, ",") {
+			part = strings.TrimSpace(part)
+			if rest, found := strings.CutPrefix(part, "skipAfter:"); found {
+				return n, strings.Trim(rest, "'\""), true
+			}
+		}
+	}
+	return 0, "", false
 }
 
 func (c *compiler) run(ds []directive) rules.Set {
@@ -51,6 +102,14 @@ func (c *compiler) run(ds []directive) rules.Set {
 		d := ds[i]
 		switch strings.ToLower(d.Name) {
 		case "secrule":
+			if lvl, marker, ok := paranoiaGate(ds[i]); ok {
+				// Consumed as metadata, not translated. Everything up to the
+				// marker belongs to this paranoia level.
+				// Not counted again: report.Directives is the file's total,
+				// set once before the loop.
+				c.paranoia, c.endMarker = lvl, marker
+				continue
+			}
 			consumed, rule, ok := c.secRule(ds, i)
 			i += consumed
 			if ok {
@@ -60,7 +119,13 @@ func (c *compiler) run(ds []directive) rules.Set {
 			if len(d.Args) > 0 {
 				c.defaults = actionsOf(d.Args[len(d.Args)-1])
 			}
-		case "secaction", "secmarker", "secruleremovebyid",
+		case "secmarker":
+			// Closing the block a paranoia gate opened returns to PL1.
+			if len(d.Args) > 0 && c.endMarker != "" &&
+				strings.EqualFold(strings.Trim(d.Args[0], "'\""), c.endMarker) {
+				c.paranoia, c.endMarker = 0, ""
+			}
+		case "secaction", "secruleremovebyid",
 			"secruleremovebytag", "secruleremovebymsg":
 			// SecAction is unconditional bookkeeping — setvar, initcol,
 			// skipAfter — and every one of those is cross-request state, which
@@ -180,7 +245,7 @@ func (c *compiler) secRule(ds []directive, i int) (consumed int, out rules.Rule,
 		Op:         operator,
 		Actions:    []rules.Action{actionOf(all)},
 		Severity:   severityOf(all),
-		Confidence: types.Confidence(c.opts.DefaultConfidence),
+		Confidence: c.confidence(),
 		Msg:        messageOf(all),
 		Tags:       tagsOf(all),
 	}
@@ -586,4 +651,21 @@ func regexpQuote(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+// confidence returns the tier an imported rule should carry.
+//
+// Inside a paranoia-gated block it comes from the level CRS assigned, mapped by
+// types.ConfidenceFromParanoiaLevel — PL1 is High, PL2 Medium, PL3 Low, PL4
+// Heuristic. That is the honest translation: CRS's own authors placed the rule
+// behind a level, and the level is a statement about how much false-positive
+// risk it carries.
+//
+// Outside a gated block the caller's DefaultConfidence applies, because nothing
+// in the file said otherwise.
+func (c *compiler) confidence() types.Confidence {
+	if c.paranoia > 0 {
+		return types.ConfidenceFromParanoiaLevel(c.paranoia)
+	}
+	return types.Confidence(c.opts.DefaultConfidence)
 }
