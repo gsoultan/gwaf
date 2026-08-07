@@ -185,7 +185,7 @@ bench-publish:
 	@echo "# cpu:     $$(sysctl -n machdep.cpu.brand_string 2>/dev/null || \
 	                    grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- || echo unknown)"
 	@echo
-	@GWAF_BENCH_REPORT=1 $(GO) test -run='TestLatencyDistribution|TestSLO' -v . \
+	@GWAF_BENCH_REPORT=1 GWAF_LATENCY_STRICT=1 $(GO) test -run='TestLatencyDistribution|TestSLO' -v . \
 		| grep -E 'workload|ns|µs|ms|heap growth|--- (PASS|FAIL)' || true
 	@echo
 	@$(GO) test -run=XXX -bench=. -benchmem -count=5 . | grep -E '^(Benchmark|ok|PASS)'
