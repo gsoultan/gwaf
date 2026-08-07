@@ -1563,3 +1563,43 @@ Coraza winning detection on its own test suite is fair and is stated plainly.
 gwaf winning FP on its own calibration corpus is close to tautological and is
 stated just as plainly. The caveats travel in the test output itself so the
 numbers cannot be quoted bare.
+
+## MEASURED: why converting CRS to gwaf is blocked, and by exactly what
+
+Asked "why not convert the CRS ruleset to gwaf". The tooling already exists
+(`gwaf-seclang convert` emits Go source), so the question is empirical.
+
+**The blocker is not hundreds of edge cases. It is two features.**
+
+Aggregating every untranslatable directive across all 27 CRS rule files:
+
+    235  variable "TX"      -- ModSecurity's transaction/anomaly-score variable
+    145  variable "XML"     -- XPath inspection of XML bodies
+      3  MULTIPART_PART_HEADERS
+      2  REQBODY_PROCESSOR
+      1 each  UNIQUE_ID, REQUEST_BASENAME, QUERY_STRING, ARGS_GET_NAMES
+
+380 of ~580 skipped directives are TX and XML. The last three were pure
+omissions in the mapping table and are now fixed (105 -> 107 rules), which
+confirms the tail is thin and the head is two items.
+
+**TX is the interesting one.** CRS's architecture is: every rule adds to
+`tx.anomaly_score`, and rule 949110 blocks when the total crosses a threshold.
+gwaf already has that shape — `rules.Score` and `WithThreshold` — so TX is
+mappable rather than alien. It is the single highest-leverage piece of bridge
+work, worth roughly 235 directives.
+
+**XML (145)** needs an XML variable with XPath over the body. gwaf already
+parses XML bodies for XXE, so the parse exists and the addressing does not.
+
+### But conversion does not fix precision, and that is the real finding
+Converting changes the *format*, not the rules. The measured cost of running CRS
+under gwaf is 51.3% false positives against gwaf's own 0.06%, so importing more
+of CRS imports more of its imprecision.
+
+What conversion *does* unlock that the runtime bridge cannot: **calibration**.
+Converted rules are Go values, so `gwaf calibrate` measures each one against the
+benign corpus and the ones that exceed their tier's ceiling can be demoted or
+dropped. That is the path to "CRS breadth at gwaf's false-positive rate" —
+convert, calibrate, keep what survives — and it is a curation exercise, not an
+import.

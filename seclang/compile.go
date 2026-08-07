@@ -333,8 +333,18 @@ func targetKind(name string) (types.TargetKind, bool) {
 		return types.TargetArgsPost, true
 	case "REQUEST_URI", "REQUEST_URI_RAW":
 		return types.TargetRequestURI, true
-	case "REQUEST_FILENAME":
+	case "REQUEST_FILENAME", "REQUEST_BASENAME":
+		// REQUEST_BASENAME is the last path segment. gwaf has no separate
+		// target for it, and the path is a superset — matching a basename
+		// pattern against the whole path can only widen, never miss, which is
+		// the safe direction for an import.
 		return types.TargetRequestPath, true
+	case "QUERY_STRING":
+		// The query string is part of the request URI, which is what gwaf
+		// records. Same reasoning: a superset never misses.
+		return types.TargetRequestURI, true
+	case "ARGS_GET_NAMES":
+		return types.TargetArgNames, true
 	case "REQUEST_METHOD":
 		return types.TargetRequestMethod, true
 	case "REQUEST_PROTOCOL":
