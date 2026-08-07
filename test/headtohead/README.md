@@ -16,7 +16,18 @@ CRS_TESTS=/tmp/crs/tests/regression/tests CRS_RULES=/tmp/crs/rules \
 | engine | detection |
 |---|---|
 | coraza + CRS | **3246 / 4025 (80.6%)** |
+| gwaf + CRS | 2320 / 4025 (57.6%) |
 | gwaf | 807 / 4025 (20.0%) |
+
+**Does gwaf + CRS close the gap? Partly — 20.0% to 57.6% — and not enough.**
+The reason is one number: the SecLang bridge translates **105 of 788 CRS
+directives**, leaving 580 untranslated. gwaf running CRS is running an eighth of
+CRS. The remaining 23 points to Coraza are the rules the bridge cannot yet
+express, not a difference in how the two engines match.
+
+That makes the bridge's coverage, not the engine, the thing to improve for
+anyone whose goal is CRS parity — and it is printed beside the score for exactly
+that reason.
 
 **Coraza wins this decisively and the result is fair to state.** The corpus is
 CRS's own regression suite — one test per CRS rule, written over twenty years

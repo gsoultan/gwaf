@@ -343,7 +343,21 @@ func targetKind(name string) (types.TargetKind, bool) {
 		return types.TargetRequestHeaders, true
 	case "REQUEST_HEADERS_NAMES":
 		return types.TargetRequestHeaderNames, true
-	case "REQUEST_BODY", "REQUEST_LINE", "MULTIPART_FILENAME", "FILES", "FILES_NAMES":
+	case "REQUEST_LINE":
+		// The request line is "GET /path HTTP/1.1" — available in phase 1 and
+		// nothing to do with the body.
+		//
+		// It was mapped to REQUEST_BODY, which is wrong twice over: it read the
+		// wrong bytes, and it put a phase-1 rule in the body phase, so the
+		// compiler rejected the whole ruleset with "REQUEST_BODY is not
+		// available until phase request_body". CRS 920100 and 932170 are both
+		// REQUEST_LINE rules at phase:1, so importing CRS failed outright — the
+		// bridge could not load the ruleset it exists to load.
+		//
+		// Found by running the CRS corpus through the bridge rather than by
+		// reading it: no in-tree test imported a REQUEST_LINE rule.
+		return types.TargetRequestURI, true
+	case "REQUEST_BODY", "MULTIPART_FILENAME", "FILES", "FILES_NAMES":
 		return types.TargetRequestBody, true
 	case "REQUEST_COOKIES":
 		return types.TargetRequestCookies, true

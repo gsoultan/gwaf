@@ -96,6 +96,28 @@ func (e gwafEngine) Blocks(st conformance.Stage) bool {
 	return d.Blocked()
 }
 
+// gwafCRSEngine is gwaf running CRS's rules through the seclang bridge.
+type gwafCRSEngine struct{ gwafEngine }
+
+func (gwafCRSEngine) Name() string { return "gwaf+crs" }
+
+// newGwafWithCRS builds a gwaf loaded with CRS rules instead of its own.
+//
+// WithRuleset accumulates onto the default set, so this is gwaf's rules *plus*
+// whatever the bridge translated — which is the configuration an adopter
+// migrating from CRS would actually run, rather than a synthetic CRS-only one.
+func newGwafWithCRS(dir string) (*gwaf.WAF, conformance.Coverage, error) {
+	set, reports, err := conformance.LoadCRS(dir)
+	if err != nil {
+		return nil, conformance.Coverage{}, err
+	}
+	w, err := gwaf.New(gwaf.WithRuleset(set))
+	if err != nil {
+		return nil, conformance.Coverage{}, err
+	}
+	return w, conformance.Summarise(reports), nil
+}
+
 // ---- Coraza + CRS ----------------------------------------------------------
 
 type corazaEngine struct{ waf coraza.WAF }
@@ -237,7 +259,16 @@ func TestHeadToHead(t *testing.T) {
 		t.Fatalf("coraza: %v", err)
 	}
 
-	engines := []engine{gwafEngine{waf: g}, corazaEngine{waf: cz}}
+	// The third engine answers the obvious question: does gwaf running *CRS's
+	// own rules* close the gap? It is built from the same .conf files Coraza
+	// loads, through the seclang bridge.
+	gc, bridgeCov, err := newGwafWithCRS(rulesDir)
+	if err != nil {
+		t.Fatalf("gwaf+crs: %v", err)
+	}
+	t.Logf("gwaf+crs %s", bridgeCov)
+
+	engines := []engine{gwafEngine{waf: g}, gwafCRSEngine{gwafEngine{waf: gc}}, corazaEngine{waf: cz}}
 	scores := make([]score, len(engines))
 
 	// One pass over the corpus, both engines per stage, so neither sees a

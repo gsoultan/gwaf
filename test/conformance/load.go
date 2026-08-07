@@ -79,7 +79,13 @@ func LoadCRS(dir string) (rules.Set, []seclang.Report, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		s, rep, err := seclang.Parse(e.Name(), b, seclang.Options{})
+		// DefaultConfidence is required rather than defaulted, because a SecLang
+		// rule arrives with a paranoia level and no measured false-positive
+		// rate. High is the honest import tier: it means "believed precise, not
+		// yet calibrated against this deployment's traffic".
+		s, rep, err := seclang.Parse(e.Name(), b, seclang.Options{
+			DefaultConfidence: seclang.High,
+		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 		}

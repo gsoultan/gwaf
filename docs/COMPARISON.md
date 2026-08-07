@@ -224,8 +224,11 @@ The comparison this repository actually owes, and does not yet have:
 1. ~~**A head-to-head benchmark.**~~ **Built** — `test/headtohead`, same corpus,
    same machine, same process, re-runnable with one `make` target. The first
    result is not flattering and is published anyway: on the CRS regression
-   corpus **Coraza + CRS detects 80.6% against gwaf's 20.0%**, which is fair —
-   that corpus is CRS's own test suite. On 10,433 ordinary API requests the
+   corpus **Coraza + CRS detects 80.6%, gwaf running CRS through the SecLang
+   bridge 57.6%, and gwaf on its own rules 20.0%** — fair, because that corpus
+   is CRS's own test suite. The middle number is the interesting one: the bridge
+   translates 105 of 788 CRS directives, so gwaf+CRS is running an eighth of CRS
+   and the gap is bridge coverage rather than engine capability. On 10,433 ordinary API requests the
    false-positive rates are **gwaf 0.06%, untuned CRS 36.4%**, which is equally
    one-sided in the other direction because that corpus is gwaf's. Read
    [test/headtohead/README.md](../test/headtohead/README.md) before quoting
