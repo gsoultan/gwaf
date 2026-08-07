@@ -25,6 +25,7 @@ import (
 	"github.com/gsoultan/gwaf/detect/xss"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
+	"github.com/gsoultan/gwaf/rules/op/rx"
 	"github.com/gsoultan/gwaf/rules/transform"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -121,6 +122,7 @@ const (
 	IDPHPDynamicEval      types.RuleID = 4013
 	IDRemoteFileInclusion types.RuleID = 4014
 	IDServerConfigUpload  types.RuleID = 4015
+	IDPHPPregReplaceEval  types.RuleID = 4016
 	IDSQLiSemantic        types.RuleID = 2010
 	IDXSSSemantic         types.RuleID = 3010
 	IDScannerUserAgent    types.RuleID = 5001
@@ -590,7 +592,14 @@ func requestRules() rules.Set {
 			// code-sharing site, a CMS template editor, a paste bin. Those
 			// deployments should scope an exception to the field that carries
 			// it rather than lower the tier globally.
-			Op:         op.ContainsAny("<?php", "<?=$", "<%php"),
+			//
+			// "<?=" is the whole short echo tag, not "<?=$". It opens code in
+			// every PHP since 5.4, and requiring the "$" meant "<?=system('id')?>"
+			// and "<?=`id`?>" -- which echo a call rather than a variable --
+			// walked through. It is not ambiguous with XML either: "<?" starts a
+			// processing instruction whose target must be a Name, and "=" cannot
+			// start one.
+			Op:         op.ContainsAny("<?php", "<?=", "<%php"),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.High,
@@ -647,11 +656,23 @@ func requestRules() rules.Set {
 			// The directives are matched, not the filename, because the filename
 			// is the part an upload handler may rewrite and the content is the
 			// part that has to survive intact to work.
+			//
+			// "scriptprocessor=" is the IIS form of the same attack: a web.config
+			// uploaded beside the payload maps an innocuous extension to an
+			// interpreter binary, which is what "AddType ... x-httpd-php" does on
+			// Apache. It names the interpreter explicitly, so it is as specific
+			// as the Apache directives and no more FP-prone.
+			//
+			// The legacy <httpHandlers> form is deliberately not matched: what
+			// makes it dangerous is the *pairing* of a wildcard path with a
+			// handler type, which a literal cannot express, and the element
+			// alone appears in ordinary .NET configuration.
 			Op: op.ContainsAny(
 				"addtypeapplication/x-httpd-php", "sethandlerapplication/x-httpd-php",
 				"addhandlerphp", "addhandlerapplication/x-httpd-php",
 				"php_flag", "php_value", "addtypeapplication/x-httpd-cgi",
 				"options+execcgi", "sethandlercgi-script",
+				"scriptprocessor=",
 			),
 			Actions:  []rules.Action{rules.Block},
 			Severity: types.SeverityCritical,
@@ -838,15 +859,52 @@ func requestRules() rules.Set {
 			// in code-sharing sites, and in any discussion of this rule. What is
 			// matched is eval *with an error-suppressed or decoded argument*,
 			// which is a shape nobody writes deliberately.
+			//
+			// "eval($_" and "assert($_" extend that same principle rather than
+			// relaxing it: the argument is a PHP superglobal, so the shape is
+			// "evaluate whatever the client sent". Matching only "@eval(" missed
+			// the identical shell written without the error-suppressing "@" --
+			// "eval($_POST['x'])" is a complete web shell -- and JavaScript's
+			// eval and Python's assert cannot collide, because neither has "$_".
 			Op: op.ContainsAny(
 				"@eval(", "eval(base64_decode(", "eval(gzinflate(",
 				"eval(gzuncompress(", "eval(str_rot13(", "assert(base64_decode(",
-				"create_function(", "@assert(", "preg_replace('/.*/e",
+				"create_function(", "@assert(",
+				"eval($_", "assert($_",
 			),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
 			Msg:        "PHP dynamic code evaluation in request value",
+			Tags:       []string{"rce", "webshell", "php", "owasp-a03"},
+		},
+		{
+			ID:         IDPHPPregReplaceEval,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// preg_replace's "/e" modifier evaluated the replacement as PHP.
+			// It was removed in PHP 7, which is precisely why it still matters:
+			// the installs that never upgraded are the ones being compromised.
+			//
+			// This is the one shape in the dynamic-eval family a literal cannot
+			// express. The modifier rides on *any* pattern, so the old literal
+			// "preg_replace('/.*/e" only ever caught the payload that spelled
+			// ".*", and "/(.*)/e" or "/x/e" walked past it. Matching "/e" alone
+			// is not an option either: after the transform chain lowercases and
+			// strips whitespace, an ordinary JSON body carrying "path":"/e"
+			// would contain it.
+			//
+			// So this is the L2 fallback working as designed rather than an
+			// exception to it -- RE2, linear time, and prefiltered on the
+			// "preg_replace(" literals the pattern requires, so a request
+			// without them never reaches the regex. The alternation is spelled
+			// out per quote style because RE2 has no backreferences.
+			Op:         rx.MustNew(`preg_replace\('[^']{0,200}/e'|preg_replace\("[^"]{0,200}/e"`),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "PHP preg_replace /e code evaluation in request value",
 			Tags:       []string{"rce", "webshell", "php", "owasp-a03"},
 		},
 		{

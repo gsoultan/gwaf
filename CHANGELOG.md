@@ -6,7 +6,46 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Added
+
+- **`IDPHPPregReplaceEval` (4016)** — `preg_replace` with the `/e` modifier,
+  which evaluated the replacement as PHP. Removed in PHP 7, which is exactly why
+  it still matters: the installs that never upgraded are the ones being
+  compromised. This is the one shape in the dynamic-eval family a literal cannot
+  express — the modifier rides on *any* pattern — so it is the L2 regex fallback
+  working as designed: RE2, linear time, and prefiltered on the `preg_replace(`
+  literals, so a request without them never reaches the regex.
+
 ### Fixed
+
+- **Four PHP rules matched too narrowly and let real web shells through.** All
+  four were found by the WordPress/PHP/malware scenario in `test/pentest`, and
+  each was a literal chosen tighter than the attack it names:
+
+  - `IDPHPCodeUpload` matched `<?=$` rather than `<?=`, so it caught a short
+    echo tag only when it echoed a *variable*. `<?=system('id')?>` and
+    ``<?=`id`?>`` walked through. `<?=` opens code in every PHP since 5.4 and
+    cannot collide with XML, where `<?` starts a processing instruction whose
+    target must be a Name.
+  - `IDPHPDynamicEval` matched `@eval(` but not `eval($_`, so the same web shell
+    written without the error-suppressing `@` was missed —
+    `eval($_POST['x'])` is complete on its own. `assert($_` likewise. This
+    extends the rule's stated principle rather than relaxing it: the argument is
+    a superglobal, so the shape is still "evaluate whatever the client sent",
+    and JavaScript's `eval` or Python's `assert` cannot collide because neither
+    has `$_`.
+  - The same rule's `preg_replace('/.*/e` literal only ever matched the payload
+    that spelled `.*`; `/(.*)/e` and `/x/e` passed. Replaced by rule 4016 above.
+  - `IDServerConfigUpload` covered Apache only, so an IIS `web.config` naming an
+    interpreter through `scriptProcessor=` was not matched. That attribute is
+    the IIS form of `AddType … x-httpd-php` and is no more FP-prone. The legacy
+    `<httpHandlers>` form is deliberately still not matched: what makes it
+    dangerous is the pairing of a wildcard path with a handler type, which a
+    literal cannot express, and the element alone is ordinary .NET config.
+
+  Evasion corpus is 227/227 with false positives 0/124, and the benign controls
+  that decide deployability — a real image upload, a `web.config` that enables
+  nothing, prose about `eval` — all still pass.
 
 - **SQLi evaded detection inside MySQL executable comments.** The tokenizer
   treated every `/*…*/` as one opaque comment, so `UNION` and `SELECT` inside a
