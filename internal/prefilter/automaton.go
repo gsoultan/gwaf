@@ -113,13 +113,37 @@ func (a *Automaton) Scan(input []byte, dst *bitset.Set) int {
 		return len(input)
 	}
 
+	// The loop is split so the root has its own tight path.
+	//
+	// Benign traffic spends almost every byte at the root: the value contains no
+	// literal, so each byte looks up rootNext, gets 0, and goes round again. In
+	// the merged loop that byte still paid for two "state == 0" branches and the
+	// loop's own bookkeeping, and profiling put those branches at a third of the
+	// scan's own time on a 1 KiB JSON body — the single hottest thing in the
+	// benign path.
+	//
+	// Splitting it means the common byte costs one table lookup and one compare.
+	// The automaton is unchanged; this is the same walk, arranged so the case
+	// that happens is the case that is cheap.
 	state := int32(0)
-	for _, raw := range input {
-		c := fold(raw)
-
+	i := 0
+	for i < len(input) {
 		if state == 0 {
-			state = a.rootNext[c]
+			// Spin at the root until a byte actually starts a pattern.
+			for i < len(input) {
+				s := a.rootNext[fold(input[i])]
+				i++
+				if s != 0 {
+					state = s
+					break
+				}
+			}
+			if state == 0 {
+				break // ran out of input still at the root
+			}
 		} else {
+			c := fold(input[i])
+			i++
 			for {
 				if next, ok := a.child(state, c); ok {
 					state = next
@@ -134,10 +158,9 @@ func (a *Automaton) Scan(input []byte, dst *bitset.Set) int {
 					break
 				}
 			}
-		}
-
-		if state == 0 {
-			continue
+			if state == 0 {
+				continue
+			}
 		}
 
 		// Emit this state's outputs, then walk the dictionary-suffix chain to
