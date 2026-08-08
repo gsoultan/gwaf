@@ -173,6 +173,13 @@ func writeRule(b *strings.Builder, r *rules.Rule) error {
 func renderOperator(o rules.Operator) (string, error) {
 	switch v := o.(type) {
 	case *regexOperator:
+		// Negation is part of the operator, not decoration on it. Rendering a
+		// negated pattern as a plain one inverts the rule rather than weakening
+		// it, and inverting CRS 920600 -- "!@rx <well-formed Accept header>" --
+		// produces a WAF that blocks every valid request.
+		if v.Negated() {
+			return "seclang.MustRegexNegated(" + strconv.Quote(v.Pattern()) + ")", nil
+		}
 		return "seclang.MustRegex(" + strconv.Quote(v.Pattern()) + ")", nil
 	}
 

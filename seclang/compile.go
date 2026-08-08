@@ -278,6 +278,26 @@ func (c *compiler) operator(name, arg string, negated bool) (rules.Operator, str
 			"configure this as policy instead", m)
 	}
 
+	// Operators below that build a positive match from their argument have no
+	// way to carry a "!", and dropping it does not weaken the rule, it inverts
+	// it. CRS uses !@within, !@streq, !@pm, !@pmFromFile and !@beginsWith, and
+	// each one imported without its negation matches precisely the traffic the
+	// original allowed. Reported instead, like anything else that cannot be
+	// translated faithfully.
+	//
+	// @rx and @endsWith are absent from this list because they express negation
+	// directly; @contains and @containsWord reject it below with their own
+	// reasons.
+	if negated {
+		switch name {
+		case "streq", "beginswith", "pm", "pmf", "pmfromfile", "within",
+			"detectsqli", "detectxss":
+			return nil, fmt.Sprintf("negated @%s cannot be expressed as a gwaf "+
+				"operator, and importing it without the negation would "+
+				"invert the rule", name)
+		}
+	}
+
 	switch name {
 	case "rx":
 		o, err := newRegexOperator(arg, negated)

@@ -49,3 +49,21 @@ func MustRegex(pattern string) rules.Operator {
 	}
 	return o
 }
+
+// RegexNegated returns an @rx operator matching values the pattern does *not*
+// match, which is SecLang's "!@rx".
+//
+// It exists because generated code has to be able to say this. Rendering a
+// negated operator as a plain one does not weaken a rule, it inverts it: CRS
+// 920600 is "!@rx <a well-formed Accept header>", and without the negation it
+// blocks every request whose Accept header is valid.
+func RegexNegated(pattern string) (rules.Operator, error) { return rx.NewNegated(pattern) }
+
+// MustRegexNegated is RegexNegated for generated code.
+func MustRegexNegated(pattern string) rules.Operator {
+	o, err := RegexNegated(pattern)
+	if err != nil {
+		panic("seclang: generated pattern does not compile: " + err.Error())
+	}
+	return o
+}

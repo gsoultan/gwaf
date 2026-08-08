@@ -8,6 +8,20 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **A converted Core Rule Set answered 403 to every request.** `generate.go`
+  rendered every regex operator as `seclang.MustRegex(pattern)`, discarding
+  `Negated()`. SecLang's `!@rx` therefore came back as its own opposite, and CRS
+  920600 — "block unless the Accept header is well formed" — became "block when
+  the Accept header is well formed". `GET /health` with no arguments was blocked.
+  That is the invariant in CLAUDE.md §2 that the WAF must never be the outage,
+  broken as directly as it can be. The compiler separately ignored negation for
+  `@streq`, `@beginsWith`, `@within` and `@pm*`, which CRS also uses; those
+  cannot express a negation, so they are now reported rather than imported
+  inverted. 36 of 221 imported CRS rules were affected. Found by pointing the
+  pentest harness at the converted ruleset, which is the only reason it surfaced:
+  every unit test asserted on the `rules.Set`, where negation was always correct,
+  and the defect lived in the source emitted from it.
+
 - **Converting a real Core Rule Set release failed outright.** `seclang` kept two
   hand-maintained transform tables: the compiler accepted `t:jsDecode` and emitted
   `transform.EscapeDecode`, `generate.go` had no case for `escape_decode`. So
