@@ -11,6 +11,7 @@ import (
 	"github.com/gsoultan/gwaf/detect/xss"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
+	"github.com/gsoultan/gwaf/rules/transform"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -245,7 +246,7 @@ func (c *compiler) secRule(ds []directive, i int) (consumed int, out rules.Rule,
 		ID:         types.RuleID(c.opts.Prefix + id),
 		Phase:      phaseOf(all),
 		Targets:    targets,
-		Transforms: chain,
+		Transforms: withArgDecoding(targets, chain),
 		Op:         operator,
 		Actions:    []rules.Action{actionOf(all)},
 		Severity:   severityOf(all),
@@ -259,6 +260,55 @@ func (c *compiler) secRule(ds []directive, i int) (consumed int, out rules.Rule,
 		return consumed, out, false
 	}
 	return consumed, out, true
+}
+
+// withArgDecoding prepends URLDecode for the collections ModSecurity hands to a
+// rule already decoded.
+//
+// This is the largest single fidelity defect the CRS regression suite found, and
+// it is a difference in where decoding happens rather than whether it does.
+// ModSecurity decodes the query string and the form body while *populating*
+// ARGS, so by the time a rule runs "t:none" means "apply no further transforms"
+// — the value is already decoded. gwaf keeps values raw and decodes per rule,
+// which is what makes the transform chain a compile-time input rather than a
+// fixed pipeline.
+//
+// Imported rules were therefore reading percent-encoded bytes their author never
+// expected. CRS 932140 matched "for %variable in (set) do command" perfectly and
+// never fired once, because what reached it was
+// "for%20%25variable%20in%20%28set%29%20do%20command". 187 imported rules were
+// silent on their own regression tests, and this is the common cause.
+//
+// Only the collections ModSecurity actually decodes get it. REQUEST_HEADERS and
+// REQUEST_URI are raw there too, so decoding them here would invent a reading
+// the original rule never had — and a rule looking for "%00" in a header would
+// stop finding it.
+func withArgDecoding(targets []types.Target, chain []rules.Transform) []rules.Transform {
+	if !anyDecodedCollection(targets) {
+		return chain
+	}
+	// A chain that already starts by decoding needs nothing: "t:urlDecode" on a
+	// rule is the author asking for a *second* decode, and that is the
+	// double-decoding reading, not this one.
+	if len(chain) > 0 && chain[0].Name() == transform.URLDecode.Name() {
+		return chain
+	}
+	return append([]rules.Transform{transform.URLDecode}, chain...)
+}
+
+// anyDecodedCollection reports whether a rule reads a collection ModSecurity
+// populates with decoded values.
+func anyDecodedCollection(targets []types.Target) bool {
+	for _, t := range targets {
+		switch t.Kind {
+		case types.TargetArgs, types.TargetArgsGet, types.TargetArgsPost,
+			types.TargetArgNames, types.TargetArgsJoined,
+			types.TargetRequestCookies, types.TargetRequestCookieNames,
+			types.TargetRequestBody, types.TargetFileNames:
+			return true
+		}
+	}
+	return false
 }
 
 // operator maps a SecLang operator onto a gwaf one.

@@ -70,6 +70,7 @@ func LoadCRS(dir string) (rules.Set, []seclang.Report, error) {
 	}
 	// Sorted by name, which is how CRS orders its files and therefore how rule
 	// IDs are expected to appear.
+	var srcs []seclang.Source
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") {
 			continue
@@ -79,19 +80,36 @@ func LoadCRS(dir string) (rules.Set, []seclang.Report, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		// DefaultConfidence is required rather than defaulted, because a SecLang
-		// rule arrives with a paranoia level and no measured false-positive
-		// rate. High is the honest import tier: it means "believed precise, not
-		// yet calibrated against this deployment's traffic".
-		s, rep, err := seclang.Parse(e.Name(), b, seclang.Options{
-			DefaultConfidence: seclang.High,
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
-		}
-		set = append(set, s...)
-		reports = append(reports, rep)
+		srcs = append(srcs, seclang.Source{Name: e.Name(), Data: b})
 	}
+
+	// One ParseSources over every file, not Parse per file.
+	//
+	// SecLang is stateful across files: SecDefaultAction set in one applies to
+	// the next, and SecRuleRemoveById routinely appears after the include that
+	// defined the rule it disables. Parsing each alone silently loses both, so
+	// the ruleset under test was not the ruleset CRS describes.
+	//
+	// DataFiles matters just as much. Without it every @pmFromFile rule is
+	// skipped, and this loader was dropping seventeen of them -- including 930120,
+	// which carries the LFI filename list. The suite was measuring a conversion
+	// materially smaller than the one gwaf-seclang produces, and reporting the
+	// difference as gwaf failing CRS's tests.
+	//
+	// DefaultConfidence is required rather than defaulted, because a SecLang rule
+	// arrives with a paranoia level and no measured false-positive rate. High is
+	// the honest import tier: "believed precise, not yet calibrated against this
+	// deployment's traffic".
+	set, rep, err := seclang.ParseSources(srcs, seclang.Options{
+		DefaultConfidence: seclang.High,
+		DataFiles: func(name string) ([]byte, error) {
+			return os.ReadFile(filepath.Join(dir, name))
+		},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s: %w", dir, err)
+	}
+	reports = append(reports, rep)
 	return set, reports, nil
 }
 

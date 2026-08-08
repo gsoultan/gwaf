@@ -352,8 +352,17 @@ func inspect(waf *gwaf.WAF, in Input) (gwaf.Decision, map[uint32]bool) {
 	if body == "" {
 		body = in.EncodedData
 	}
-	if !d.Blocked() && body != "" {
-		tx.SetRequestBody([]byte(body))
+	if !d.Blocked() {
+		if body != "" {
+			tx.SetRequestBody([]byte(body))
+		}
+		// The request-body phase runs whether or not there is a body, because
+		// that is what it means in ModSecurity: phase 2 is where ARGS are
+		// complete, and ARGS includes the query string. Gating it on a body
+		// meant no phase:2 rule could fire for "GET /x?foo=payload" -- which is
+		// most of CRS's corpus and the shape of most of its detection rules.
+		// CRS 932140 matched its own payload perfectly in isolation and was
+		// counted silent across 153 stages for exactly this reason.
 		d = tx.ProcessRequestBody()
 	}
 	// Response phases. The CRS harness reflects a body back: a test posts

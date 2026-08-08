@@ -6,6 +6,43 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Fixed
+
+- **Imported SecLang rules were reading bytes their author never expected.**
+  ModSecurity decodes the query string and form body while *populating* ARGS, so
+  by the time a rule runs `t:none` means "apply no further transforms" — the
+  value is already decoded. gwaf keeps values raw and decodes per rule, which is
+  what makes the transform chain a compile-time input. Nobody had reconciled the
+  two, so every imported rule without an explicit `t:urlDecode` was silent on
+  real query-string traffic. `seclang` now prepends `URLDecode` for the
+  collections ModSecurity decodes, and only those: headers and `REQUEST_URI` are
+  raw there too, and decoding them would invent a reading the original rule never
+  had.
+
+- **The conformance runner ran phase 2 only when a request had a body.** `GET
+  /x?foo=payload` has none, so no `phase:2` rule could fire — and that is where
+  CRS puts most of its detection. In ModSecurity phase 2 always runs; it is the
+  point at which ARGS is complete, query string included.
+
+- **`LoadCRS` converted less than `gwaf-seclang` does.** It never set
+  `Options.DataFiles`, so all 17 `@pmFromFile` rules were dropped — 930120's LFI
+  filename list among them — and it parsed each file with `Parse` rather than
+  `ParseSources`, so `SecDefaultAction` and `SecRuleRemoveById` did not carry
+  across files. The suite was measuring a smaller ruleset than gwaf produces and
+  reporting the difference as gwaf failing CRS's tests.
+
+  Together these took the rule-ID conformance rate from **28.5% to 44.4%** with
+  no detection work at all. CRS 932140 is the worked example: it matched its own
+  payload perfectly in isolation and was counted silent across 153 stages.
+
+### Added
+
+- **`TestCRSBridgeFidelity`** — separates the only two reasons a converted CRS
+  rule can fail its own test. A rule that was never imported is a coverage number
+  the report already carries; a rule that *was* imported and stays silent on the
+  payload CRS wrote for it is a translation defect, and no coverage percentage
+  shows that. 154 rules are currently in the second list.
+
 ### Added
 
 - **`TestCRSGapReport`** — runs gwaf against the Core Rule Set's own regression

@@ -126,6 +126,110 @@ func TestCRSGapReport(t *testing.T) {
 	}
 }
 
+// TestCRSBridgeFidelity separates the two reasons a converted CRS rule can fail
+// its own test, because only one of them is a bug in the converter.
+//
+// A rule that seclang never imported cannot fire, and that is a coverage number
+// the report already carries. A rule that *was* imported and stays silent on the
+// payload CRS wrote for it is a translation defect: the rule is present, it is
+// wrong, and no coverage percentage will show that.
+//
+// Run with both variables set, so the ruleset is the converted CRS and the
+// comparison is by exact rule ID:
+//
+//	CRS_TESTS=/tmp/crs/tests/regression/tests CRS_RULES=/tmp/crs/rules \
+//	  go test -run TestCRSBridgeFidelity -v ./test/conformance/
+func TestCRSBridgeFidelity(t *testing.T) {
+	testDir, rulesDir := os.Getenv("CRS_TESTS"), os.Getenv("CRS_RULES")
+	if testDir == "" || rulesDir == "" {
+		t.Skip("CRS_TESTS and CRS_RULES not both set")
+	}
+
+	files, err := conformance.LoadTests(testDir)
+	if err != nil {
+		t.Fatalf("load tests: %v", err)
+	}
+	set, reports, err := conformance.LoadCRS(rulesDir)
+	if err != nil {
+		t.Fatalf("load rules: %v", err)
+	}
+	t.Logf("bridge: %s", conformance.Summarise(reports))
+
+	imported := make(map[uint32]bool, len(set))
+	for _, r := range set {
+		imported[uint32(r.ID)] = true
+	}
+
+	waf, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := conformance.Run(waf, files, conformance.ModeRuleID)
+	t.Logf("%s", rep)
+
+	silent := map[uint32]int{} // imported, did not fire
+	absent := map[uint32]int{} // never imported
+	for _, res := range rep.Results {
+		if res.Passed || res.Skipped {
+			continue
+		}
+		for _, id := range ruleIDsIn(res.Reason) {
+			if imported[id] {
+				silent[id]++
+			} else {
+				absent[id]++
+			}
+		}
+	}
+
+	t.Logf("rules imported but silent on their own test: %d distinct", len(silent))
+	for _, e := range topN(silent, 25) {
+		t.Logf("  SILENT %d (%d stages) — imported, did not fire", e.id, e.n)
+	}
+	t.Logf("rules never imported: %d distinct (a coverage gap, not a defect)", len(absent))
+}
+
+type idCount struct {
+	id uint32
+	n  int
+}
+
+func topN(m map[uint32]int, n int) []idCount {
+	out := make([]idCount, 0, len(m))
+	for id, c := range m {
+		out = append(out, idCount{id, c})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].n != out[j].n {
+			return out[i].n > out[j].n
+		}
+		return out[i].id < out[j].id
+	})
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
+}
+
+// ruleIDsIn pulls the CRS rule IDs out of a failure reason such as
+// "rules did not fire: 942340, 942350".
+func ruleIDsIn(reason string) []uint32 {
+	var out []uint32
+	for _, f := range strings.FieldsFunc(reason, func(r rune) bool {
+		return r < '0' || r > '9'
+	}) {
+		if len(f) < 5 || len(f) > 7 { // CRS IDs are six digits
+			continue
+		}
+		var v uint32
+		for _, c := range f {
+			v = v*10 + uint32(c-'0')
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 // familyOf reduces "REQUEST-942-APPLICATION-ATTACK-SQLI/942490.yaml" to the
 // directory, which is the CRS rule family.
 func familyOf(file string) string {

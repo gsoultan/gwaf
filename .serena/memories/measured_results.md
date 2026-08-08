@@ -219,6 +219,41 @@ false-positive profile — which is the one thing the 0-FP requirement forbids.
 **SQLI is the seam worth mining**: real, distinct variants with no keyword list
 behind them. `SignalQuotedConnector` came from exactly there.
 
+### Rule-ID mode: the real test of the seclang bridge
+
+`CRS_TESTS=… CRS_RULES=… go test -run TestCRSBridgeFidelity -v ./test/conformance/`
+
+Separates the only two reasons a converted rule fails its own test:
+
+- **never imported** — a coverage number the report already carries (83 distinct)
+- **imported and silent** — the rule is present and *wrong*, which no coverage
+  percentage shows (154 distinct)
+
+Rule-ID pass rate went **28.5% → 44.4%** in one session. Almost none of that was
+detection work; three harness/converter defects were hiding it:
+
+1. **`LoadCRS` never set `Options.DataFiles`**, so every `@pmFromFile` rule was
+   dropped — 17 rules, including 930120's LFI list. It also parsed each file with
+   `Parse` instead of `ParseSources`, so `SecDefaultAction` and
+   `SecRuleRemoveById` did not carry across files. (250 → 267 rules, +64 stages.)
+2. **ModSecurity hands rules *decoded* ARGS; gwaf does not.** `t:none` means "no
+   *further* transforms" — the decoding already happened when ARGS was populated.
+   Imported rules were reading percent-encoded bytes their author never expected.
+   `seclang` now prepends `URLDecode` for the collections ModSecurity decodes
+   (ARGS, cookies, body, filenames — *not* headers or REQUEST_URI, which are raw
+   there too). (+56 stages.)
+3. **The runner only ran phase 2 when a body existed.** `GET /x?foo=payload` has
+   no body, so no `phase:2` rule could ever fire — and that is where CRS puts
+   most of its detection. **(+587 stages, the single largest jump.)**
+
+CRS 932140 is the worked example: it matched its own payload perfectly in
+isolation and was counted silent across 153 stages, for reasons 2 and 3 together.
+
+**Lesson, again: measure the harness before believing the number.** Every one of
+these made gwaf look worse than it is, which is the safe direction — but the
+earlier `ruleScopedPass` bug made it look *better*, and that one is the dangerous
+direction.
+
 ### The road to dropping CRS
 
 `./run.sh learn` runs a core target and a converted-CRS target on the same
