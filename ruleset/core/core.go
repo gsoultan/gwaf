@@ -2289,12 +2289,54 @@ func doubleExtension() rules.Operator {
 							return false
 						}
 					}
+					// The trailing component has to look like an extension. This
+					// rule's chain strips whitespace, so a sentence mentioning a
+					// filename arrives welded together -- "the file upload
+					// rejected shell.php.jpg correctly" becomes
+					// "...rejectedshell.php.jpgcorrectly" -- and the component
+					// after ".php" is then "jpgcorrectly", which is a word rather
+					// than an extension. Security tooling, bug trackers and this
+					// project's own documentation all describe these filenames in
+					// prose, so the benign corpus caught it.
+					//
+					// Bounded rather than allowlisted: a filter reads the final
+					// extension against its own list, and one longer than this is
+					// not going to be on it -- so requiring brevity costs no
+					// bypass and drops the sentence.
+					if !looksLikeExtension(rest) {
+						continue
+					}
 					return true
 				}
 			}
 		}
 		return false
 	}).WithLiterals(execWithDelimiter(exec)...)
+}
+
+// looksLikeExtension reports whether the component at the start of rest could be
+// a file extension rather than a word.
+//
+// Extensions are short and alphanumeric. Anything up to five characters passes,
+// which covers every extension a filter allowlists (jpg, jpeg, png, webp, docx)
+// and excludes the English that a whitespace-stripped sentence produces. A
+// component that continues into another '.' or a '/' is a path and keeps its
+// place in the chain.
+func looksLikeExtension(rest []byte) bool {
+	const maxExtLen = 5
+	for i := 0; i < len(rest); i++ {
+		c := rest[i]
+		if c == '.' || c == '/' || c == '\\' {
+			return true // a further component follows; still a path
+		}
+		if i >= maxExtLen {
+			return false
+		}
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return true // punctuation ends the component, so it was short enough
+		}
+	}
+	return len(rest) <= maxExtLen
 }
 
 // execWithDelimiter builds the prefilter literals for doubleExtension.

@@ -68,11 +68,27 @@ Do not confuse the two halves when quoting a coverage number.
 Same target, same payloads, sqlmap + nikto + curl vectors, WAF-off control first.
 Corpus after the protocol/robustness phases were added: 257 attacks, 104 benign.
 
-| | gwaf core | converted CRS 4.25.1 |
+| | gwaf core | converted CRS |
 |---|---|---|
-| Attacks blocked | **306/307 (99%)** | 185/257 (71%, older corpus) |
-| False positives | **0/145** | 3/104 (older corpus) |
-| Rules imported | n/a | 263 of 786 directives |
+| Attacks blocked | **344/345 (99%)** | 185/257 (71%, older corpus) |
+| False positives | **0/184** | 3/104 (older corpus) |
+| Rules imported | n/a | 263 (4.25.1) / **267 (4.28.0, latest)** |
+
+### Readings are enumerated *before* transforms — that is a whole bug class
+
+The single most productive finding. `interpret.Detect` runs on the raw value, so
+any class keyed on a literal character never sees the percent-encoded spelling a
+query string actually delivers:
+
+- `ClassHTMLEntity` looked for `&`, which on the wire is `%26`. **No entity
+  payload a browser can send was ever detected.** It fired only for values passed
+  to `AddArgument` directly — which is how every unit test exercised it.
+- The same held for the fullwidth/best-fit reading.
+
+Both now read through one percent layer (`percentByteAt` / `percentRuneAt`), and
+`hasRawMarkup` does too so the CMS suppression still works. **When adding a
+reading, test it over HTTP, not only through the library API** — the two deliver
+different bytes, and the library path is the one that lies.
 
 ### The zero-FP gate is the load-bearing test
 

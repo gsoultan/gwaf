@@ -103,6 +103,22 @@ const (
 	// platform rather than of the encoding, which is exactly the kind of
 	// disagreement this package exists to enumerate.
 	ClassPercentU
+
+	// ClassBestFit marks characters that fold onto ASCII punctuation, sent as
+	// the characters themselves rather than as a %u escape.
+	//
+	// ClassPercentU already claims that U+FF1C and U+2215 arrive at a handler as
+	// '<' and '/'. Making that claim for only one spelling is not a decision, it
+	// is a gap: the pentest harness sent "＜script＞" as UTF-8 and it walked
+	// through while "%uFF1Cscript%uFF1E" was blocked. Same characters, same
+	// folding, and NFKC normalisation in .NET and Java reaches the same place by
+	// a different route.
+	//
+	// Only punctuation folds, which is what keeps the reading narrow. Fullwidth
+	// letters and digits are ordinary Japanese, Chinese and Korean input and are
+	// left exactly as they are — a WAF that rewrote them would be inventing text
+	// nobody sent, and half of Asia types them daily.
+	ClassBestFit
 )
 
 // MaxReadings bounds the interpretations produced for one value, including the
@@ -158,6 +174,9 @@ func (c Class) String() string {
 	if c.Has(ClassPercentU) {
 		appendName("percent_u")
 	}
+	if c.Has(ClassBestFit) {
+		appendName("best_fit")
+	}
 	return string(out)
 }
 
@@ -175,7 +194,11 @@ func (c Class) String() string {
 // this replaced walked a chain of comparisons and lookaheads for every byte.
 // The lookaheads still happen, but only for the handful of bytes that survive.
 var ambiguityLead = func() (t [256]bool) {
-	for _, c := range []byte{'%', '\\', 0x00, 0xc0, 0xc1, '+', '&'} {
+	// 0xca, 0xe2 and 0xef are the UTF-8 lead bytes of the blocks holding the
+	// characters that fold onto ASCII punctuation: U+02BC, the U+20xx marks, and
+	// the fullwidth forms. They are common leads, so Detect only pays a table
+	// lookup for them and claims the class when the rune is actually in it.
+	for _, c := range []byte{'%', '\\', 0x00, 0xc0, 0xc1, '+', '&', 0xca, 0xe2, 0xef} {
 		t[c] = true
 	}
 	return
@@ -221,6 +244,21 @@ func Detect(src []byte) Class {
 					c |= ClassPercentU
 				}
 			}
+			// A percent-encoded character that folds onto ASCII punctuation.
+			if r, n := percentRuneAt(src, i); n > 0 {
+				if _, ok := bestFitASCII[r]; ok {
+					c |= ClassBestFit
+				}
+			}
+			// "%26%2360%3B" is "&#60;" once. Readings are built before the
+			// transform chain, so an entity that arrived over a query string is
+			// still wearing its escapes and the literal '&' below never fires --
+			// which is every entity payload a browser ever sends.
+			if b, n := percentByteAt(src, i); n == 3 && b == '&' {
+				if nb, _ := percentByteAt(src, i+n); nb == '#' || isAlpha(nb) {
+					c |= ClassHTMLEntity
+				}
+			}
 			// Lead bytes of overlong two- and three-byte forms.
 			if i+2 < len(src) {
 				hi, ok1 := unhex(src[i+1])
@@ -239,6 +277,13 @@ func Detect(src []byte) Class {
 		case 0xc0, 0xc1:
 			// A raw overlong lead byte.
 			c |= ClassOverlongUTF8
+		case 0xca, 0xe2, 0xef:
+			// A character that folds onto ASCII punctuation, sent as itself.
+			if r, n := decodeRune(src[i:]); n > 0 {
+				if _, ok := bestFitASCII[r]; ok {
+					c |= ClassBestFit
+				}
+			}
 		case '+':
 			// A UTF-7 shift is '+', a modified-base64 run, then an explicit '-'.
 			//
@@ -336,6 +381,9 @@ func (s *Set) Build(src []byte, classes Class) {
 	if classes.Has(ClassPercentU) {
 		s.addDecoded(src, ClassPercentU, decodePercentUInto)
 	}
+	if classes.Has(ClassBestFit) {
+		s.addDecoded(src, ClassBestFit, foldBestFitInto)
+	}
 	if classes.Has(ClassSeparator) {
 		s.addDecoded(src, ClassSeparator, backslashToSlashInto)
 	}
@@ -373,18 +421,32 @@ func (s *Set) Build(src []byte, classes Class) {
 //
 // The same "'<' followed by a name" test detect/xss uses, and for the same
 // reason: "if (a < b)" is arithmetic and "<code>" is markup.
+//
+// It reads through percent escapes because the entity reading does. A value from
+// a query string spells "<code>" as "%3Ccode%3E", and a guard that only saw the
+// literal form would let "Use the <code>&lt;script&gt;</code> tag" build the
+// decoded reading after all — which is the CMS false positive the guard exists
+// to prevent, arriving by the back door.
 func hasRawMarkup(src []byte) bool {
-	for i := 0; i+1 < len(src); i++ {
-		if src[i] != '<' {
+	for i := 0; i < len(src); {
+		b, n := percentByteAt(src, i)
+		if n == 0 {
+			i++
 			continue
 		}
-		c := src[i+1]
-		if c == '/' && i+2 < len(src) {
-			c = src[i+2]
+		if b != '<' {
+			i += n
+			continue
 		}
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+		j := i + n
+		c, cn := percentByteAt(src, j)
+		if cn > 0 && c == '/' {
+			c, cn = percentByteAt(src, j+cn)
+		}
+		if cn > 0 && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
 			return true
 		}
+		i += n
 	}
 	return false
 }
@@ -532,6 +594,103 @@ var bestFitASCII = map[uint16]byte{
 	0xFF08: '(',  // FULLWIDTH LEFT PARENTHESIS
 	0xFF09: ')',  // FULLWIDTH RIGHT PARENTHESIS
 	0xFF1D: '=',  // FULLWIDTH EQUALS SIGN
+}
+
+// percentRuneAt reads a percent-encoded UTF-8 sequence at i and returns its code
+// point and the number of source bytes it occupies.
+//
+// It exists because readings are enumerated before the transform chain runs, so
+// a value still wearing its percent-encoding is what Detect sees. "＜" on the
+// wire is "%EF%BC%9C", and without reading through the escapes the fullwidth
+// reading never fires for any value that arrived over a query string — which is
+// all of them. The ASCII cases need no such help: "%3C" is decoded by the chain
+// into a byte a rule already matches.
+func percentRuneAt(src []byte, i int) (uint16, int) {
+	b, n := percentByteAt(src, i)
+	switch {
+	case n == 0:
+		return 0, 0
+	case b&0xf0 == 0xe0:
+		b1, n1 := percentByteAt(src, i+n)
+		b2, n2 := percentByteAt(src, i+n+n1)
+		if n1 == 0 || n2 == 0 || b1&0xc0 != 0x80 || b2&0xc0 != 0x80 {
+			return 0, 0
+		}
+		return uint16(b&0x0f)<<12 | uint16(b1&0x3f)<<6 | uint16(b2&0x3f), n + n1 + n2
+	case b&0xe0 == 0xc0:
+		b1, n1 := percentByteAt(src, i+n)
+		if n1 == 0 || b1&0xc0 != 0x80 {
+			return 0, 0
+		}
+		return uint16(b&0x1f)<<6 | uint16(b1&0x3f), n + n1
+	}
+	return 0, 0
+}
+
+// percentByteAt reads one byte written as "%XX", or as itself.
+func percentByteAt(src []byte, i int) (byte, int) {
+	if i >= len(src) {
+		return 0, 0
+	}
+	if src[i] == '%' && i+2 < len(src) {
+		hi, ok1 := unhex(src[i+1])
+		lo, ok2 := unhex(src[i+2])
+		if ok1 && ok2 {
+			return hi<<4 | lo, 3
+		}
+		return 0, 0
+	}
+	return src[i], 1
+}
+
+// decodeRune reads one UTF-8 sequence and returns its code point and width.
+//
+// Only the two- and three-byte forms are read, because everything in
+// bestFitASCII lives below U+10000 and a four-byte sequence cannot be in the
+// table. A malformed sequence returns a width of 0 and the caller moves on a
+// byte at a time, which is what keeps a truncated value from being skipped past.
+func decodeRune(b []byte) (uint16, int) {
+	if len(b) >= 3 && b[0]&0xf0 == 0xe0 && b[1]&0xc0 == 0x80 && b[2]&0xc0 == 0x80 {
+		return uint16(b[0]&0x0f)<<12 | uint16(b[1]&0x3f)<<6 | uint16(b[2]&0x3f), 3
+	}
+	if len(b) >= 2 && b[0]&0xe0 == 0xc0 && b[1]&0xc0 == 0x80 {
+		return uint16(b[0]&0x1f)<<6 | uint16(b[1]&0x3f), 2
+	}
+	return 0, 0
+}
+
+// foldBestFitInto rewrites the characters that narrow to ASCII punctuation and
+// leaves everything else byte for byte.
+//
+// Leaving the rest alone is the whole safety argument. Fullwidth letters and
+// digits are ordinary CJK input, so "価格は１２３４円です" comes out unchanged
+// while "＜script＞" comes out as markup, and only the second is something a rule
+// should have an opinion about.
+func foldBestFitInto(dst, src []byte) []byte {
+	for i := 0; i < len(src); {
+		// Percent-encoded first: a value that arrived over a query string is
+		// still wearing its escapes when readings are built.
+		if r, n := percentRuneAt(src, i); n > 0 {
+			if b, ok := bestFitASCII[r]; ok {
+				dst = append(dst, b)
+				i += n
+				continue
+			}
+		}
+		if r, n := decodeRune(src[i:]); n > 0 {
+			if b, ok := bestFitASCII[r]; ok {
+				dst = append(dst, b)
+				i += n
+				continue
+			}
+			dst = append(dst, src[i:i+n]...)
+			i += n
+			continue
+		}
+		dst = append(dst, src[i])
+		i++
+	}
+	return dst
 }
 
 // decodePercentUInto resolves "%uXXXX" the way IIS does.
@@ -734,6 +893,13 @@ func decodeUTF7Run(dst, run []byte) []byte {
 // A general entity table would be large and would mostly add names no attacker
 // needs.
 func decodeEntitiesInto(dst, src []byte) []byte {
+	// A value that arrived over a query string is percent-encoded, so "&#60;" is
+	// "%26%2360%3B" and the scan below would walk past it. Undo that layer first;
+	// the entity decoding is then the same for both spellings.
+	if hasPercent(src) {
+		dst = urlDecodeInto(dst[:0], src)
+		return dst[:decodeEntitiesInPlace(dst)]
+	}
 	for i := 0; i < len(src); {
 		if src[i] != '&' {
 			dst = append(dst, src[i])
@@ -755,6 +921,41 @@ func decodeEntitiesInto(dst, src []byte) []byte {
 		i++
 	}
 	return dst
+}
+
+// decodeEntitiesInPlace collapses entity references in b and returns the new
+// length.
+//
+// Safe in place because an entity never grows: the shortest reference is four
+// bytes ("&lt;", "&#9;") and the longest rune it can name encodes to four, so
+// the write cursor never passes the read cursor.
+func decodeEntitiesInPlace(b []byte) int {
+	w := 0
+	for i := 0; i < len(b); {
+		if b[i] != '&' {
+			b[w] = b[i]
+			w++
+			i++
+			continue
+		}
+		if r, size, ok := decodeEntityAt(b[i:]); ok {
+			if r < 0x80 {
+				b[w] = byte(r)
+				w++
+			} else {
+				var tmp [4]byte
+				n := len(appendRune(tmp[:0], r))
+				copy(b[w:], tmp[:n])
+				w += n
+			}
+			i += size
+			continue
+		}
+		b[w] = '&'
+		w++
+		i++
+	}
+	return w
 }
 
 // decodeEntityAt decodes one entity reference at the start of s.

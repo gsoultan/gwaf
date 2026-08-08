@@ -8,6 +8,31 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **Readings were blind to the encoding every request actually uses.** They are
+  enumerated before the transform chain runs, so a value that arrived over a
+  query string is still wearing its percent-escapes — and every class keyed on a
+  literal character missed it. `ClassHTMLEntity` looked for `&`, which on the
+  wire is `%26`, so **no entity payload a browser can send was ever detected**;
+  the class fired only for values handed to `AddArgument` directly. The same
+  applied to the new best-fit reading. Both now read through one layer of
+  percent-encoding, and `hasRawMarkup` does too, so the CMS case it protects
+  (`Use the <code>&lt;script&gt;</code> tag`) still suppresses the reading when
+  the whole value is encoded.
+
+- **Fullwidth characters walked through.** `ClassPercentU` already claimed U+FF1C
+  and U+2215 reach a handler as `<` and `/`; making that claim for only the
+  `%uXXXX` spelling was the gap, since `＜script＞` sent as UTF-8 is the same
+  characters and the same folding, and NFKC in .NET and Java arrives there by
+  another route. `ClassBestFit` folds them. Only punctuation folds — fullwidth
+  letters and digits are ordinary CJK input and are left exactly as sent.
+
+- **`shell.php.jpg` in a sentence was blocked.** Rule 4017's chain strips
+  whitespace, so the support-desk line "the file upload rejected shell.php.jpg
+  correctly" arrived welded together and the component after `.php` was
+  `jpgcorrectly` — a word, not an extension. The trailing component must now
+  look like one. Bounded by length rather than an allowlist: an upload filter
+  reads the final extension against its own list, and a longer one is not on it.
+
 - **Three false positives, found by a benign corpus built to look hostile.** A WAF
   that blocks real traffic is uninstalled by Friday, and its detection rate is
   then zero because it is not running.
