@@ -180,6 +180,45 @@ Every one of these was invisible to a passing test suite:
 Point real tools at the artefact that ships, not only at the data structure
 behind it.
 
+### CRS's own regression corpus: 5,066 stages, 0 false positives
+
+`CRS_TESTS=/tmp/crs/tests/regression/tests go test -run TestCRSGapReport -v ./test/conformance/`
+
+**gwaf blocks nothing CRS's own suite calls clean — 0 false positives across all
+5,066 stages.** That is the number worth quoting. The detection rate on the same
+corpus is 35.9%, and quoting it without the breakdown below is misleading in
+both directions.
+
+The first run of the gap report claimed **72** false positives. It was wrong:
+69 were CRS *rule-scoped negatives* — `no_expect_ids: [942160]` says one rule
+must not fire, and the input is frequently still an attack, so gwaf blocking it
+with a different rule is correct. The runner's `ruleScopedPass` disqualified
+those whenever `status: 200` was set, which CRS puts on nearly every test as
+boilerplate. Fixed; the three that remained were also correct behaviour:
+
+- **920181** — gwaf rejects `Content-Length` + `Transfer-Encoding` together
+  (`reason=framing_ambiguous`). Request smuggling, RFC 7230 §3.3.3. Stricter
+  than CRS, which expects 200 only because Apache strips the header.
+- **920640 ×2** — the body is `{"id_order":"select(sleep(10));"}`, a real
+  injection. CRS only asserts rule 920640 must not claim it.
+
+### Where the 3,247 misses actually are — measured, not assumed
+
+Do **not** repeat the guess that "it is all keyword lists". Checked:
+944 has 1 `@pm` rule of 22, and **942 has none of 68**. The volume is in the
+*stage counts*:
+
+| Family | Missed | Shape |
+|---|---|---|
+| JAVA 944 | 852 | **64% is two files**: 944130 (418 stages, `@pmFromFile java-classes.data`) and 944300 (330, the same names base64-encoded) |
+| SQLI 942 | 682 | **flat spread** across ~68 regex rules — many genuinely distinct variants |
+| RCE 932 | 601 | mixed; some real evasions, some command-name enumeration |
+
+So JAVA is largely enumeration, and importing it means importing CRS's
+false-positive profile — which is the one thing the 0-FP requirement forbids.
+**SQLI is the seam worth mining**: real, distinct variants with no keyword list
+behind them. `SignalQuotedConnector` came from exactly there.
+
 ### The road to dropping CRS
 
 `./run.sh learn` runs a core target and a converted-CRS target on the same

@@ -297,10 +297,30 @@ func unsupported(st Stage) (string, bool) {
 // there and the stage is skipped. Rule-ID mode answers it exactly, which is
 // where it belongs.
 func ruleScopedPass(out Output) bool {
-	if out.Status == 200 {
-		return false // an explicit "nothing should block" is answerable
-	}
+	// "status: 200" used to disqualify a stage from being rule-scoped, on the
+	// reading that it is an explicit "nothing should block". It is not: CRS puts
+	// it on almost every test as the response the origin is expected to give, and
+	// carries the real assertion in no_expect_ids beside it. 920640 has both, and
+	// sends "{\"id_order\":\"select(sleep(10));\"}" -- a genuine injection that
+	// only rule 920640 is being told not to claim.
+	//
+	// So the presence of a no_expect assertion decides it. Reading status instead
+	// filed three real detections as false positives, which is the harness
+	// inventing defects rather than finding them.
 	return len(out.Log.NoExpectIDs) > 0 || out.Log.NoMatchRegex != "" || out.NoLogContains != ""
+}
+
+// describeBlock names what blocked, for a report a human has to act on.
+//
+// Not every block comes from a rule. gwaf rejects a request carrying both
+// Content-Length and Transfer-Encoding before any rule runs, and that decision
+// has no rule ID -- printing "rule 0 ()" for it says nothing at all, when the
+// decision itself carries "framing_ambiguous" and the reason why.
+func describeBlock(d gwaf.Decision) string {
+	if id := d.RuleID(); id != 0 {
+		return fmt.Sprintf("rule %d (%s)", id, d.Message())
+	}
+	return fmt.Sprintf("%s (%s)", d.Reason(), d.Detail())
 }
 
 // inspect runs one input through gwaf and returns the decision plus every rule
@@ -391,12 +411,11 @@ func judgeByDetection(out Output, d gwaf.Decision) Result {
 		// filed as a false positive it may not be. Rule-ID mode answers it exactly.
 		if ruleScopedPass(out) {
 			return Result{Reason: fmt.Sprintf(
-				"blocked by rule %d (%s) where CRS expects only a specific rule "+
-					"not to fire -- ambiguous without CRS IDs", d.RuleID(), d.Message())}
+				"blocked by %s where CRS expects only a specific rule "+
+					"not to fire -- ambiguous without CRS IDs", describeBlock(d))}
 		}
 		return Result{Reason: fmt.Sprintf(
-			"false positive: expected a clean pass, blocked by rule %d (%s)",
-			d.RuleID(), d.Message())}
+			"false positive: expected a clean pass, blocked by %s", describeBlock(d))}
 	}
 	return Result{Passed: true}
 }

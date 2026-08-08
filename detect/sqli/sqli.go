@@ -98,6 +98,20 @@ const (
 	// nothing between them, and closing a literal only to discard the rest of
 	// the statement has no meaning except against a query.
 	SignalTerminatedQuoteBreak
+
+	// SignalQuotedConnector is a boolean operator welded between two quotes with
+	// no whitespace on either side: "1'or'1", "a'and'b", "x'||'y".
+	//
+	// The no-space injection, and it works — "WHERE u='1'or'1'" reads as
+	// "u = '1' OR '1'" and '1' casts to 1. The token stream cannot see it,
+	// because under a quoted context the quotes are the delimiters and what
+	// remains is a connector between two operands with no comparison for the
+	// boolean-injection signal to attach to.
+	//
+	// The welding is what makes it safe: prose puts spaces around a quoted
+	// conjunction, and an apostrophe in French or Irish comes singly, so "the
+	// word 'or' is" and "l'or et l'argent" do not qualify.
+	SignalQuotedConnector
 )
 
 // String implements fmt.Stringer, so a decision can say what it saw.
@@ -136,6 +150,9 @@ func (s Signal) String() string {
 	if s&SignalTerminatedQuoteBreak != 0 {
 		add("terminated_quote_break")
 	}
+	if s&SignalQuotedConnector != 0 {
+		add("quoted_connector")
+	}
 	if len(out) == 0 {
 		return "none"
 	}
@@ -151,7 +168,8 @@ func (s Signal) String() string {
 func weightOf(s Signal) int {
 	switch s {
 	case SignalUnionSelect, SignalStackedQuery, SignalDangerFunction,
-		SignalBooleanInjection, SignalTerminatedQuoteBreak:
+		SignalBooleanInjection, SignalTerminatedQuoteBreak,
+		SignalQuotedConnector:
 		return 5
 	case SignalCommentSplit:
 		return 4
@@ -276,7 +294,84 @@ func (d *Detector) Analyze(value []byte) Verdict {
 			best = v
 		}
 	}
+
+	// A connector welded between two quotes is scored from the raw bytes,
+	// because the token stream cannot see it: under a quoted context the quotes
+	// are the context delimiters and what remains is "or" between two operands,
+	// which is not a tautology and so scores nothing.
+	if weldedConnector(value) {
+		best.Signals |= SignalQuotedConnector
+		best.Score += weightOf(SignalQuotedConnector)
+		if best.Span == (types.Span{}) {
+			best.Span = types.SpanOf(0, len(value))
+		}
+	}
 	return best
+}
+
+// weldedConnector reports a boolean operator sitting between two quotes with no
+// whitespace on either side: "1'or'1", "a'and'b", "x'||'y".
+//
+// This is the no-space injection CRS covers with 942521 and 942522, and it
+// works: "WHERE u='1'or'1'" is "u = '1' OR '1'", and '1' casts to 1, so it
+// authenticates. gwaf scored it 1 because there is no comparison for the
+// boolean-injection signal to attach to.
+//
+// The welding is what makes it safe to score. Prose that quotes a conjunction
+// puts spaces around it — "the word 'or' is a conjunction" — and an apostrophe
+// in French or Irish comes singly, so "l'or et l'argent" and "O'Brien" have no
+// second quote to close the pattern. Requiring a non-space on both outer edges
+// is what separates the injection from the sentence, and it costs the attacker
+// the spaces they were removing to begin with.
+func weldedConnector(v []byte) bool {
+	for i := 1; i+2 < len(v); i++ {
+		if !isQuote(v[i]) || isSpace(v[i-1]) || isQuote(v[i-1]) {
+			continue
+		}
+		// The operator runs to the closing quote.
+		j := i + 1
+		for j < len(v) && !isQuote(v[j]) {
+			j++
+		}
+		if j >= len(v)-1 || !isQuote(v[j]) {
+			continue
+		}
+		if after := v[j+1]; isSpace(after) || isQuote(after) {
+			continue
+		}
+		if isBoolConnector(v[i+1 : j]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isQuote(c byte) bool { return c == '\'' || c == '"' || c == '`' }
+
+func isBoolConnector(w []byte) bool {
+	if len(w) == 2 && (w[0] == '|' && w[1] == '|' || w[0] == '&' && w[1] == '&') {
+		return true
+	}
+	switch string(lowerBytes(w)) {
+	case "or", "and", "xor":
+		return true
+	}
+	return false
+}
+
+func lowerBytes(w []byte) []byte {
+	var buf [8]byte
+	if len(w) > len(buf) {
+		return w
+	}
+	out := buf[:0]
+	for _, c := range w {
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // score walks a token stream and accumulates structural evidence.

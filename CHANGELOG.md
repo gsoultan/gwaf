@@ -6,7 +6,43 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Added
+
+- **`TestCRSGapReport`** — runs gwaf against the Core Rule Set's own regression
+  corpus (5,066 stages across 323 files) and groups every failure by CRS rule
+  family, so the result is a roadmap rather than a percentage. It separates three
+  things a single rate conflates: a missed attack, a false positive, and a CRS
+  *rule-scoped negative* that cannot be judged without CRS rule IDs.
+
+  **gwaf blocks nothing that suite calls clean: 0 false positives over 5,066
+  stages.**
+
 ### Fixed
+
+- **The conformance runner invented false positives.** `ruleScopedPass`
+  disqualified a stage from being rule-scoped whenever `status: 200` was set —
+  but CRS puts that on nearly every test as boilerplate and carries the real
+  assertion in `no_expect_ids` beside it. So 920640, whose body is
+  `{"id_order":"select(sleep(10));"}`, was filed as gwaf falsely blocking a clean
+  request when CRS is only saying that one rule must not claim it. The presence
+  of a `no_expect` assertion now decides it, which took the reported false
+  positives from 72 to 0.
+
+  A block with no rule ID also printed as `rule 0 ()`. gwaf rejects a request
+  carrying both `Content-Length` and `Transfer-Encoding` before any rule runs,
+  and that decision carries `framing_ambiguous` and a reason — the runner now
+  prints those instead of saying nothing.
+
+- **`1'or'1` was not detected.** The no-space quote injection: `WHERE u='1'or'1'`
+  reads as `u = '1' OR '1'`, and `'1'` casts to 1, so it authenticates. It scored
+  1, because under a quoted context the quotes are the context delimiters and
+  what remains is a connector between two operands with no comparison for the
+  boolean-injection signal to attach to — the shape is invisible to the token
+  stream. `SignalQuotedConnector` reads it from the bytes. The welding is the
+  discriminator and is what keeps it safe: prose spaces a quoted conjunction
+  (`the word 'or' is`), and French and Irish apostrophes come singly (`l'or et
+  l'argent`, `O'Brien`), so neither closes the pattern. Found by running CRS's
+  corpus (942521, 942522).
 
 - **The UTF-7 reading had never fired on a real request.** `ClassUTF7` looked for
   a literal `+`, but a bare `+` in a query string *is* a space — so every UTF-7
