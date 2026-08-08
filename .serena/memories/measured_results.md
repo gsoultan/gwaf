@@ -100,6 +100,33 @@ not work.**
 **When adding a reading, test it over HTTP, not only through the library API** —
 the two deliver different bytes, and the library path is the one that lies.
 
+### `gwaf lint` is the load-independent way to price a ruleset change
+
+`bench-guard`'s own message points at it and it is the right tool when the
+machine is busy: `go run ./cmd/gwaf lint` reports literals, automaton states,
+transform chains and unconditional rules — all deterministic.
+
+Cost of adding `detect/javaser` and `detect/phpi`, measured paired in a worktree:
+
+| | before | after | Δ |
+|---|---|---|---|
+| Rules | 78 | 82 | +4 (each rule has a headers and a body variant) |
+| **Unconditional** | 0 | **0** | every rule still prefilterable |
+| Literals | 786 | 823 | +4.7% |
+| Automaton states | 8,335 | 8,931 | +7.2% |
+| **Transform chains** | 11 | **11** | unchanged — the expensive thing was avoided |
+
+The chain count is the one to watch. A chain nobody else shares is materialised
+over every value of every request; core.go records the CRLF rule costing 8% of
+the latency budget for exactly that. Both new rules reuse
+`[]rules.Transform{transform.URLDecode}`, so they add none.
+
+Fuel unchanged at 10,031,189, allocations still 0/op.
+
+**The confidence tiers are empty, confirmed by lint: certain 53, high 29, and
+nothing else at all.** `WithMinConfidence` exists with nothing to select. That is
+the largest unused lever in the project.
+
 ### Performance of the added readings: measured, no regression
 
 Three classes added and `MaxReadings` 8 → 10, so this needed checking. The
