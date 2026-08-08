@@ -202,6 +202,27 @@ boilerplate. Fixed; the three that remained were also correct behaviour:
 - **920640 ×2** — the body is `{"id_order":"select(sleep(10));"}`, a real
   injection. CRS only asserts rule 920640 must not claim it.
 
+### detect/javaser and detect/phpi — what a structural detector buys, honestly
+
+Added for the two biggest CRS miss families. Result: **+41 stages (35.9% →
+36.7%), 0 false positives**, pentest battery 344→**346/347 with 0/184 FP**.
+
+That is deliberately smaller than the family sizes suggest, and the reason is the
+point: **748 of JAVA's 1,172 stages are 944130 and 944300** — `java-classes.data`
+enumerated, and the same names base64-encoded. Implementing those means importing
+CRS's false-positive profile, which the 0-FP requirement forbids. The +41 is the
+*structural* share, and it is the share worth having.
+
+Design rule both packages follow: **a name never carries a verdict, only
+structure does.** A serialization header, a nested interpolation (Log4Shell's
+obfuscation, no benign reading), a class-loader property walk, a stream wrapper
+where a path belongs, a call whose target is data. `$_GET[0]($_GET[1])` names no
+function at all, which is the case no list can ever reach.
+
+`FuzzLiteralsAreExhaustive` earned its place immediately: it caught `.exec(`
+firing the spawn signal with no literal able to cover it. Every new detector
+needs that fuzz target.
+
 ### Where the 3,247 misses actually are — measured, not assumed
 
 Do **not** repeat the guess that "it is all keyword lists". Checked:

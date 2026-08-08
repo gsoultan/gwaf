@@ -17,8 +17,10 @@ package core
 
 import (
 	"github.com/gsoultan/gwaf/detect/graphql"
+	"github.com/gsoultan/gwaf/detect/javaser"
 	"github.com/gsoultan/gwaf/detect/ldapi"
 	"github.com/gsoultan/gwaf/detect/nosqli"
+	"github.com/gsoultan/gwaf/detect/phpi"
 	"github.com/gsoultan/gwaf/detect/promptinjection"
 	"github.com/gsoultan/gwaf/detect/shelli"
 	"github.com/gsoultan/gwaf/detect/sqli"
@@ -119,6 +121,14 @@ const (
 	IDJavaDeserialization types.RuleID = 4008
 	IDSpring4Shell        types.RuleID = 4009
 	IDShelliSemantic      types.RuleID = 4010
+	// IDJavaSemantic and IDPHPSemantic read invocation structure rather than
+	// class or function names, which is what the literal rules around them
+	// cannot do. They are additions rather than replacements for now: the
+	// literal rules each carry a payload the detector has not been measured
+	// against, and retiring one before that measurement exists is how coverage
+	// disappears quietly.
+	IDJavaSemantic        types.RuleID = 4018
+	IDPHPSemantic         types.RuleID = 4019
 	IDExpressionLanguage  types.RuleID = 4011
 	IDJavaGadgetClass     types.RuleID = 4012
 	IDPHPDynamicEval      types.RuleID = 4013
@@ -578,6 +588,39 @@ func requestRules() rules.Set {
 			Confidence: types.High,
 			Msg:        "Command injection (structural)",
 			Tags:       []string{"rce", "shelli", "owasp-a03", "semantic"},
+		},
+		{
+			ID:      IDJavaSemantic,
+			Phase:   types.PhaseRequestHeaders,
+			Targets: argTargets,
+			// Percent-decoding only, and deliberately not the lowercasing chain:
+			// the detector folds case itself where that is correct, and the
+			// serialization header is raw bytes that a case fold would leave
+			// alone but a whitespace strip would not.
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op:         javaser.Operator(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			// High rather than Certain for the same reason shelli is: a build
+			// system or an APM agent legitimately carries class names and
+			// interpolations as data. The structural signals are strong, but the
+			// tier is a claim about *this deployment's* traffic and only
+			// calibration can raise it.
+			Confidence: types.High,
+			Msg:        "Java injection (structural)",
+			Tags:       []string{"rce", "java", "deserialization", "owasp-a08", "semantic"},
+		},
+		{
+			ID:         IDPHPSemantic,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: []rules.Transform{transform.URLDecode},
+			Op:         phpi.Operator(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "PHP injection (structural)",
+			Tags:       []string{"rce", "php", "owasp-a03", "semantic"},
 		},
 		{
 			ID:         IDLFIPHPWrapper,

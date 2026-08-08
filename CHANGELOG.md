@@ -6,6 +6,33 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Added
+
+- **`detect/javaser` and `detect/phpi`** — structural detectors for the two
+  largest CRS miss families, written the way `detect/sqli` is: reading invocation
+  structure, never a name list.
+
+  CRS answers Java with `java-classes.data`, several hundred package prefixes
+  blocked wherever they appear, and PHP with three function lists totalling
+  several hundred more. Both sit behind paranoia levels, because a stack trace in
+  a support ticket and the word `array_diff` in a code review are ordinary text.
+  A name carries no verdict in either package; only structure does — a
+  serialization header, a *nested* interpolation (which is Log4Shell's
+  obfuscation and has no benign reading), a class-loader property walk, a stream
+  wrapper where a path belongs, a call whose target is data.
+
+  That last one is the case a list can never reach: `$_GET[0]($_GET[1])` names no
+  function at all.
+
+  Both are prefilterable, and `FuzzLiteralsAreExhaustive` holds them to it — it
+  caught `.exec(` firing the spawn signal with no literal able to cover it, which
+  would have made the rule a candidate for every value containing a dot and a
+  parenthesis. Removed; every real payload reaches a process through
+  `getRuntime()` or `ProcessBuilder`.
+
+  Rules 4018 and 4019, at High confidence for the same reason `shelli` is: a
+  build system or an APM agent legitimately carries class names as data.
+
 ### Fixed
 
 - **Imported SecLang rules were reading bytes their author never expected.**
