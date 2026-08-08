@@ -11,6 +11,7 @@ import (
 
 	"github.com/gsoultan/gwaf"
 	"github.com/gsoultan/gwaf/test/conformance"
+	"github.com/gsoultan/gwaf/types"
 )
 
 // TestCRSGapReport turns the CRS corpus from a pass rate into a roadmap.
@@ -30,10 +31,11 @@ import (
 //
 //   - a *false positive* here means gwaf blocked a request CRS's own suite says
 //     is clean, and that is a defect however the rate looks;
+//
 //   - a miss means gwaf allowed something CRS blocks, which is a gap only if the
 //     thing is in scope at all.
 //
-//	CRS_TESTS=/tmp/crs/tests/regression/tests go test -run TestCRSGapReport -v ./test/conformance/
+//     CRS_TESTS=/tmp/crs/tests/regression/tests go test -run TestCRSGapReport -v ./test/conformance/
 func TestCRSGapReport(t *testing.T) {
 	testDir := os.Getenv("CRS_TESTS")
 	if testDir == "" {
@@ -123,6 +125,50 @@ func TestCRSGapReport(t *testing.T) {
 			}
 			t.Logf("  FP %s / %s (stage %d): %s", res.File, res.Test, res.Stage, res.Reason)
 		}
+	}
+}
+
+// TestConfidenceTiersWiden measures what the Medium tier actually buys.
+//
+// The tier is off by default: gwaf.New() runs Certain and High only. That is the
+// safety property and the first half of this test protects it — the default must
+// not move because an opt-in tier exists.
+//
+// The second half is the reason the tier exists at all. "Confidence tiers are
+// strictly more expressive than paranoia levels" (CLAUDE.md §1) was a claim with
+// an empty tier behind it: WithMinConfidence was wired up with nothing to
+// select, so an operator who wanted a wider net had no dial to turn. A number
+// here is what turns that back into a claim somebody can check.
+func TestConfidenceTiersWiden(t *testing.T) {
+	testDir := os.Getenv("CRS_TESTS")
+	if testDir == "" {
+		t.Skip("CRS_TESTS not set; skipping the external corpus")
+	}
+	files, err := conformance.LoadTests(testDir)
+	if err != nil {
+		t.Fatalf("load %s: %v", testDir, err)
+	}
+
+	def, err := gwaf.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	med, err := gwaf.New(gwaf.WithMinConfidence(types.Medium))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dRep := conformance.Run(def, files, conformance.ModeDetection)
+	mRep := conformance.Run(med, files, conformance.ModeDetection)
+
+	t.Logf("default (Certain+High): %s", dRep)
+	t.Logf("medium  (+Medium):      %s", mRep)
+	t.Logf("delta: %+d stages detected", mRep.Passed-dRep.Passed)
+
+	if mRep.Passed <= dRep.Passed {
+		t.Errorf("the Medium tier detected nothing extra (%d vs %d) — "+
+			"an opt-in tier that changes no verdict is not a tier",
+			mRep.Passed, dRep.Passed)
 	}
 }
 

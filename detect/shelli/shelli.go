@@ -850,15 +850,29 @@ func plainWord(w []byte) string {
 
 // Operator adapts the detector to the rule engine, so it is prefiltered,
 // metered, and reported like every other rule.
-func Operator() rules.Operator { return &operator{d: New()} }
+func Operator() rules.Operator { return &operator{d: New(), threshold: Threshold} }
 
-type operator struct{ d *Detector }
+// OperatorAt returns an operator that reports at a caller-chosen score.
+//
+// This is how a rule earns a confidence tier below High out of the *same*
+// evidence, rather than by writing a second, sloppier detector. Lower is more
+// sensitive and less certain; a ruleset that lowers it is opting into false
+// positives it has decided it can absorb, and that decision belongs to whoever
+// runs the traffic.
+func OperatorAt(threshold int) rules.Operator {
+	return &operator{d: New(), threshold: threshold}
+}
+
+type operator struct {
+	d         *Detector
+	threshold int
+}
 
 func (o *operator) Name() string { return "detect_shelli" }
 
 func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) {
 	v := o.d.Analyze(value)
-	if !v.Detected() {
+	if v.Score < o.threshold {
 		return rules.Match{}, false
 	}
 	return rules.Match{Span: v.Span}, true

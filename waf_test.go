@@ -608,3 +608,48 @@ func TestDecisionCarriesMatchSpan(t *testing.T) {
 		t.Error("decision does not identify the matched target")
 	}
 }
+
+// TestMediumTierIsOptInAndReachable is the safety property behind the whole
+// confidence axis, asserted through behaviour rather than through a rule count.
+//
+// ruleset/core may now carry Medium rules; the engine's minimum confidence is
+// High, so they are dropped at compile time and gwaf.New() never blocks on one.
+// That is what makes an opt-in tier safe to ship.
+//
+// Both halves matter. If the default starts blocking these, an embedder who
+// wrote gwaf.New() and read "blocks safely by default" got a wider net than they
+// asked for. If the Medium WAF does not block them, the tier is decoration and
+// the dial does nothing.
+func TestMediumTierIsOptInAndReachable(t *testing.T) {
+	def := newWAF(t)
+	wide := newWAF(t, gwaf.WithMinConfidence(types.Medium))
+
+	// Each is real structure scoring below the default bar: a tautology with
+	// nothing attached, a scheme with no handler behind it, an executing call
+	// with no surrounding PHP. Each is also a shape ordinary data takes, which
+	// is exactly why the default declines to block it.
+	for _, value := range []string{
+		"1=1",
+		"javascript:foo",
+		"system('id')",
+	} {
+		if blocked(t, def, value) {
+			t.Errorf("gwaf.New() blocked %q; the default tier must not act on "+
+				"Medium-confidence structure", value)
+		}
+		if !blocked(t, wide, value) {
+			t.Errorf("WithMinConfidence(Medium) did not block %q; the tier is "+
+				"unreachable and the dial does nothing", value)
+		}
+	}
+}
+
+// blocked runs one value through a WAF as a query argument.
+func blocked(t *testing.T, w *gwaf.WAF, value string) bool {
+	t.Helper()
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.SetRequestLine("GET", "/", "HTTP/1.1")
+	tx.AddArgument("q", value)
+	return tx.ProcessRequestBody().Blocked()
+}

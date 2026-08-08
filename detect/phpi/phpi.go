@@ -262,7 +262,18 @@ func scanVariables(v []byte) Signal {
 			sigs |= SignalVariableFunction
 			continue
 		}
-		// "$name(" or "$name[...](" — a call whose target is data.
+		// A call whose target is data, but only where the target is a
+		// superglobal: "$_GET[0]($_GET[1])".
+		//
+		// A bare "$f(" was accepted here once and the literal it forced —
+		// a lone "$" — made this rule a candidate for every price, every shell
+		// variable and every template field on the internet. The prefilter is
+		// where that is paid for, so the signal is narrowed to the form an
+		// attacker can actually reach: the target has to come from the request,
+		// and a local variable they cannot set is not an attack they can mount.
+		if !hasPrefixFold(v[i:], "$_") && !hasPrefixFold(v[i:], "$globals") {
+			continue
+		}
 		j := i + 1
 		for j < len(v) && isNameByte(v[j]) {
 			j++
@@ -399,15 +410,29 @@ func indexFold(v []byte, needle string) int {
 // ---- operator ---------------------------------------------------------------
 
 // Operator adapts the detector to the rule engine.
-func Operator() rules.Operator { return &operator{d: New()} }
+func Operator() rules.Operator { return &operator{d: New(), threshold: Threshold} }
 
-type operator struct{ d *Detector }
+// OperatorAt returns an operator that reports at a caller-chosen score.
+//
+// This is how a rule earns a confidence tier below High out of the *same*
+// evidence, rather than by writing a second, sloppier detector. Lower is more
+// sensitive and less certain; a ruleset that lowers it is opting into false
+// positives it has decided it can absorb, and that decision belongs to whoever
+// runs the traffic.
+func OperatorAt(threshold int) rules.Operator {
+	return &operator{d: New(), threshold: threshold}
+}
+
+type operator struct {
+	d         *Detector
+	threshold int
+}
 
 func (o *operator) Name() string { return "detect_phpi" }
 
 func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) {
 	v := o.d.Analyze(value)
-	if !v.Detected() {
+	if v.Score < o.threshold {
 		return rules.Match{}, false
 	}
 	return rules.Match{Span: v.Span}, true
@@ -419,7 +444,11 @@ func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) 
 // scheme, a '$' for variable structure, or a name from the call and directive
 // lists. FuzzLiteralsAreExhaustive enforces that this stays true.
 func (o *operator) Literals() ([]string, bool) {
-	lits := []string{"<?", "$", "://"}
+	// "$" alone is not here, deliberately. It was, and it made this rule a
+	// candidate for "$19.99", "${total}" and every shell variable in a config
+	// field — a measurable cost on traffic that can never match. The signals are
+	// shaped so that the selective forms suffice.
+	lits := []string{"<?", "$$", "$_", "$globals", "://"}
 	lits = append(lits, dangerCalls...)
 	lits = append(lits, configDirectives...)
 	return lits, true

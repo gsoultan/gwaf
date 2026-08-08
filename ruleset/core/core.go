@@ -127,8 +127,18 @@ const (
 	// literal rules each carry a payload the detector has not been measured
 	// against, and retiring one before that measurement exists is how coverage
 	// disappears quietly.
-	IDJavaSemantic        types.RuleID = 4018
-	IDPHPSemantic         types.RuleID = 4019
+	IDJavaSemantic types.RuleID = 4018
+	IDPHPSemantic  types.RuleID = 4019
+
+	// The Medium tier, in its own 5xxx band so an exception written against a
+	// default-tier rule can never accidentally silence the opt-in one, and so a
+	// reader of an audit log can tell at a glance which bar a finding cleared.
+	IDSQLiSuspicious   types.RuleID = 5010
+	IDXSSSuspicious    types.RuleID = 5011
+	IDShelliSuspicious types.RuleID = 5012
+	IDPHPSuspicious    types.RuleID = 5013
+	IDJavaSuspicious   types.RuleID = 5014
+
 	IDExpressionLanguage  types.RuleID = 4011
 	IDJavaGadgetClass     types.RuleID = 4012
 	IDPHPDynamicEval      types.RuleID = 4013
@@ -1502,6 +1512,110 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "Known vulnerability scanner",
 			Tags:       []string{"scanner", "reputation"},
+		},
+
+		// ---- Medium tier: off by default ------------------------------------
+		//
+		// Everything below is Confidence Medium, and gwaf.New() does not run it:
+		// the default minimum is High, so these rules are dropped at compile time
+		// unless an embedder asks for them with
+		//
+		//	gwaf.New(gwaf.WithMinConfidence(types.Medium))   // or WithParanoiaLevel(2)
+		//
+		// They exist because the confidence axis was designed and then left empty
+		// — 53 Certain, 29 High, nothing else — which made "confidence tiers are
+		// strictly more expressive than paranoia levels" (CLAUDE.md §1) a claim
+		// with nothing behind it. An operator who wants a wider net had no dial to
+		// turn, only the choice between gwaf's defaults and somebody else's WAF.
+		//
+		// Each one is the *same detector* reading the *same evidence*, reported at
+		// a lower score. That is what distinguishes a confidence tier from a
+		// second, sloppier ruleset: nothing here is a new heuristic, it is the
+		// existing structural analysis with the bar moved. A value scoring 3 or 4
+		// has real structure — a tautology with nothing attached to it, a
+		// javascript: URI, a shell metacharacter beside a path — and gwaf declines
+		// to block on it by default because the false-positive rate is a property
+		// of the traffic, not of the payload.
+		//
+		// The tiers below are deliberately not exhaustive. They are the cases the
+		// CRS corpus and the pentest benign gate showed were real detections held
+		// back by one or two points, which is the honest place to start.
+		{
+			ID:         IDSQLiSuspicious,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: []rules.Transform{transform.URLDecode},
+			// Three is a tautology standing alone, or a quote break beside a
+			// comment terminator. Both are injection shapes; both also occur in
+			// data. "1=1" is a filter expression in half the query DSLs on the
+			// internet, which is exactly why this is not on by default.
+			Op:         sqli.OperatorAt(3),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.Medium,
+			Msg:        "SQL injection (suspicious structure)",
+			Tags:       []string{"sqli", "owasp-a03", "semantic", "medium"},
+		},
+		{
+			ID:         IDXSSSuspicious,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: []rules.Transform{transform.URLDecode},
+			// Three reaches a bare "javascript:" URI and an attribute breakout
+			// with nothing yet attached. A link shortener, a bookmarklet field or
+			// a CMS that stores hrefs will send the first on purpose.
+			Op:         xss.OperatorAt(3),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.Medium,
+			Msg:        "Cross-site scripting (suspicious structure)",
+			Tags:       []string{"xss", "owasp-a03", "semantic", "medium"},
+		},
+		{
+			ID:         IDShelliSuspicious,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    shellTargets,
+			Transforms: []rules.Transform{transform.URLDecode},
+			// Three is a bare variable in command position, or a mention of a
+			// sensitive path, without the corroboration the default tier wants.
+			// A CI platform carrying shell as data trips this constantly, which
+			// is the whole reason shelli's own threshold is where it is.
+			Op:         shelli.OperatorAt(3),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.Medium,
+			Msg:        "Command injection (suspicious structure)",
+			Tags:       []string{"rce", "shelli", "owasp-a03", "semantic", "medium"},
+		},
+		{
+			ID:         IDPHPSuspicious,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: []rules.Transform{transform.URLDecode},
+			// Four is an executing PHP function in call position with no other
+			// PHP structure around it — "system('id')" as a whole value. Real,
+			// and also what "never eval() untrusted input in production" looks
+			// like to a scanner, which is why the default tier requires more.
+			Op:         phpi.OperatorAt(4),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.Medium,
+			Msg:        "PHP injection (suspicious structure)",
+			Tags:       []string{"rce", "php", "owasp-a03", "semantic", "medium"},
+		},
+		{
+			ID:         IDJavaSuspicious,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: []rules.Transform{transform.URLDecode},
+			// Four reaches a type reference being invoked without the rest of the
+			// chain. Build tooling and APM agents carry these as configuration.
+			Op:         javaser.OperatorAt(4),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.Medium,
+			Msg:        "Java injection (suspicious structure)",
+			Tags:       []string{"rce", "java", "owasp-a08", "semantic", "medium"},
 		},
 	}
 }

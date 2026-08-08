@@ -100,6 +100,35 @@ not work.**
 **When adding a reading, test it over HTTP, not only through the library API** —
 the two deliver different bytes, and the library path is the one that lies.
 
+### The Medium tier: opt-in, +169 CRS stages, default untouched
+
+`gwaf lint` showed the confidence axis was designed and left empty — 53 Certain,
+29 High, nothing else — so `WithMinConfidence` selected nothing. Five Medium
+rules (5010–5014) fixed that, each being the **same detector at a lower score**
+rather than a new heuristic.
+
+| | default | `WithMinConfidence(Medium)` |
+|---|---|---|
+| CRS corpus | 1853/5066 (36.6%) | **2022/5066 (39.9%)** |
+| Benign gate | 0/51 blocked | (opt-in; FPs expected) |
+
+`TestMediumTierIsOptInAndReachable` asserts both halves behaviourally: the
+default must **not** block `1=1`, `javascript:foo`, `system('id')`, and the
+Medium WAF must. A tier that changes no verdict is decoration.
+
+### Two process failures worth not repeating
+
+**I reported "gates clean" twice on a `make check` that never ran the tests.**
+It failed at `fmt-check` (an unformatted file) in three lines, and I grepped for
+`^FAIL` — which cannot match `make: *** [fmt-check] Error 1`. **Check the exit
+code, never a log pattern.** This is the same class as the staticcheck skip in
+CLAUDE.md §6, committed by the person who had been citing it all session.
+
+**A real regression hid behind it**: `TestBenignTrafficBoundsRuleEvaluation` had
+been failing since the detectors landed, because `phpi` declared `"$"` as a
+literal. Benign traffic went 6 → 8 candidates, one case 10. Fixed by narrowing
+the variable-function signal to superglobals.
+
 ### `gwaf lint` is the load-independent way to price a ruleset change
 
 `bench-guard`'s own message points at it and it is the right tool when the

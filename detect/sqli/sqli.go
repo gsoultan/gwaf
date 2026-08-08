@@ -773,15 +773,33 @@ func contextName(c context) string {
 // keeps it inside the machinery that already exists: it is prefiltered by its
 // required literals, metered by the same fuel budget, and reported by the same
 // compile report as every other rule.
-func Operator() rules.Operator { return &operator{d: New()} }
+func Operator() rules.Operator { return &operator{d: New(), threshold: Threshold} }
 
-type operator struct{ d *Detector }
+// OperatorAt returns an operator that reports at a caller-chosen score.
+//
+// This is how a rule earns a confidence tier below High out of the *same*
+// evidence, rather than by writing a second, sloppier detector. A value scoring
+// 3 or 4 has real structure — a tautology with nothing attached, a quote break
+// beside a connector — but not enough for gwaf to block by default, and saying
+// so precisely is what a confidence tier is for.
+//
+// Lower is more sensitive and less certain. A ruleset that lowers it is opting
+// into false positives it has decided it can absorb, and that decision belongs
+// to whoever runs the traffic.
+func OperatorAt(threshold int) rules.Operator {
+	return &operator{d: New(), threshold: threshold}
+}
+
+type operator struct {
+	d         *Detector
+	threshold int
+}
 
 func (o *operator) Name() string { return "detect_sqli" }
 
 func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) {
 	v := o.d.Analyze(value)
-	if !v.Detected() {
+	if v.Score < o.threshold {
 		return rules.Match{}, false
 	}
 	return rules.Match{Span: v.Span}, true

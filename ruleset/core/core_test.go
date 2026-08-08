@@ -3,6 +3,8 @@
 package core
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gsoultan/gwaf/types"
@@ -41,11 +43,32 @@ func TestNoDuplicateIDs(t *testing.T) {
 
 // TestEveryRuleIsCertainOrHigh is the package doc as a test. Blocking by
 // default is only defensible while it holds.
+//
+// Medium is now permitted *in the set* and never in the default: the engine's
+// minimum confidence is High, so a Medium rule is dropped at compile time unless
+// an embedder asks for it. The property that matters is therefore about what
+// gwaf.New() compiles rather than about what this slice contains, and it is
+// asserted where it can be — TestDefaultWAFCompilesNoMediumRules in the root
+// package, which is the only place that can build a WAF without an import cycle.
+//
+// What is checked here is that a Medium rule is *deliberately* Medium: it has to
+// say so in its message and its tags, so nobody can lower a tier by accident and
+// have it read as an ordinary rule in an audit log.
 func TestEveryRuleIsCertainOrHigh(t *testing.T) {
 	for _, r := range Default() {
-		if r.Confidence != types.Certain && r.Confidence != types.High {
-			t.Errorf("rule %d (%q) is %v; the core ruleset blocks by default "+
-				"and may only carry Certain or High", r.ID, r.Msg, r.Confidence)
+		switch r.Confidence {
+		case types.Certain, types.High:
+		case types.Medium:
+			if !strings.Contains(r.Msg, "suspicious") {
+				t.Errorf("rule %d (%q) is Medium but its message does not say so; "+
+					"an opt-in finding must be legible as one", r.ID, r.Msg)
+			}
+			if !slices.Contains(r.Tags, "medium") {
+				t.Errorf("rule %d (%q) is Medium but is not tagged \"medium\"", r.ID, r.Msg)
+			}
+		default:
+			t.Errorf("rule %d (%q) is %v; the core ruleset may carry Certain, "+
+				"High, or a deliberately-tagged Medium", r.ID, r.Msg, r.Confidence)
 		}
 	}
 }

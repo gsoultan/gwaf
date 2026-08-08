@@ -8,6 +8,34 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Added
 
+- **The Medium confidence tier, and `OperatorAt` on every semantic detector.**
+  `WithMinConfidence` and `WithParanoiaLevel` were wired up with nothing to
+  select — `gwaf lint` reported 53 Certain, 29 High and nothing else — which made
+  *"confidence tiers are strictly more expressive than paranoia levels"*
+  (CLAUDE.md §1) a claim with an empty tier behind it. An operator who wanted a
+  wider net had no dial, only the choice between gwaf's defaults and somebody
+  else's WAF.
+
+  Five Medium rules (5010–5014), each the *same detector reading the same
+  evidence* at a lower score, which is what distinguishes a confidence tier from
+  a second, sloppier ruleset. On the CRS corpus: **+169 stages, 36.6% → 39.9%**.
+
+  Off by default and provably so — `gwaf.New()` still compiles Certain and High
+  only, and `TestMediumTierIsOptInAndReachable` asserts both halves through
+  behaviour: the default must not block `1=1`, and the Medium WAF must.
+
+### Fixed
+
+- **`phpi` declared `"$"` as a prefilter literal**, making the rule a candidate
+  for every price, shell variable and template field on the internet. Benign
+  traffic went from ≤6 rules evaluated to 8, and in one case 10. The
+  variable-function signal now requires a superglobal or `$$` — the form an
+  attacker can actually reach, since a local variable they cannot set is not an
+  attack they can mount — so the literals are `$$`, `$_` and `$globals`.
+  Costs 7 CRS stages; buys back the prefilter.
+
+### Added
+
 - **`detect/javaser` and `detect/phpi`** — structural detectors for the two
   largest CRS miss families, written the way `detect/sqli` is: reading invocation
   structure, never a name list.
