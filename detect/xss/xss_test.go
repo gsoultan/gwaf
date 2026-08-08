@@ -61,6 +61,12 @@ var attacks = []struct{ name, payload string }{
 	{"breakout with href", `x" href="javascript:alert(1)`},
 	{"breakout onfocus", `x" onfocus="alert(1)" autofocus="`},
 	{"breakout slash", `x"/onerror="alert(1)`},
+	// A valueless boolean attribute placed between the quote-break and the
+	// handler used to walk straight through scanBreakout, which only ever
+	// inspected the first attribute after the quote. autofocus is the payload
+	// of choice because it auto-fires onfocus with no user interaction.
+	{"breakout boolean attr then handler", `" autofocus onfocus=alert(1) x="`},
+	{"breakout hidden then handler", `x" hidden onpointerover=alert(1)`},
 
 	// ---- raw-text escape ---------------------------------------------------
 	{"textarea escape", "</textarea><script>alert(1)</script>"},

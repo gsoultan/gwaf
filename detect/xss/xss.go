@@ -523,29 +523,73 @@ func scanBreakout(src []byte) Signal {
 			continue
 		}
 
-		nameStart := j
-		for j < len(src) && isNameByte(src[j]) {
-			j++
-		}
-		attr := lowerWord(src[nameStart:j])
-		for j < len(src) && isSpace(src[j]) {
-			j++
-		}
-		if j < len(src) && src[j] == '=' {
-			switch {
-			case isEventHandler(attr):
-				// Escaping a quoted attribute to add a handler is not merely a
-				// breakout, it *is* handler injection: the browser will run it
-				// exactly as if the tag had been written that way.
-				return SignalAttributeBreakout | SignalEventHandler
-			case isURIAttr(attr) && matchesScheme(src, j+1):
-				return SignalAttributeBreakout | SignalSchemeInAttribute
-			case isURIAttr(attr):
-				return SignalAttributeBreakout
+		// Walk the attributes that follow the closing quote. Inspecting only the
+		// first would miss the payload that pads the handler behind a valueless
+		// boolean attribute -- `" autofocus onfocus=alert(1)` -- where autofocus
+		// is chosen precisely because it auto-fires onfocus with no user
+		// interaction. Only *known* boolean attributes are skipped: a run of
+		// arbitrary words is prose, not a tag, and stops the walk, so this does
+		// not turn `"just click here onclick" ...` into a match.
+		for {
+			nameStart := j
+			for j < len(src) && isNameByte(src[j]) {
+				j++
 			}
+			attr := lowerWord(src[nameStart:j])
+			// Skip the separators after the name; the next thing is either '='
+			// (a value-bearing attribute) or the start of the next attribute.
+			k := j
+			for k < len(src) && (isSpace(src[k]) || src[k] == '/') {
+				k++
+			}
+			if k < len(src) && src[k] == '=' {
+				switch {
+				case isEventHandler(attr):
+					// Escaping a quoted attribute to add a handler is not merely a
+					// breakout, it *is* handler injection: the browser will run it
+					// exactly as if the tag had been written that way.
+					return SignalAttributeBreakout | SignalEventHandler
+				case isURIAttr(attr) && matchesScheme(src, k+1):
+					return SignalAttributeBreakout | SignalSchemeInAttribute
+				case isURIAttr(attr):
+					return SignalAttributeBreakout
+				}
+				// A value-bearing attribute that is neither a handler nor a URI
+				// attr ends the walk, exactly as before the boolean-attr case
+				// existed: this is an ordinary attribute, not an injection.
+				break
+			}
+			if !isBooleanAttr(attr) {
+				break
+			}
+			// Valueless boolean attribute (autofocus, hidden, ...): a browser
+			// reads it as padding and moves to the next attribute, so we do too.
+			// k already sits on the next attribute name; anything that is not one
+			// -- a '>' closing the tag, punctuation, end of input -- ends the walk.
+			if k >= len(src) || !isAlpha(src[k]) {
+				break
+			}
+			j = k
 		}
 	}
 	return 0
+}
+
+// isBooleanAttr reports whether attr is one of HTML's valueless boolean
+// attributes. Unlike event handlers -- an open shape that browsers keep
+// extending, so isEventHandler matches structurally -- the boolean attributes
+// are a closed, slow-moving set, and enumerating them keeps scanBreakout from
+// walking past arbitrary prose words to reach a distant handler. autofocus is
+// the load-bearing entry: it auto-fires onfocus/onblur with no interaction.
+func isBooleanAttr(attr string) bool {
+	switch attr {
+	case "autofocus", "autoplay", "checked", "controls", "default", "defer",
+		"disabled", "formnovalidate", "hidden", "ismap", "loop", "multiple",
+		"muted", "nomodule", "novalidate", "open", "playsinline", "readonly",
+		"required", "reversed", "selected":
+		return true
+	}
+	return false
 }
 
 // isEventHandler reports whether an attribute name is an event handler.
