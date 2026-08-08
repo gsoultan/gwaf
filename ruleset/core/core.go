@@ -312,6 +312,40 @@ var decodeChain = []rules.Transform{
 	transform.RemoveWhitespace,
 }
 
+// sensitiveFileOp matches a read of a file that exists to be stolen.
+//
+// The fragments deliberately carry no leading slash. Real exploitation hands a
+// parameter whatever the application will concatenate, which is as often
+// "etc/passwd" or "template_name=etc/passwd" as "/etc/passwd", and requiring
+// the slash meant the rule saw only the shape that happened to be written
+// first. The transform chain has already lowercased and normalized separators,
+// so "C:\Windows\win.ini" arrives here as "c:/windows/win.ini".
+//
+// This stays an enumerated list rather than a pattern because the set of files
+// worth stealing is small, slow-moving, and shared across every target -- the
+// same reason the boolean-attribute list in detect/xss is a list. The cost of
+// widening it is false positives on prose, since these rules also see comment
+// bodies: "etc" is an English word, which is why every fragment below is one a
+// sentence does not produce ("etc/passwd" yes, "etc/issue" no).
+func sensitiveFileOp() rules.Operator {
+	return op.ContainsAny(
+		// Unix account and system state.
+		"etc/passwd", "etc/shadow", "etc/group", "etc/gshadow",
+		"etc/hosts", "etc/hostname", "etc/os-release", "etc/crontab",
+		// Process introspection: environ leaks secrets, cmdline leaks arguments.
+		"proc/self/environ", "proc/self/cmdline", "proc/self/cwd", "proc/version",
+		// Windows. win.ini is the canonical proof-of-read on that platform for
+		// the same reason /etc/passwd is on Unix: readable by everyone, present
+		// on every install.
+		"windows/win.ini", "winnt/win.ini", "windows/system.ini",
+		"windows/system32/config", "windows/system32/drivers/etc/hosts",
+		"boot.ini",
+		// Credentials at rest.
+		".ssh/id_rsa", ".ssh/id_dsa", ".ssh/id_ecdsa", ".ssh/id_ed25519",
+		".ssh/authorized_keys", ".aws/credentials", ".docker/config.json",
+	)
+}
+
 // pathChain normalizes a path before traversal matching.
 var pathChain = []rules.Transform{
 	transform.URLDecode,
@@ -384,10 +418,7 @@ func requestRules() rules.Set {
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    []types.Target{{Kind: types.TargetRequestURI}, {Kind: types.TargetArgs}},
 			Transforms: pathChain,
-			Op: op.ContainsAny(
-				"/etc/passwd", "/etc/shadow", "/proc/self/environ",
-				"/windows/system32/config", ".ssh/id_rsa", ".aws/credentials",
-			),
+			Op:         sensitiveFileOp(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
