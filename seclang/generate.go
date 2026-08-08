@@ -269,22 +269,6 @@ func phaseConst(p types.Phase) string {
 	}
 }
 
-func transformConst(name string) (string, bool) {
-	switch name {
-	case "url_decode":
-		return "URLDecode", true
-	case "lowercase":
-		return "Lowercase", true
-	case "remove_whitespace":
-		return "RemoveWhitespace", true
-	case "compress_whitespace":
-		return "CompressWhitespace", true
-	case "normalize_path":
-		return "NormalizePath", true
-	}
-	return "", false
-}
-
 func severityConst(s types.Severity) string {
 	switch s {
 	case types.SeverityCritical:

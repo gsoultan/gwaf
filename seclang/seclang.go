@@ -84,6 +84,35 @@ type Options struct {
 	// third-party engine implements and stopping at the first one imports
 	// nothing. Everything skipped is in Report.
 	SkipUntranslatable bool
+
+	// DataFiles resolves the phrase lists @pmFromFile and @pmf refer to, so
+	// their rules can be imported with the phrases inlined.
+	//
+	// The converter never opens a file itself. Reading from disk is an
+	// environment capability, and a library that helps itself to one the caller
+	// did not grant is a library that cannot be embedded anywhere strict
+	// (CLAUDE.md §1, the environment test). The caller decides what "lfi-os-
+	// files.data" resolves to — a directory, an embed.FS, or nothing.
+	//
+	// Nil means @pmFromFile stays untranslatable and is reported as such. That
+	// is the safe default: eighteen CRS rules depend on it, including the LFI
+	// and RCE phrase lists, and importing them empty would be worse than not
+	// importing them.
+	DataFiles func(name string) ([]byte, error)
+}
+
+// Source is one named SecLang input.
+//
+// Files are parsed separately and compiled together, because SecLang is stateful
+// across them — SecDefaultAction set in one applies to the next, and
+// SecRuleRemoveById routinely appears after the include that defined its target
+// — while a skip has to name the file it actually came from. Concatenating the
+// bytes first gets the statefulness right and the attribution wrong.
+type Source struct {
+	// Name is used in Report locations; pass the file path when there is one.
+	Name string
+	// Data is the SecLang source.
+	Data []byte
 }
 
 // Confidence mirrors types.Confidence without importing it into the option
@@ -165,18 +194,41 @@ func (r Report) String() string {
 //
 // The name is used in Report locations; pass the file path when there is one.
 func Parse(name string, src []byte, opts Options) (rules.Set, Report, error) {
+	return ParseSources([]Source{{Name: name, Data: src}}, opts)
+}
+
+// ParseSources compiles several SecLang files as one ruleset.
+//
+// Use this rather than concatenating the files yourself: the directives are
+// compiled in the order given, so state carries across them exactly as
+// ModSecurity would, and every skip still reports the file and line it came
+// from. A migration is read by whoever has to tune it, and "rule 942100 in one
+// of these twenty-seven files" is not a location.
+func ParseSources(srcs []Source, opts Options) (rules.Set, Report, error) {
 	if opts.DefaultConfidence == 0 {
 		return nil, Report{}, ErrNoConfidence
 	}
 	opts.SkipUntranslatable = true
 
-	directives, err := parse(name, src)
+	directives, err := parseAll(srcs)
 	if err != nil {
 		return nil, Report{}, err
 	}
-	c := &compiler{opts: opts, file: name}
+	c := &compiler{opts: opts}
 	set := c.run(directives)
 	return set, c.report, nil
+}
+
+func parseAll(srcs []Source) ([]directive, error) {
+	var out []directive
+	for _, s := range srcs {
+		ds, err := parse(s.Name, s.Data)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ds...)
+	}
+	return out, nil
 }
 
 // ParseStrict is Parse without skipping: the first directive that cannot be
@@ -185,16 +237,21 @@ func Parse(name string, src []byte, opts Options) (rules.Set, Report, error) {
 // For a caller who would rather fail a build than deploy a ruleset that is
 // quietly smaller than the one they wrote.
 func ParseStrict(name string, src []byte, opts Options) (rules.Set, Report, error) {
+	return ParseSourcesStrict([]Source{{Name: name, Data: src}}, opts)
+}
+
+// ParseSourcesStrict is ParseSources without skipping.
+func ParseSourcesStrict(srcs []Source, opts Options) (rules.Set, Report, error) {
 	if opts.DefaultConfidence == 0 {
 		return nil, Report{}, ErrNoConfidence
 	}
 	opts.SkipUntranslatable = false
 
-	directives, err := parse(name, src)
+	directives, err := parseAll(srcs)
 	if err != nil {
 		return nil, Report{}, err
 	}
-	c := &compiler{opts: opts, file: name}
+	c := &compiler{opts: opts}
 	set := c.run(directives)
 	if len(c.report.Skipped) > 0 {
 		return nil, c.report, fmt.Errorf("%w: %s", ErrUntranslatable, c.report.Skipped[0])

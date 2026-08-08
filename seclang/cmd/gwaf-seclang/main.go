@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gsoultan/gwaf/seclang"
@@ -93,27 +94,27 @@ func run(args []string, generate bool) error {
 	}
 	opts := seclang.Options{Prefix: uint32(*prefix), DefaultConfidence: tier}
 
-	// Files are concatenated rather than each parsed alone, because SecLang is
-	// stateful across them: SecDefaultAction set in one file applies to the
-	// next, and SecRuleRemoveById routinely appears after the include that
-	// defined the rule it removes.
-	var src []byte
+	// Passed as separate sources rather than concatenated. SecLang is stateful
+	// across files -- SecDefaultAction set in one applies to the next, and
+	// SecRuleRemoveById routinely appears after the include that defined the
+	// rule it removes -- and ParseSources compiles them in order for exactly
+	// that reason, while still reporting each skip against the file it came
+	// from.
+	srcs := make([]seclang.Source, 0, fs.NArg())
 	for _, name := range fs.Args() {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			return err
 		}
-		src = append(src, []byte("# ---- "+name+"\n")...)
-		src = append(src, b...)
-		src = append(src, '\n')
+		srcs = append(srcs, seclang.Source{Name: name, Data: b})
 	}
-	name := strings.Join(fs.Args(), ", ")
+	opts.DataFiles = dataFileResolver(fs.Args())
 
-	parse := seclang.Parse
+	parse := seclang.ParseSources
 	if *strict {
-		parse = seclang.ParseStrict
+		parse = seclang.ParseSourcesStrict
 	}
-	set, rep, err := parse(name, src, opts)
+	set, rep, err := parse(srcs, opts)
 	if err != nil {
 		return err
 	}
@@ -132,6 +133,38 @@ func run(args []string, generate bool) error {
 	fmt.Fprintln(os.Stderr, rep.String())
 	_, err = os.Stdout.Write(out)
 	return err
+}
+
+// dataFileResolver resolves @pmFromFile phrase lists against the directories
+// holding the rule files, which is where ModSecurity looks and where a CRS
+// release puts them: rules/*.data sits next to rules/*.conf.
+//
+// The library takes this as a function rather than opening files itself, so the
+// only process that reads from disk is the one the user ran deliberately.
+func dataFileResolver(inputs []string) func(string) ([]byte, error) {
+	seen := map[string]bool{}
+	var dirs []string
+	for _, in := range inputs {
+		d := filepath.Dir(in)
+		if !seen[d] {
+			seen[d] = true
+			dirs = append(dirs, d)
+		}
+	}
+
+	return func(name string) ([]byte, error) {
+		// A path with separators is taken as written, relative to each rule
+		// directory; a bare name is looked up in all of them.
+		for _, d := range dirs {
+			if b, err := os.ReadFile(filepath.Join(d, name)); err == nil {
+				return b, nil
+			}
+		}
+		if b, err := os.ReadFile(name); err == nil {
+			return b, nil
+		}
+		return nil, fmt.Errorf("not found in %s", strings.Join(dirs, ", "))
+	}
 }
 
 func confidenceOf(s string) (seclang.Confidence, error) {

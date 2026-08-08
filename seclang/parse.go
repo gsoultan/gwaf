@@ -26,7 +26,8 @@ var (
 type directive struct {
 	Name string   // SecRule, SecAction, ...
 	Args []string // the unquoted arguments
-	Line int
+	File string   // the source it was read from
+	Line int      // the line within that source
 }
 
 // parse splits SecLang source into directives.
@@ -58,7 +59,7 @@ func parse(name string, src []byte) ([]directive, error) {
 		if len(args) == 0 {
 			continue
 		}
-		out = append(out, directive{Name: args[0], Args: args[1:], Line: start})
+		out = append(out, directive{Name: args[0], Args: args[1:], File: name, Line: start})
 	}
 	return out, nil
 }

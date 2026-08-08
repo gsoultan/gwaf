@@ -11,7 +11,6 @@ import (
 	"github.com/gsoultan/gwaf/detect/xss"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
-	"github.com/gsoultan/gwaf/rules/transform"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -85,6 +84,7 @@ func (c *compiler) run(ds []directive) rules.Set {
 	// the include that defined the rule, and a single pass in file order would
 	// import a rule the operator had explicitly disabled.
 	for _, d := range ds {
+		c.file = d.File
 		switch strings.ToLower(d.Name) {
 		case "secruleremovebyid":
 			for _, a := range d.Args {
@@ -100,6 +100,10 @@ func (c *compiler) run(ds []directive) rules.Set {
 	var set rules.Set
 	for i := 0; i < len(ds); i++ {
 		d := ds[i]
+		// Skips report the file the directive came from, not the whole input
+		// list; the compiler walks directives in order so tracking it here is
+		// enough to reach every c.skip below.
+		c.file = d.File
 		switch strings.ToLower(d.Name) {
 		case "secrule":
 			if lvl, marker, ok := paranoiaGate(ds[i]); ok {
@@ -259,6 +263,21 @@ func (c *compiler) secRule(ds []directive, i int) (consumed int, out rules.Rule,
 
 // operator maps a SecLang operator onto a gwaf one.
 func (c *compiler) operator(name, arg string, negated bool) (rules.Operator, string) {
+	// A macro that survives into the operator argument would be matched as
+	// literal text, and "%{tx.allowed_methods}" appears in no request ever sent.
+	// That is not a weakened rule, it is a dead one, and the operator would be
+	// told method enforcement is in place while nothing enforces it. CRS 911100
+	// and 920430 are both this shape.
+	//
+	// Reported rather than expanded: the values live in crs-setup.conf as
+	// cross-rule TX state, which gwaf does not model, and both rules are policy
+	// the embedder configures directly (docs/RULES.md §4).
+	if m, ok := unexpandedMacro(arg); ok {
+		return nil, fmt.Sprintf("operator argument contains the unexpanded macro %s, "+
+			"which would be matched as literal text and could never fire; "+
+			"configure this as policy instead", m)
+	}
+
 	switch name {
 	case "rx":
 		o, err := newRegexOperator(arg, negated)
@@ -303,11 +322,22 @@ func (c *compiler) operator(name, arg string, negated bool) (rules.Operator, str
 		return o, ""
 
 	case "pm", "pmf", "pmfromfile":
-		if name != "pm" {
-			return nil, "@pmFromFile reads a file at import time; inline the " +
-				"phrases so the imported ruleset is self-contained"
-		}
 		phrases := strings.Fields(arg)
+		if name != "pm" {
+			// The phrases are inlined at conversion time, so the generated
+			// ruleset stays self-contained and needs no file at request time.
+			// Options.DataFiles decides what the name resolves to; the converter
+			// does not open anything itself.
+			if c.opts.DataFiles == nil {
+				return nil, "@" + name + " needs a phrase list; set " +
+					"Options.DataFiles to resolve " + strconv.Quote(arg)
+			}
+			data, err := c.opts.DataFiles(arg)
+			if err != nil {
+				return nil, fmt.Sprintf("@%s could not read %s: %v", name, arg, err)
+			}
+			phrases = phraseList(data)
+		}
 		if len(phrases) == 0 {
 			return nil, "no phrases"
 		}
@@ -494,55 +524,59 @@ func (c *compiler) transforms(acts []action) ([]rules.Transform, string) {
 		if !strings.EqualFold(a.Name, "t") {
 			continue
 		}
-		switch strings.ToLower(a.Value) {
-		case "none":
+		// The mapping lives in transform.go, next to the exported names
+		// Generate needs, so the compiler cannot accept a transform the
+		// generator has no way to render.
+		token := strings.ToLower(a.Value)
+		switch {
+		case token == "none":
 			out = out[:0]
-		case "lowercase":
-			out = append(out, transform.Lowercase)
-		case "urldecode", "urldecodeuni":
-			out = append(out, transform.URLDecode)
-		case "removewhitespace":
-			out = append(out, transform.RemoveWhitespace)
-		case "compresswhitespace":
-			out = append(out, transform.CompressWhitespace)
-		case "normalizepath", "normalizepathwin", "normalisepath":
-			out = append(out, transform.NormalizePath)
-		case "trim", "trimleft", "trimright":
-			// Trimming changes only leading and trailing whitespace, and every
-			// operator gwaf offers is position-independent, so dropping it
-			// cannot change a verdict.
-		case "jsdecode", "escapeseqdecode":
-			out = append(out, transform.EscapeDecode)
-		case "removenulls":
-			// A NUL is already a reading: interpret.ClassNullTruncate evaluates
-			// the value as a C-backed origin would truncate it, so the rule sees
-			// the same bytes with or without this transform.
-		case "utf8tounicode", "htmlentitydecode":
-			// Accepted and dropped, because gwaf already evaluates these as
-			// *readings* rather than as a transform.
-			//
-			// A transform rewrites the value once and matches the result, which
-			// is the single-interpretation model that CVE-2026-21876 exploited.
-			// gwaf instead evaluates every plausible decoding: overlong UTF-8
-			// and HTML entities each produce their own reading
-			// (interpret.ClassOverlongUTF8, interpret.ClassHTMLEntity), and a
-			// rule matches if it matches under any of them.
-			//
-			// So an imported rule sees the decoded form whether or not this
-			// transform is applied, and applying it as well would only narrow
-			// the rule to that one reading. Dropping it is the faithful
-			// translation, not an approximation.
-			//
-			// The transforms below are deliberately NOT treated this way:
-			// t:cmdLine and t:replaceComments are covered by gwaf's own
-			// detectors rather than by canonicalization, which does nothing for
-			// an imported regex, so silently dropping them would make the
-			// imported rule narrower with no compensation. Those stay reported.
+		case isDroppedTransform(token):
+			// Faithfully translates to nothing; see droppedTransforms.
 		default:
-			return nil, fmt.Sprintf("transformation t:%s has no gwaf equivalent", a.Value)
+			tf, ok := transformFor(token)
+			if !ok {
+				return nil, fmt.Sprintf("transformation t:%s has no gwaf equivalent", a.Value)
+			}
+			out = append(out, tf)
 		}
 	}
 	return out, ""
+}
+
+// unexpandedMacro finds a "%{...}" reference left in an operator argument and
+// returns it. ModSecurity substitutes these from collections at request time;
+// gwaf has no collections, so anything still present here is dead text.
+func unexpandedMacro(arg string) (string, bool) {
+	start := strings.Index(arg, "%{")
+	if start < 0 {
+		return "", false
+	}
+	end := strings.Index(arg[start:], "}")
+	if end < 0 {
+		return "", false
+	}
+	return arg[start : start+end+1], true
+}
+
+// phraseList reads a ModSecurity .data file: one phrase per line, '#' comments,
+// blank lines ignored.
+//
+// A phrase is the whole line rather than whitespace-separated words, which is
+// the difference between @pmFromFile and @pm. CRS relies on it —
+// windows-powershell-commands.data and unix-shell.data both contain entries with
+// spaces, and splitting them would turn one precise phrase into several
+// dangerously generic ones.
+func phraseList(data []byte) []string {
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // ---- action helpers ---------------------------------------------------------

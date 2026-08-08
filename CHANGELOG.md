@@ -6,7 +6,46 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Fixed
+
+- **Converting a real Core Rule Set release failed outright.** `seclang` kept two
+  hand-maintained transform tables: the compiler accepted `t:jsDecode` and emitted
+  `transform.EscapeDecode`, `generate.go` had no case for `escape_decode`. So
+  `report` counted CRS rule 932210 as translated and `convert` then died on it —
+  every conversion of the actual OWASP CRS, which is the only reason the module
+  exists. The two tables are now one (`seclang/transform.go`) and a test walks it,
+  so a transform the compiler can emit always has a name to render it with. No
+  test in the tree could have caught this: they all fed `Generate` a fixture that
+  happened not to use the transform.
+
+- **Two CRS rules imported as dead text.** `SecRule REQUEST_METHOD "@within
+  %{tx.allowed_methods}"` (911100, and 920430 for HTTP versions) converted to a
+  literal match on the string `%{tx.allowed_methods}`, which no request contains.
+  That is worse than skipping them: the operator is told method enforcement is in
+  place while nothing enforces it. Unexpanded macros in an operator argument are
+  now reported with the macro named, per the package's own rule that a rule which
+  cannot be translated faithfully is reported, never approximated.
+
+- **Skips named every input file at once.** `gwaf-seclang` concatenated its inputs
+  and passed the joined list as one name, so all 27 CRS files shared a location and
+  line numbers pointed into a buffer that existed nowhere on disk. Directives now
+  carry their own file and line.
+
 ### Added
+
+- **`seclang.ParseSources` / `ParseSourcesStrict`.** Compile several SecLang files
+  as one ruleset: state carries across them in order as ModSecurity would, while
+  each skip still reports the file it came from. Concatenating bytes gets the
+  statefulness right and the attribution wrong.
+
+- **`seclang.Options.DataFiles`.** Resolves `@pmFromFile` / `@pmf` phrase lists so
+  their rules import with the phrases inlined, keeping the generated ruleset
+  self-contained. Eighteen CRS rules were previously reported untranslatable,
+  including 930120 (LFI filenames) and the shell-command lists — with them absent
+  the converted CRS missed `../../../../etc/passwd` and `; cat /etc/passwd` while
+  reporting a successful import. The converter never opens a file itself: reading
+  from disk is an environment capability the caller grants, so the library stays
+  embeddable where that is not allowed.
 
 - **`detect/promptinjection` and system-prompt-leakage (rules 13001/13002).**
   Prompt injection is number one on the OWASP Top 10 for LLM Applications,
