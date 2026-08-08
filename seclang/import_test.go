@@ -143,7 +143,7 @@ SecRule REQUEST_METHOD "@within %{tx.allowed_methods}" \
 func TestSkipsNameTheFileTheyCameFrom(t *testing.T) {
 	srcs := []seclang.Source{
 		{Name: "a.conf", Data: []byte("SecRule ARGS \"@rx ok\" \"id:1,phase:2,deny\"\n")},
-		{Name: "b.conf", Data: []byte("\n\nSecRule ARGS \"@rx x\" \"id:2,phase:2,deny,t:cssDecode\"\n")},
+		{Name: "b.conf", Data: []byte("\n\nSecRule ARGS \"@rx x\" \"id:2,phase:2,deny,t:md5\"\n")},
 	}
 
 	set, rep, err := seclang.ParseSources(srcs, seclang.Options{DefaultConfidence: seclang.High})

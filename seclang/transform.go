@@ -39,6 +39,11 @@ var secTransforms = []secTransform{
 	{tokens: []string{"compresswhitespace"}, tf: transform.CompressWhitespace, goName: "CompressWhitespace"},
 	{tokens: []string{"normalizepath", "normalizepathwin", "normalisepath"}, tf: transform.NormalizePath, goName: "NormalizePath"},
 	{tokens: []string{"jsdecode", "escapeseqdecode"}, tf: transform.EscapeDecode, goName: "EscapeDecode"},
+	{tokens: []string{"cssdecode"}, tf: transform.CSSDecode, goName: "CSSDecode"},
+	{tokens: []string{"cmdline"}, tf: transform.CmdLine, goName: "CmdLine"},
+	{tokens: []string{"replacecomments"}, tf: transform.ReplaceComments, goName: "ReplaceComments"},
+	{tokens: []string{"removecommentschar"}, tf: transform.RemoveCommentsChar, goName: "RemoveCommentsChar"},
+	{tokens: []string{"base64decode", "base64decodeext"}, tf: transform.Base64Decode, goName: "Base64Decode"},
 }
 
 // transformFor maps a lowercased SecLang transformation token to the transform
@@ -82,10 +87,12 @@ func transformConst(name string) (string, bool) {
 //     operator gwaf offers is position-independent.
 //
 // This is deliberately not a place to put a transform that is merely
-// inconvenient. t:cmdLine, t:cssDecode, t:replaceComments and t:base64Decode are
-// covered by gwaf's own detectors rather than by canonicalization, which does
-// nothing for an imported regex — dropping them would make the imported rule
-// narrower with no compensation, so they stay reported instead.
+// inconvenient. t:cssDecode, t:cmdLine, t:replaceComments, t:removeCommentsChar
+// and t:base64Decode all do work no reading performs, so dropping them would
+// make an imported rule narrower with no compensation. They were reported as
+// untranslatable until the pentest harness measured what that cost — CRS 941100
+// *is* the @detectXSS rule and carries t:cssDecode, so the whole CRS XSS tier
+// scored zero — and they are implemented in rules/transform now.
 var droppedTransforms = []string{
 	"trim", "trimleft", "trimright",
 	"removenulls",

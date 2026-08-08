@@ -256,7 +256,7 @@ SecRule ARGS "@rx (?<=foo)bar" "id:1,phase:2,deny"
 SecRule &ARGS "@eq 0" "id:2,phase:2,deny"
 SecRule REMOTE_ADDR "@ipMatchFromFile blocklist.txt" "id:3,phase:1,deny"
 SecRule TX:score "@gt 5" "id:4,phase:2,deny"
-SecRule ARGS "@rx x" "id:5,phase:2,deny,t:cmdLine"
+SecRule ARGS "@rx x" "id:5,phase:2,deny,t:md5"
 SecRule ARGS "@rx a" "id:6,phase:2,chain,deny"
     SecRule ARGS "@rx b" "t:none"
 SecAction "id:7,phase:1,pass,setvar:tx.score=0"
@@ -274,7 +274,7 @@ SecRule ARGS:/^user_/ "@rx x" "id:8,phase:2,deny"
 		"RE2",           // lookbehind
 		"not a value",   // &ARGS
 		"Resolver",      // ipMatchFromFile
-		"cmdLine",       // unknown transformation
+		"md5",           // unknown transformation: hashing destroys the value
 		"conjunction",   // chain
 		"cross-request", // SecAction setvar
 		"Include",       // file inclusion

@@ -218,9 +218,7 @@ func TestUnchangedReturnsInput(t *testing.T) {
 // the result. The capacity check below is what catches that, and it is how the
 // NormalizePath trailing-separator overflow was found.
 func TestMaxOutputLenRespected(t *testing.T) {
-	all := []rules.Transform{
-		Lowercase, RemoveWhitespace, CompressWhitespace, URLDecode, NormalizePath,
-	}
+	all := All
 	inputs := []string{
 		"", "a", "/a/b", "/a/b/c", "a/b/c", "../..", "/x/y/z/w",
 		strings.Repeat("%20", 100), strings.Repeat("../", 100),
@@ -259,11 +257,23 @@ func TestNamesAreStable(t *testing.T) {
 		CompressWhitespace: "compress_whitespace",
 		URLDecode:          "url_decode",
 		NormalizePath:      "normalize_path",
+		EscapeDecode:       "escape_decode",
+		CSSDecode:          "css_decode",
+		CmdLine:            "cmd_line",
+		ReplaceComments:    "replace_comments",
+		RemoveCommentsChar: "remove_comments_char",
+		Base64Decode:       "base64_decode",
 	}
 	for tr, name := range want {
 		if got := tr.Name(); got != name {
 			t.Errorf("Name() = %q, want %q", got, name)
 		}
+	}
+	// A transform missing from the map above is a transform whose name nothing
+	// pins, and the name is what generated rulesets and audit records key on.
+	if len(want) != len(All) {
+		t.Errorf("%d transforms in All but %d names pinned; every transform needs "+
+			"a stable name", len(All), len(want))
 	}
 }
 
@@ -276,9 +286,17 @@ func FuzzTransforms(f *testing.F) {
 		f.Add(s)
 	}
 
-	all := []rules.Transform{
-		Lowercase, RemoveWhitespace, CompressWhitespace, URLDecode, NormalizePath,
+	seeds = append(seeds,
+		`\65 xpression`, `\000065x`, `\\`, `\`, `\6`, "a\\\nb",
+		"SEL/**/ECT", "/*", "*/", "--", "#", "UNION--SELECT",
+		`c^m"d /etc/passwd`, "a , b ; c", "cat  /etc/passwd", "ls  (x)",
+		"YWxlcnQoMSk=", "!!!", "QQ", "Q",
+	)
+	for _, s := range seeds {
+		f.Add(s)
 	}
+
+	all := All
 
 	f.Fuzz(func(t *testing.T, src string) {
 		if len(src) > 65536 {
