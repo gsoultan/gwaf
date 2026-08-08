@@ -519,18 +519,35 @@ func scanBreakout(src []byte) Signal {
 		}
 		// A quote must be followed by separation and then a name, or it is just
 		// a quotation mark in text.
-		if !spaced || j >= len(src) || !isAlpha(src[j]) {
+		//
+		// The separator is not actually required by a browser: `class="a"style=b`
+		// is a parse error that every engine recovers from by starting a new
+		// attribute, and payloads use that to drop the space. Allowing it
+		// unconditionally would read `set "FOO=bar"` in prose as a tag, so the
+		// unseparated form is accepted only when the name that follows is one
+		// HTML actually defines -- a closed set no sentence wanders into.
+		if j >= len(src) || !isAlpha(src[j]) {
+			continue
+		}
+		if !spaced && !startsKnownAttr(src, j) {
 			continue
 		}
 
-		// Walk the attributes that follow the closing quote. Inspecting only the
-		// first would miss the payload that pads the handler behind a valueless
-		// boolean attribute -- `" autofocus onfocus=alert(1)` -- where autofocus
-		// is chosen precisely because it auto-fires onfocus with no user
-		// interaction. Only *known* boolean attributes are skipped: a run of
-		// arbitrary words is prose, not a tag, and stops the walk, so this does
-		// not turn `"just click here onclick" ...` into a match.
-		for {
+		// Walk the attributes that follow the closing quote, the way a browser
+		// parses an attribute list. Inspecting only the first would miss every
+		// payload that pads the handler behind something harmless --
+		// `" autofocus onfocus=alert(1)` behind a valueless boolean attribute,
+		// `" style=position:fixed onmouseover=alert(1)` behind a value-bearing
+		// one. Both shapes are real WordPress plugin CVEs, and to the browser
+		// that will run them the padding is not there at all.
+		//
+		// Two things keep this from reading prose as a tag. A word that is
+		// neither a known boolean attribute nor followed by '=' ends the walk
+		// immediately, which is what ordinary text looks like after a quote. And
+		// an unquoted value ends at whitespace exactly as HTML says it does, so
+		// the walk cannot slide across a sentence. The step count is bounded
+		// because everything on this path takes attacker input.
+		for steps := 0; steps < maxBreakoutAttrs; steps++ {
 			nameStart := j
 			for j < len(src) && isNameByte(src[j]) {
 				j++
@@ -555,9 +572,30 @@ func scanBreakout(src []byte) Signal {
 					return SignalAttributeBreakout
 				}
 				// A value-bearing attribute that is neither a handler nor a URI
-				// attr ends the walk, exactly as before the boolean-attr case
-				// existed: this is an ordinary attribute, not an injection.
-				break
+				// attr is padding -- `style=...` is the common one. Skip its
+				// value the way HTML delimits one and keep walking: a quoted
+				// value ends at its matching quote, an unquoted value ends at
+				// whitespace.
+				j = k + 1
+				if j < len(src) && (src[j] == '"' || src[j] == '\'') {
+					q := src[j]
+					j++
+					for j < len(src) && src[j] != q {
+						j++
+					}
+					if j >= len(src) {
+						break
+					}
+					j++ // past the closing quote
+				} else {
+					for j < len(src) && !isSpace(src[j]) {
+						j++
+					}
+				}
+				if !skipAttrSep(src, &j) {
+					break
+				}
+				continue
 			}
 			if !isBooleanAttr(attr) {
 				break
@@ -573,6 +611,51 @@ func scanBreakout(src []byte) Signal {
 		}
 	}
 	return 0
+}
+
+// startsKnownAttr reports whether the name at src[i:] is an HTML attribute
+// name followed by '='. It gates the unseparated `..."style=...` breakout form,
+// where there is no whitespace to distinguish a tag from a quoted string.
+func startsKnownAttr(src []byte, i int) bool {
+	j := i
+	for j < len(src) && isNameByte(src[j]) {
+		j++
+	}
+	if j >= len(src) || src[j] != '=' {
+		return false
+	}
+	attr := lowerWord(src[i:j])
+	if isEventHandler(attr) || isURIAttr(attr) || isBooleanAttr(attr) {
+		return true
+	}
+	switch attr {
+	case "style", "class", "id", "type", "name", "value", "title", "alt", "width", "height":
+		return true
+	}
+	return false
+}
+
+// maxBreakoutAttrs bounds how many attributes scanBreakout walks after a
+// quote-break. A real tag's attribute list is short; the bound is here because
+// this loop reads attacker-controlled bytes and everything on that path gets a
+// ceiling (CLAUDE.md invariant 2).
+const maxBreakoutAttrs = 16
+
+// skipAttrSep advances *i past the whitespace separating two attributes and
+// reports whether an attribute name follows. Separators are required: without
+// one, `x="a"onclick=` is a single attribute name to the tokenizer.
+func skipAttrSep(src []byte, i *int) bool {
+	j := *i
+	spaced := false
+	for j < len(src) && (isSpace(src[j]) || src[j] == '/') {
+		j++
+		spaced = true
+	}
+	if !spaced || j >= len(src) || !isAlpha(src[j]) {
+		return false
+	}
+	*i = j
+	return true
 }
 
 // isBooleanAttr reports whether attr is one of HTML's valueless boolean

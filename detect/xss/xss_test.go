@@ -67,6 +67,14 @@ var attacks = []struct{ name, payload string }{
 	// of choice because it auto-fires onfocus with no user interaction.
 	{"breakout boolean attr then handler", `" autofocus onfocus=alert(1) x="`},
 	{"breakout hidden then handler", `x" hidden onpointerover=alert(1)`},
+	// Padding the handler behind a *value-bearing* attribute is the same evasion
+	// as the boolean-attribute one: a browser parses the whole attribute list, so
+	// stopping at the first attribute reads the tag differently than the thing
+	// that will execute it. Both shapes below are real WordPress plugin CVEs.
+	{"breakout style then handler", `" style=position:fixed;left:0;top:0 onmouseover=alert(1) x="`},
+	{"breakout style then animation handler", `"style=animation-name:rotation onanimationstart=alert(1)`},
+	{"breakout quoted value then handler", `" class="a b" onclick="alert(1)`},
+	{"breakout two attrs then handler", `" id=x type=image onerror=alert(1)`},
 
 	// ---- raw-text escape ---------------------------------------------------
 	{"textarea escape", "</textarea><script>alert(1)</script>"},
