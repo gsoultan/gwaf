@@ -17,6 +17,9 @@ package gwaf_test
 // blocks the benign corpus is broken regardless of recall (CLAUDE.md §4).
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gsoultan/gwaf"
@@ -149,27 +152,21 @@ func TestStrixCorpusAgainstGwaf(t *testing.T) {
 	t.Logf("  %-16s %2d/%2d blocked (%.0f%%)", "TOTAL", caught, total, 100*float64(caught)/float64(total))
 }
 
-// TestStrixBenignControl is the false-positive control. Strix-style traffic
-// includes plenty of benign strings that resemble attacks (they contain SQL
-// words, template braces, paths). If gwaf blocks these, the recall number
+// TestStrixBenignControl is the false-positive control. Benign traffic contains
+// plenty of strings that resemble attacks (SQL words, template braces, paths,
+// apostrophes, shell punctuation). If gwaf blocks these, the recall number
 // above is meaningless. This asserts, not just reports.
+//
+// The corpus lives in testdata/benign_corpus.json rather than inline because
+// the Coraza comparison harness reads the same file: a false-positive number is
+// only comparable if both engines saw byte-identical input.
 func TestStrixBenignControl(t *testing.T) {
 	w, err := gwaf.New()
 	if err != nil {
 		t.Fatalf("gwaf.New(): %v", err)
 	}
 
-	benign := []strixCase{
-		{arg: "select a plan that works for your team"},
-		{arg: "SELECT the union representative for your order"},
-		{arg: "I love the {{ mustache }} template syntax in docs"},
-		{arg: "C:/Users/report/2026 summary.pdf"},
-		{arg: "email me at support@example.com about my order"},
-		{arg: "the password reset link expired, please resend"},
-		{body: `{"username": "alice", "password": "hunter2"}`},
-		{arg: "review the ../notes folder later"}, // relative-looking, benign phrase
-		{arg: "ignore the previous email, the meeting moved to 3pm"},
-	}
+	benign := loadBenignCorpus(t)
 
 	var fp int
 	for _, c := range benign {
@@ -179,6 +176,30 @@ func TestStrixBenignControl(t *testing.T) {
 		}
 	}
 	t.Logf("false positives: %d/%d", fp, len(benign))
+}
+
+func loadBenignCorpus(t *testing.T) []strixCase {
+	t.Helper()
+
+	b, err := os.ReadFile(filepath.Join("testdata", "benign_corpus.json"))
+	if err != nil {
+		t.Fatalf("read benign corpus: %v", err)
+	}
+	var doc struct {
+		Cases []struct {
+			Arg    string `json:"arg"`
+			Target string `json:"target"`
+			Body   string `json:"body"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("parse benign corpus: %v", err)
+	}
+	out := make([]strixCase, 0, len(doc.Cases))
+	for _, c := range doc.Cases {
+		out = append(out, strixCase{arg: c.Arg, target: c.Target, body: c.Body})
+	}
+	return out
 }
 
 func runStrix(t *testing.T, w *gwaf.WAF, c strixCase) gwaf.Decision {
@@ -198,6 +219,15 @@ func runStrix(t *testing.T, w *gwaf.WAF, c strixCase) gwaf.Decision {
 
 	tx.SetRequestLine(method, target, "HTTP/1.1")
 	tx.SetRemoteAddr("192.0.2.1")
+	// Ordinary protocol hygiene, sent so this harness and the Coraza comparison
+	// harness present the same request. It matters there: CRS scores a missing
+	// Host header at 5, which is its entire anomaly threshold, so without these
+	// every request blocks for a reason unrelated to the payload under test.
+	tx.AddRequestHeader("Host", "example.com")
+	tx.AddRequestHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+	tx.AddRequestHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	tx.AddRequestHeader("Accept-Language", "en-US,en;q=0.9")
+	tx.AddRequestHeader("Accept-Encoding", "gzip, deflate")
 	if c.body != "" {
 		tx.AddRequestHeader("Content-Type", "application/json")
 	}
