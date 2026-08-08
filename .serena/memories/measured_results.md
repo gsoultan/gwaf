@@ -116,6 +116,26 @@ rather than a new heuristic.
 default must **not** block `1=1`, `javascript:foo`, `system('id')`, and the
 Medium WAF must. A tier that changes no verdict is decoration.
 
+### Retiring a rule: the corpus is not enough evidence
+
+`TestRetirementCandidates` (env-gated, root package) removes a rule and re-runs
+the evasion corpus. Six of ten candidates lost nothing. **Only four were actually
+retirable**, and the difference is the lesson:
+
+A corpus is the cases somebody thought of. After the corpus vote, each rule's own
+*canonical* payloads were fired at a WAF built without it — and two "redundant"
+rules turned out to carry real coverage:
+
+- **4006** — `jndi:ldap://host/a` has no `${` for `javaser` to anchor on.
+- **4016** — `preg_replace('/x/e', …)` scores 4, one short of `phpi`'s threshold.
+
+Retired: 4003, 4004, 4008, 4009. Ruleset 92 → 84 rules, 825 → 813 literals,
+8,947 → 8,757 automaton states, chains unchanged, still 0 unconditional. Evasion
+corpus unchanged at 271/271; CRS corpus −2 of 5,066.
+
+**Always run the canonical-payload check before deleting a rule.** The corpus
+vote alone would have removed two rules that work.
+
 ### Two process failures worth not repeating
 
 **I reported "gates clean" twice on a `make check` that never ran the tests.**

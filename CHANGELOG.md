@@ -6,6 +6,29 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+### Removed
+
+- **Four literal rules the structural detectors superseded**: 4003 (PHP stream
+  wrappers), 4004 (PHP open tags), 4008 (Java serialization headers) and 4009
+  (the Spring4Shell class-loader walk). `detect/phpi` and `detect/javaser` read
+  all four structurally. The ruleset goes 92 → 84 rules, 825 → 813 prefilter
+  literals and 8,947 → 8,757 automaton states, with the transform-chain count
+  unchanged and still nothing unconditional.
+
+  Retirement was measured, not assumed. `TestRetirementCandidates` removes each
+  candidate in turn and re-runs the corpus — and then, because **a corpus is only
+  the cases somebody thought of**, each rule's own canonical payloads were fired
+  at a WAF built without it.
+
+  That second step is why this list is four rules and not six. The corpus said
+  4006 and 4016 were redundant too, and they are not: `jndi:ldap://host/a`
+  carries no `${` for `javaser` to anchor on, and `preg_replace('/x/e', …)`
+  scores one short of `phpi`'s threshold. Both stayed. The IDs are retired rather
+  than reused — they appear in audit logs and in exceptions already written.
+
+  Evasion corpus unchanged at 271/271 with 0/124 false positives. The CRS corpus
+  moves by −2 stages of 5,066, which is the honest cost.
+
 ### Added
 
 - **The Medium confidence tier, and `OperatorAt` on every semantic detector.**

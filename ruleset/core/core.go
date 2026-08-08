@@ -113,6 +113,21 @@ const (
 	//
 	// Retired, not reused: the IDs appear in audit logs and in any exception
 	// already written against them.
+	// 4003, 4004, 4008 and 4009 are retired. They were literal rules for PHP
+	// wrappers, PHP open tags, Java serialization headers and the Spring4Shell
+	// class-loader walk, and detect/phpi and detect/javaser now read all four
+	// structurally. Retirement was measured rather than assumed: each was removed
+	// in turn and the corpus re-run, and then — because a corpus is only the
+	// cases somebody thought of — the rule's own canonical payloads were fired at
+	// a WAF built without it.
+	//
+	// That second step is what makes this list four rules long instead of six.
+	// The corpus said 4006 and 4016 were redundant too, and they are not:
+	// "jndi:ldap://host/a" carries no "${" for javaser to anchor on, and
+	// "preg_replace('/x/e', …)" scores one short of phpi's threshold. Both stayed.
+	//
+	// Retired, not reused: the IDs appear in audit logs and in any exception
+	// already written against them.
 	IDLFIPHPWrapper       types.RuleID = 4003
 	IDPHPCodeUpload       types.RuleID = 4004
 	IDXMLEntity           types.RuleID = 4005
@@ -123,10 +138,7 @@ const (
 	IDShelliSemantic      types.RuleID = 4010
 	// IDJavaSemantic and IDPHPSemantic read invocation structure rather than
 	// class or function names, which is what the literal rules around them
-	// cannot do. They are additions rather than replacements for now: the
-	// literal rules each carry a payload the detector has not been measured
-	// against, and retiring one before that measurement exists is how coverage
-	// disappears quietly.
+	// cannot do.
 	IDJavaSemantic types.RuleID = 4018
 	IDPHPSemantic  types.RuleID = 4019
 
@@ -633,65 +645,6 @@ func requestRules() rules.Set {
 			Tags:       []string{"rce", "php", "owasp-a03", "semantic"},
 		},
 		{
-			ID:         IDLFIPHPWrapper,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			// The scheme, not an enumeration of the wrappers behind it.
-			//
-			// This rule used to list "php://input" and "php://filter" and stop
-			// there, which is the failure mode CLAUDE.md §2 warns about: an
-			// enumeration is only ever as complete as the day it was written.
-			// An attack simulation walked "phar://", "zip://", "glob://", and
-			// "php://memory" straight through it. "phar://" is the worst of
-			// them -- reaching a phar archive deserializes its metadata, so it
-			// is remote code execution wearing the costume of a file read.
-			//
-			// Matching "php://" covers input, filter, memory, temp, fd, stdin,
-			// and whatever PHP adds next, and it is *shorter* than the list it
-			// replaces. A wrapper scheme in a request value has no benign
-			// reading: these name a stream to the interpreter, not a resource a
-			// client can legitimately ask for.
-			Op: op.ContainsAny(
-				"php://", "phar://", "zip://", "glob://",
-				"expect://", "data://text", "compress.zlib://",
-			),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "PHP stream wrapper in input",
-			Tags:       []string{"lfi", "rce", "owasp-a03"},
-		},
-		{
-			ID:         IDPHPCodeUpload,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			// A PHP open tag in a request value is code being delivered, not
-			// data. This is the web-shell upload: the file is base64-encoded
-			// inside a JSON field, decoded by the origin, written to disk, and
-			// then requested.
-			//
-			// The tag alone is High rather than Certain because a narrow class
-			// of applications legitimately carries PHP source in a request: a
-			// code-sharing site, a CMS template editor, a paste bin. Those
-			// deployments should scope an exception to the field that carries
-			// it rather than lower the tier globally.
-			//
-			// "<?=" is the whole short echo tag, not "<?=$". It opens code in
-			// every PHP since 5.4, and requiring the "$" meant "<?=system('id')?>"
-			// and "<?=`id`?>" -- which echo a call rather than a variable --
-			// walked through. It is not ambiguous with XML either: "<?" starts a
-			// processing instruction whose target must be a Name, and "=" cannot
-			// start one.
-			Op:         op.ContainsAny("<?php", "<?=", "<%php"),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.High,
-			Msg:        "PHP code in request value",
-			Tags:       []string{"rce", "upload", "owasp-a03"},
-		},
-		{
 			ID:      IDScriptInUpload,
 			Phase:   types.PhaseRequestHeaders,
 			Targets: []types.Target{{Kind: types.TargetRequestURI}},
@@ -1067,27 +1020,6 @@ func requestRules() rules.Set {
 			Tags:       []string{"rce", "jndi", "cve-2021-44228", "owasp-a03"},
 		},
 		{
-			ID:         IDJavaDeserialization,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			// A Java serialized object stream. The format begins with the magic
-			// 0xAC 0xED followed by a two-byte version, and base64 of those bytes
-			// begins "rO0AB" -- which is why that five-character string is a
-			// reliable fingerprint rather than a guess.
-			//
-			// Anchored at the start of the value, not merely contained in it.
-			// Five base64 characters would otherwise collide by chance inside a
-			// long enough blob, and a serialized stream that does not begin with
-			// its own magic is not one. The anchor is what makes this Certain.
-			Op:         javaSerializedStream(),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "Java serialized object in request value",
-			Tags:       []string{"rce", "deserialization", "owasp-a08"},
-		},
-		{
 			ID:         IDPHPObjectInjection,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
@@ -1110,23 +1042,6 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "PHP serialized object in request value",
 			Tags:       []string{"rce", "deserialization", "php", "owasp-a08"},
-		},
-		{
-			ID:         IDSpring4Shell,
-			Phase:      types.PhaseRequestHeaders,
-			Targets:    argTargets,
-			Transforms: decodeChain,
-			// Spring4Shell (CVE-2022-22965). Data binding walks a property path
-			// from the request into the bean, and "class.module.classLoader"
-			// walks out of the bean and into Tomcat's logging configuration,
-			// where the attacker writes a JSP. The payload is a *parameter name*,
-			// which is why argTargets carrying TargetArgNames matters here.
-			Op:         op.ContainsAny("class.module.classloader", "class.classloader"),
-			Actions:    []rules.Action{rules.Block},
-			Severity:   types.SeverityCritical,
-			Confidence: types.Certain,
-			Msg:        "Spring class loader property path in request",
-			Tags:       []string{"rce", "cve-2022-22965", "owasp-a03"},
 		},
 		{
 			ID:         IDPrototypePollution,
@@ -1832,22 +1747,6 @@ func traversalSep(v []byte, i int) int {
 		return 3
 	}
 	return 0
-}
-
-// the lowercased form because the transform chain lowercases before matching,
-// and the raw magic is unaffected by case folding.
-func javaSerializedStream() rules.Operator {
-	return op.Func("java_serialized_stream", func(v []byte) bool {
-		// Leading whitespace is already gone -- the chain strips it -- but a
-		// value quoted inside another encoding can still arrive with padding.
-		for len(v) > 0 && (v[0] == '"' || v[0] == '\'') {
-			v = v[1:]
-		}
-		if len(v) >= 4 && v[0] == 0xac && v[1] == 0xed {
-			return true
-		}
-		return len(v) >= 5 && string(v[:5]) == "ro0ab"
-	}).WithLiterals("ro0ab", "\xac\xed")
 }
 
 // phpSerializedObject reports PHP serialized data reaching unserialize().
