@@ -217,6 +217,17 @@ func tokenize(dst []token, src []byte, ctx context) []token {
 		case isSpace(c):
 			i++
 
+		// U+00A0 spelled as UTF-8 rather than as a raw byte. isSpace already
+		// accepts the raw 0xA0, and accepting one encoding of a character but
+		// not the other is not a decision, it is a gap: the mutation fuzzer
+		// found "1'\xc2\xa0OR\xc2\xa0'1'='1" walking through while the raw-byte
+		// spelling of the identical payload was blocked. Consuming both bytes
+		// matters -- treating only the 0xA0 as space leaves the 0xC2 welded to
+		// the previous token, which is why the payload still scored below the
+		// threshold.
+		case c == 0xc2 && i+1 < len(src) && src[i+1] == 0xa0:
+			i += 2
+
 		case c == '-' && i+1 < len(src) && src[i+1] == '-':
 			dst = append(dst, token{kind: tkComment, text: src[i:], off: i})
 			i = len(src)

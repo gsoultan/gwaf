@@ -310,9 +310,21 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 				}
 				if j < len(toks) && toks[j].kind == tkKeyword &&
 					lowerWord(toks[j].text) == "select" {
-					sigs |= SignalUnionSelect
-					if split {
-						sigs |= SignalCommentSplit
+					// A real UNION SELECT is followed by a select-list: a column
+					// reference leading to FROM, numbers, NULL, a function, '*',
+					// or a comment. Prose that happens to place "union select"
+					// adjacent -- "the UNION SELECT pattern is a classic
+					// injection example" -- is followed by a run of English words
+					// and none of that. Requiring the list is what tells the two
+					// apart, and it is the difference between a grammar engine and
+					// a keyword matcher. The docstring already promised "the union
+					// selected a representative" would not fire; this extends the
+					// same promise to the literal keyword pair.
+					if selectListFollows(toks, j+1) {
+						sigs |= SignalUnionSelect
+						if split {
+							sigs |= SignalCommentSplit
+						}
 					}
 				}
 			}
@@ -332,6 +344,51 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 				if j, _ := skipNoise(toks, i+1); j < len(toks) &&
 					toks[j].kind == tkKeyword && lowerWord(toks[j].text) == "delay" {
 					sigs |= SignalDangerFunction
+				}
+			}
+
+			// INTO OUTFILE / INTO DUMPFILE writes a file the server then serves
+			// or executes, which is the standard MySQL path from injection to
+			// code execution. Neither pair has a parenthesis, so the call check
+			// above cannot see it, and the CRS differential found both walking
+			// through while CRS blocked them.
+			//
+			// The keyword pair carries the verdict alone: "into outfile" is not a
+			// phrase English produces, unlike the bare keywords it is built from.
+			//
+			// The destination path is required: MySQL rejects INTO OUTFILE
+			// without a quoted literal, so demanding one costs no attack and
+			// keeps the keyword pair out of prose. "put the files into outfile
+			// storage next week" is a sentence, not a write.
+			if w == "into" {
+				if j, _ := skipNoise(toks, i+1); j < len(toks) &&
+					toks[j].kind == tkKeyword {
+					switch lowerWord(toks[j].text) {
+					case "outfile", "dumpfile":
+						if k, _ := skipNoise(toks, j+1); k < len(toks) &&
+							(toks[k].kind == tkString || toks[k].kind == tkUnterminated) {
+							sigs |= SignalDangerFunction
+						}
+					}
+				}
+			}
+
+			// PROCEDURE ANALYSE() is MySQL's information-disclosure primitive:
+			// appended to a query it leaks column metadata, and it is how a blind
+			// injection is turned into an error-based one. "analyse" tokenizes as
+			// an identifier, so the pair has to be recognised here.
+			// The call parentheses are required for the same reason: MySQL's is
+			// ANALYSE(...), so demanding them keeps "the procedure analyse step"
+			// out while costing no payload.
+			if w == "procedure" {
+				if j, _ := skipNoise(toks, i+1); j < len(toks) {
+					switch lowerWord(toks[j].text) {
+					case "analyse", "analyze":
+						if k, _ := skipNoise(toks, j+1); k < len(toks) &&
+							toks[k].kind == tkLParen {
+							sigs |= SignalDangerFunction
+						}
+					}
 				}
 			}
 			_ = w
@@ -532,6 +589,61 @@ func isQueryAssignment(toks []token, j int) bool {
 	}
 	// "?" may not be an operator token; accept any single-byte separator.
 	return len(sep.text) == 1 && (sep.text[0] == '?' || sep.text[0] == '&')
+}
+
+// selectListFollows reports whether the tokens starting at i look like a SQL
+// select-list rather than a run of prose.
+//
+// The two are told apart by what a SELECT is allowed to be followed by. A
+// column list contains numbers, NULL, '*', a quoted string, a function call, a
+// qualified name (a.b), a comma, or it leads to FROM or a comment. English does
+// none of these: "the pattern is a classic injection example" is a sequence of
+// bare identifiers with no separators. Three bare identifiers in a row cannot be
+// a select-list -- "SELECT a b" is "a AS b", but "SELECT a b c" is a syntax
+// error -- so a run of them is the tell.
+//
+// It scans a bounded window: real injections declare their intent early, and
+// prose that has not shown SQL structure within a handful of tokens is not going
+// to.
+func selectListFollows(toks []token, i int) bool {
+	const window = 8
+	proseRun := 0
+	for n := 0; i < len(toks) && n < window; i, n = i+1, n+1 {
+		switch toks[i].kind {
+		case tkNumber, tkString, tkComment, tkComma, tkLParen, tkDot,
+			tkOperator, tkOther:
+			// Structure a select-list has and English does not: a number, a
+			// quoted literal, a comma between columns, a function's '(', a
+			// qualified name's '.', '*', or a comment splitting the list.
+			return true
+		case tkKeyword:
+			// Only the keywords that actually make a SELECT a query count. "from"
+			// and "into" define the statement; "null" is a canonical injected
+			// column. The rest -- is, in, not, or, and, as, like, between -- are
+			// ordinary English words that happen to be SQL keywords, so they are
+			// treated as prose here, which is the whole reason a grammar engine
+			// beats a keyword list.
+			switch lowerWord(toks[i].text) {
+			case "from", "into", "null", "values", "procedure":
+				return true
+			}
+			proseRun++
+			if proseRun >= 3 {
+				return false
+			}
+		case tkIdent:
+			proseRun++
+			if proseRun >= 3 {
+				return false // three words in a row with no SQL structure: prose
+			}
+		default:
+			// tkSemi, tkRParen, tkEOF: the list ended without proving itself
+			// either way. A short all-word run (one or two columns, e.g. an
+			// implicit alias) stays a plausible list.
+			return proseRun < 3
+		}
+	}
+	return proseRun < 3
 }
 
 // skipNoise advances past comment tokens, reporting whether any were skipped.

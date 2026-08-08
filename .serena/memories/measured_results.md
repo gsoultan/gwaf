@@ -70,9 +70,35 @@ Corpus after the protocol/robustness phases were added: 257 attacks, 104 benign.
 
 | | gwaf core | converted CRS 4.25.1 |
 |---|---|---|
-| Attacks blocked | **256/257 (99%)** | 185/257 (71%) |
-| False positives | **0/104** | 3/104 |
+| Attacks blocked | **306/307 (99%)** | 185/257 (71%, older corpus) |
+| False positives | **0/145** | 3/104 (older corpus) |
 | Rules imported | n/a | 263 of 786 directives |
+
+### The zero-FP gate is the load-bearing test
+
+`./run.sh benign` is a corpus built to *look* hostile: security prose, code shown
+as documentation, SQL keywords doing English work, paths that are URLs. It found
+three real false positives on its first run — gwaf firing on its own garrison —
+and all three are fixed:
+
+- `the UNION SELECT pattern is a classic injection example` (rule 2010)
+- `cd ../.. then run make from the project root` (rule 1004)
+- the UTF-8 spelling of the `%a0` separator, via the mutation fuzzer
+
+**A fourth was my test being wrong, not gwaf.** A literal `<script>` in a value is
+blocked by design, and the project writes benign prose as "script tags"; treating
+that as an FP would have been the actual mistake. Distinguish "gwaf is wrong" from
+"the test case is unreasonable" before weakening a detector.
+
+### The mutation fuzzer needs a validity oracle
+
+`./run.sh mutate` mutates payloads gwaf blocks and re-fires. Its first run
+reported four bypasses; **only one was real** (UTF-8 NBSP). The other three were
+mutations that broke the payload: `/**/` and NBSP are whitespace to a SQL lexer
+and neither is to an HTML parser, so `<img/**/src=x/**/onerror=…>` never creates
+an `onerror` attribute and does not execute. Mutators are now grouped by the
+grammar they are sound in. A fuzzer that reports a broken payload as a bypass is
+the harness lying.
 
 The single core miss is `hpp/split-xss` — `q=<img src=x` and `q=onerror=alert(1)>`
 as two values of the same parameter. Neither half is XSS alone, and gwaf
@@ -108,6 +134,22 @@ Every one of these was invisible to a passing test suite:
 
 Point real tools at the artefact that ships, not only at the data structure
 behind it.
+
+### The road to dropping CRS
+
+`./run.sh learn` runs a core target and a converted-CRS target on the same
+payloads and prints only the disagreements. Anything CRS blocks and gwaf misses
+is a gap gwaf must grow natively; that list is the roadmap.
+
+First real run found two — `INTO OUTFILE` and `PROCEDURE ANALYSE()` — both now
+absorbed into `detect/sqli` natively. Current state: **0 gaps, 3 gwaf wins**
+(CRS misses `;id`, `php://filter`, and `&& wget`).
+
+Its first *apparent* run reported zero gaps and was lying: it used `probe_raw`,
+which sends URLs verbatim, so every payload containing a space failed with curl
+error 000 and both targets "agreed". The phase now guards on 000 and says so.
+Same failure class as the staticcheck skip in CLAUDE.md §6 — a check that reports
+success it did not earn.
 
 **The pentest harness found what the unit suite structurally could not.** The
 negation-inversion bug lived in generated source; every unit test asserted on the

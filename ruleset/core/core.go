@@ -367,11 +367,10 @@ func requestRules() rules.Set {
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
 			Transforms: decodeChain,
-			// A single "../" appears in legitimate relative references, but a
-			// repeated segment does not: nothing a browser or client library
-			// emits walks two levels up inside one parameter. Whitespace is
-			// stripped by the chain, so padded variants are covered too.
-			Op:         op.ContainsAny("../..", `..\..`, "..%2f..", `..%5c..`),
+			// A single "../" appears in legitimate relative references, but two
+			// *consecutive* segments do not: nothing a browser or client library
+			// emits walks two levels up inside one parameter.
+			Op:         repeatedTraversal(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
@@ -1624,6 +1623,60 @@ func readsArgs(r rules.Rule) bool {
 // The anchor is what lets this ship at Certain.
 //
 // The literal hint is the prefilter's promise (docs/RULES.md §5). "ro0ab" is
+// repeatedTraversal matches two *consecutive* "../" segments.
+//
+// It used to be op.ContainsAny("../.."), which was a false positive: the rule's
+// transform chain strips whitespace, so the search query "cd ../.. then run make
+// from the project root" arrives as "cd../..thenrunmake..." and contains the
+// literal. Telling someone how to build a project is not an attack, and a WAF
+// that blocks it gets uninstalled.
+//
+// The distinction is the separator after the second segment. Real traversal
+// walks: "../../etc/passwd" is "../" then "../". The prose is one "../" (welded
+// on from "cd ") followed by ".." that leads nowhere. Requiring two segments
+// that each terminate in a separator keeps every walking payload and drops the
+// sentence.
+//
+// The literals are kept for the prefilter and are deliberately looser than the
+// predicate -- they only decide which rules are candidates, never the verdict.
+func repeatedTraversal() rules.Operator {
+	return op.Func("repeated_traversal", func(v []byte) bool {
+		runs := 0
+		for i := 0; i+2 < len(v); {
+			if v[i] == '.' && v[i+1] == '.' {
+				if n := traversalSep(v, i+2); n > 0 {
+					runs++
+					if runs >= 2 {
+						return true
+					}
+					i += 2 + n
+					continue
+				}
+			}
+			runs = 0
+			i++
+		}
+		return false
+	}).WithLiterals("../..", `..\..`, "..%2f..", `..%5c..`)
+}
+
+// traversalSep returns the length of a path separator at i, in the spellings
+// that survive the chain: a literal slash, or a percent escape left over from a
+// value that was encoded more than once. The chain lowercases, so "%2F" is
+// already "%2f" here.
+func traversalSep(v []byte, i int) int {
+	if i < len(v) && (v[i] == '/' || v[i] == '\\') {
+		return 1
+	}
+	if i+2 < len(v) && v[i] == '%' && v[i+1] == '2' && v[i+2] == 'f' {
+		return 3
+	}
+	if i+2 < len(v) && v[i] == '%' && v[i+1] == '5' && v[i+2] == 'c' {
+		return 3
+	}
+	return 0
+}
+
 // the lowercased form because the transform chain lowercases before matching,
 // and the raw magic is unaffected by case folding.
 func javaSerializedStream() rules.Operator {

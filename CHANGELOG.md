@@ -8,6 +8,42 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **Three false positives, found by a benign corpus built to look hostile.** A WAF
+  that blocks real traffic is uninstalled by Friday, and its detection rate is
+  then zero because it is not running.
+  - `the UNION SELECT pattern is a classic injection example` was blocked.
+    `SignalUnionSelect` was worth 5 and reached the threshold alone, so any
+    adjacent UNION and SELECT fired — which is the keyword matching this detector
+    exists to replace. A real UNION SELECT is followed by a select-list; prose is
+    followed by English, and that is now the test.
+  - `cd ../.. then run make from the project root` was blocked. Rule 1004 matched
+    the literal `../..` and its chain strips whitespace, so the sentence arrived
+    as `cd../..thenrunmake…`. It is now structural: two *consecutive* segments
+    that each end in a separator, which every walking payload has and the
+    sentence does not.
+  - `1%a0OR%a01=1` in its UTF-8 spelling. The tokenizer accepted the raw `0xA0`
+    and not `0xC2 0xA0`, which is not a decision but a gap — the same character,
+    two encodings, two verdicts. Found by the mutation fuzzer.
+
+- **`INTO OUTFILE` and `PROCEDURE ANALYSE()` were not detected**, both found by
+  running the converted CRS side by side with gwaf's own ruleset and diffing the
+  verdicts. The first is the standard MySQL route from injection to code
+  execution — write a PHP file into the webroot and request it. Neither has the
+  shape the danger-call check looks for: `INTO OUTFILE` has no parentheses and
+  `analyse` tokenizes as an identifier. The grammar carries the distinction, so
+  the quoted path and the call parentheses are both required and `log into the
+  portal` stays clean.
+
+- **The XSS polyglot walked through.** Two independent holes: `scanBreakout`
+  stopped its separator run at `*`, though `/**/` between attributes separates
+  them exactly as a space does once a browser is inside a tag; and a handler
+  assignment with no tag or quote to anchor on was not read at all.
+  `SignalHandlerAssignment` is worth 2 and never enough alone — `onclick=alert(1)`
+  as a whole value is a string people write about — but with the `javascript:`
+  scheme the same value carries, it is the polyglot.
+
+### Fixed
+
 - **Writing a command's full path bypassed shell-injection detection.** `; id`
   was blocked and `; /usr/bin/id` was not: `commandWord` stops at the leading
   slash, and `scanPaths` only resolved basenames against the interpreter list, so

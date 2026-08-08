@@ -88,6 +88,17 @@ const (
 
 	// SignalCommentBreakout is "-->" escaping an HTML comment.
 	SignalCommentBreakout
+
+	// SignalHandlerAssignment is an event-handler name assigned a call, standing
+	// on its own rather than inside a tag or after a quote that closed one.
+	//
+	// Weak by design and never enough alone: "onclick=alert(1)" as a whole
+	// parameter value is not an attack until something places it inside a tag,
+	// and blocking it outright would block every article that quotes it. It
+	// corroborates — with a javascript: scheme in the same value it is the
+	// Ostrowski XSS polyglot, whose separators are comments and parentheses
+	// rather than spaces, so no breakout or tag scan anchors on it.
+	SignalHandlerAssignment
 )
 
 // String implements fmt.Stringer so a decision can say what it saw.
@@ -126,6 +137,9 @@ func (s Signal) String() string {
 	if s&SignalCommentBreakout != 0 {
 		add("comment_breakout")
 	}
+	if s&SignalHandlerAssignment != 0 {
+		add("handler_assignment")
+	}
 	if len(out) == 0 {
 		return "none"
 	}
@@ -150,6 +164,8 @@ func weightOf(s Signal) int {
 	case SignalSinkCall:
 		return 2
 	case SignalCommentBreakout:
+		return 2
+	case SignalHandlerAssignment:
 		return 2
 	default:
 		return 0
@@ -236,6 +252,7 @@ func (d *Detector) Analyze(value []byte) Verdict {
 	// looks like a new one. Checked separately because it is about the boundary
 	// with markup the value did not contain, so there is no tag to anchor to.
 	sigs |= scanBreakout(src)
+	sigs |= scanHandlerAssignment(src)
 
 	total := 0
 	for bit := Signal(1); bit != 0; bit <<= 1 {
@@ -413,6 +430,68 @@ func scanTag(src []byte, i int) (completed bool, sigs Signal) {
 	return i < len(src) || sawAttr, sigs
 }
 
+// scanHandlerAssignment finds an event-handler name assigned a function call,
+// anywhere in the value.
+//
+// It exists for payloads that carry a handler without giving the tag or breakout
+// scanners anything to anchor on. The Ostrowski XSS polyglot is the case: it
+// separates its tokens with comments and parentheses rather than whitespace, so
+// "oNcliCk=alert()" sits in the middle of "/* */(...)" and neither scan reaches
+// it. On its own that is a weak reading and stays below the threshold; with the
+// javascript: scheme the same value carries, it is the polyglot.
+//
+// Two conditions keep ordinary JavaScript out. The name must not be a property
+// access — "el.onclick = fn" is code someone is discussing, and the leading dot
+// says so. And the value must start a call, so "onclick=null" and "the onclick
+// handler" contribute nothing.
+func scanHandlerAssignment(src []byte) Signal {
+	for i := 0; i < len(src); i++ {
+		if !isAlpha(src[i]) {
+			continue
+		}
+		// Must start a token: a preceding dot makes it a property access, and a
+		// preceding name byte makes it the tail of a longer word.
+		if i > 0 && (src[i-1] == '.' || isNameByte(src[i-1])) {
+			for i < len(src) && isNameByte(src[i]) {
+				i++
+			}
+			continue
+		}
+
+		start := i
+		for i < len(src) && isNameByte(src[i]) {
+			i++
+		}
+		if !isEventHandler(lowerWord(src[start:i])) {
+			i--
+			continue
+		}
+
+		j := i
+		for j < len(src) && isSpace(src[j]) {
+			j++
+		}
+		if j >= len(src) || src[j] != '=' {
+			i--
+			continue
+		}
+		j++
+		for j < len(src) && isSpace(src[j]) {
+			j++
+		}
+		// The assigned value has to start a call: a name followed by '('.
+		nameStart := j
+		for j < len(src) && isNameByte(src[j]) {
+			j++
+		}
+		if j > nameStart && j < len(src) && src[j] == '(' {
+			return SignalHandlerAssignment
+		}
+		i--
+	}
+	return 0
+}
+
 // scanBreakout looks for a quote that closes an attribute followed by what
 // looks like a new attribute, which is the shape of escaping attr="...".
 func scanBreakout(src []byte) Signal {
@@ -420,9 +499,21 @@ func scanBreakout(src []byte) Signal {
 		if src[i] != '"' && src[i] != '\'' {
 			continue
 		}
+		// Skip whatever separates the closing quote from the next attribute
+		// name. Whitespace and '/' are the obvious ones; '*' is accepted once a
+		// '/' has been seen, because "/**/" between attributes separates them
+		// exactly as a space does -- a browser inside a tag reads the first '/'
+		// as a separator, "**" as an attribute name and the second '/' as
+		// another separator. That is why the Ostrowski XSS polyglot is written
+		// with comments instead of spaces, and it walked through here until the
+		// polyglot phase found it. A bare "*onclick" is one attribute name to a
+		// browser and executes nothing, so the '/' is required first.
 		j := i + 1
-		spaced := false
-		for j < len(src) && (isSpace(src[j]) || src[j] == '/') {
+		spaced, slashed := false, false
+		for j < len(src) && (isSpace(src[j]) || src[j] == '/' || (src[j] == '*' && slashed)) {
+			if src[j] == '/' {
+				slashed = true
+			}
 			j++
 			spaced = true
 		}
