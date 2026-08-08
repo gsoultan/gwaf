@@ -152,6 +152,75 @@ func TestDoubleDecodedReading(t *testing.T) {
 	}
 }
 
+// TestMultiEncodedReading covers input that survives two decoders and is still
+// encoded. "%25252e%25252e%25252f" walked through the whole engine: the
+// one-pass reading leaves "%252e%252e%252f", a rule's own urlDecode transform
+// makes that "%2e%2e%2f", and nothing ever spells "../".
+//
+// It is a separate reading rather than more passes on the double-encoded one
+// because decoding further can erase the evidence — see ClassMultiEncoded, and
+// the Apache CVE-2021-42013 case in the evasion corpus that proved it.
+func TestMultiEncodedReading(t *testing.T) {
+	for _, tt := range []struct{ src, want string }{
+		{"%25252e%25252e%25252f", "../"},
+		{"%2525252f", "/"},
+		{"%25252Fetc%25252Fpasswd", "/etc/passwd"},
+	} {
+		t.Run(tt.src, func(t *testing.T) {
+			got, ok := readingFor(tt.src, ClassMultiEncoded)
+			if !ok {
+				t.Fatalf("no multi-encoded reading for %q", tt.src)
+			}
+			if got != tt.want {
+				t.Errorf("= %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMultiEncodedIsNotClaimedForOrdinaryDoubleEncoding keeps the extra reading
+// off the common path: "%252e" is two decoders' worth and already covered.
+func TestMultiEncodedIsNotClaimedForOrdinaryDoubleEncoding(t *testing.T) {
+	for _, src := range []string{"%252e%252e%252f", "100%25 cotton", "%25"} {
+		if Detect([]byte(src)).Has(ClassMultiEncoded) {
+			t.Errorf("%q claimed multi-encoding", src)
+		}
+	}
+}
+
+// TestPercentUReading covers IIS's own encoding, which is not in any URI
+// standard and is decoded by IIS and ASP.NET regardless.
+func TestPercentUReading(t *testing.T) {
+	for _, tt := range []struct{ src, want string }{
+		{"%u002e%u002e%u002fetc", "../etc"},
+		// Windows best-fit narrowing: neither is a slash until it reaches the
+		// handler.
+		{"%u002e%u002e%u2215etc", "../etc"},
+		{"%uFF0Fetc%uFF0Fpasswd", "/etc/passwd"},
+		{"%uFF1Cscript%uFF1E", "<script>"},
+	} {
+		t.Run(tt.src, func(t *testing.T) {
+			got, ok := readingFor(tt.src, ClassPercentU)
+			if !ok {
+				t.Fatalf("no percent-u reading for %q", tt.src)
+			}
+			if got != tt.want {
+				t.Errorf("= %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPercentUNeedsFourHexDigits: "%username%" and "%u" are ordinary text, and
+// a reading for every one of them would be a cost paid on benign traffic.
+func TestPercentUNeedsFourHexDigits(t *testing.T) {
+	for _, src := range []string{"%username%", "%u", "%u00", "%uZZZZ", "100%"} {
+		if Detect([]byte(src)).Has(ClassPercentU) {
+			t.Errorf("%q claimed a %%u escape", src)
+		}
+	}
+}
+
 func TestSeparatorReading(t *testing.T) {
 	got, ok := readingFor(`..\..\windows\system32`, ClassSeparator)
 	if !ok {

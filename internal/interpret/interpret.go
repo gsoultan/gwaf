@@ -77,11 +77,40 @@ const (
 	// ClassHTMLEntity marks an HTML entity reference, which matters wherever
 	// the value is reflected into a document before use.
 	ClassHTMLEntity
+
+	// ClassMultiEncoded marks input encoded more than twice, and exists as its
+	// own reading rather than as more passes on ClassDoubleEncoded because
+	// decoding further can destroy the evidence.
+	//
+	// "/cgi-bin/%%32%65%%32%65%2fapp.conf" (CVE-2021-42013) is the case that
+	// proved it: one pass leaves "%2e%2e/app.conf", where the traversal is
+	// visible, and decoding to the fixed point yields "/cgi-bin/../app.conf",
+	// which normalises to "/app.conf" and looks like an ordinary request. The
+	// two readings answer different questions and both are needed.
+	//
+	// Detected only on "%2525", the lead of a genuine triple encoding, so an
+	// ordinary doubly-encoded value costs nothing.
+	ClassMultiEncoded
+
+	// ClassPercentU marks "%uXXXX", which is IIS's own encoding and is not part
+	// of any URI standard. IIS and ASP.NET decode it anyway, and everything that
+	// fronts them has to know that: it is how the Unicode traversal of MS00-078
+	// worked, and %u002e%u002e%u2215 still reaches an unpatched stack today.
+	//
+	// The reading also resolves the characters Windows best-fit maps to ASCII
+	// when narrowing UTF-16 — U+2215 DIVISION SLASH and U+FF0F FULLWIDTH SOLIDUS
+	// both arrive at the origin as "/". That conversion is a property of the
+	// platform rather than of the encoding, which is exactly the kind of
+	// disagreement this package exists to enumerate.
+	ClassPercentU
 )
 
 // MaxReadings bounds the interpretations produced for one value, including the
 // verbatim reading. It also sizes the reusable buffers in a Set.
-const MaxReadings = 8
+//
+// Eight classes plus verbatim is nine; the tenth slot is headroom so that adding
+// a class is not silently a truncation.
+const MaxReadings = 10
 
 // maxEntityLen bounds how far an entity or UTF-7 run is scanned before being
 // treated as literal text, so a pathological value cannot drive a long search.
@@ -123,6 +152,12 @@ func (c Class) String() string {
 	if c.Has(ClassHTMLEntity) {
 		appendName("html_entity")
 	}
+	if c.Has(ClassMultiEncoded) {
+		appendName("multi_encoded")
+	}
+	if c.Has(ClassPercentU) {
+		appendName("percent_u")
+	}
 	return string(out)
 }
 
@@ -159,6 +194,12 @@ func Detect(src []byte) Class {
 			// decoding once.
 			if i+2 < len(src) && src[i+1] == '2' && (src[i+2] == '5' || src[i+2] == '5'-32) {
 				c |= ClassDoubleEncoded
+				// "%2525" is a percent encoded twice over, so the value survives
+				// two decoders and is still encoded. That needs the fixed-point
+				// reading as well as the one-pass one.
+				if i+4 < len(src) && src[i+3] == '2' && (src[i+4] == '5' || src[i+4] == '5'-32) {
+					c |= ClassMultiEncoded
+				}
 			}
 			// "%%32%65" is a malformed escape a strict decoder leaves alone but a
 			// permissive one (Apache, CVE-2021-42013) collapses: the leading '%'
@@ -172,6 +213,13 @@ func Detect(src []byte) Class {
 			// %00 is a NUL that a C-backed origin may truncate at.
 			if i+2 < len(src) && src[i+1] == '0' && src[i+2] == '0' {
 				c |= ClassNullTruncate
+			}
+			// "%u002e" is IIS's non-standard encoding. Four hex digits are
+			// required, so "%username%" and "%u" alone cost nothing.
+			if i+5 < len(src) && (src[i+1] == 'u' || src[i+1] == 'U') {
+				if _, ok := hex4(src[i+2:]); ok {
+					c |= ClassPercentU
+				}
 			}
 			// Lead bytes of overlong two- and three-byte forms.
 			if i+2 < len(src) {
@@ -282,6 +330,12 @@ func (s *Set) Build(src []byte, classes Class) {
 	if classes.Has(ClassDoubleEncoded) {
 		s.addDecoded(src, ClassDoubleEncoded, urlDecodeInto)
 	}
+	if classes.Has(ClassMultiEncoded) {
+		s.addDecoded(src, ClassMultiEncoded, urlDecodeRepeatedInto)
+	}
+	if classes.Has(ClassPercentU) {
+		s.addDecoded(src, ClassPercentU, decodePercentUInto)
+	}
 	if classes.Has(ClassSeparator) {
 		s.addDecoded(src, ClassSeparator, backslashToSlashInto)
 	}
@@ -390,6 +444,123 @@ func urlDecodeInto(dst, src []byte) []byte {
 			dst = append(dst, c)
 			i++
 		}
+	}
+	return dst
+}
+
+// urlDecodeRepeatedInto decodes until the value stops changing, bounded.
+//
+// One extra pass covers a proxy and an origin that each decode once. It does not
+// cover three, and "%25252e%25252e%25252f" walked through on exactly that
+// arithmetic while the double-encoded form was blocked — a CDN in front of a
+// proxy in front of an application is three decoders, and that is an ordinary
+// deployment rather than an exotic one.
+//
+// Bounded at four passes — a CDN, a reverse proxy, an application server and a
+// framework is as long as a real chain gets. It is a fixed bound rather than a
+// loop to convergence because every ceiling in this engine is explicit
+// (CLAUDE.md §2): each pass rescans the value, so an unbounded loop prices a
+// pathological input at O(n²) and hands an attacker the fuel budget.
+func urlDecodeRepeatedInto(dst, src []byte) []byte {
+	dst = urlDecodeInto(dst, src)
+	for pass := 0; pass < 3; pass++ {
+		if !hasPercent(dst) {
+			break
+		}
+		n := urlDecodeInPlace(dst)
+		if n == len(dst) {
+			break // nothing decoded; already at the fixed point
+		}
+		dst = dst[:n]
+	}
+	return dst
+}
+
+// urlDecodeInPlace decodes b into itself and returns the new length. Safe
+// because decoding only ever shrinks, so the write cursor trails the read one.
+func urlDecodeInPlace(b []byte) int {
+	w := 0
+	for i := 0; i < len(b); {
+		if b[i] == '%' && i+2 < len(b) {
+			hi, ok1 := unhex(b[i+1])
+			lo, ok2 := unhex(b[i+2])
+			if ok1 && ok2 {
+				b[w] = hi<<4 | lo
+				w++
+				i += 3
+				continue
+			}
+		}
+		b[w] = b[i]
+		w++
+		i++
+	}
+	return w
+}
+
+// hex4 reads four hex digits and returns the value they spell.
+func hex4(src []byte) (uint16, bool) {
+	if len(src) < 4 {
+		return 0, false
+	}
+	var v uint16
+	for i := range 4 {
+		d, ok := unhex(src[i])
+		if !ok {
+			return 0, false
+		}
+		v = v<<4 | uint16(d)
+	}
+	return v, true
+}
+
+// bestFitASCII maps the characters Windows narrows to an ASCII byte when it
+// converts UTF-16 to a single-byte code page. Only the ones that matter for
+// traversal and injection are listed: a full best-fit table is thousands of
+// entries and every one of them is a claim about a code page.
+var bestFitASCII = map[uint16]byte{
+	0x2215: '/',  // DIVISION SLASH
+	0x2044: '/',  // FRACTION SLASH
+	0xFF0F: '/',  // FULLWIDTH SOLIDUS
+	0xFF3C: '\\', // FULLWIDTH REVERSE SOLIDUS
+	0xFF0E: '.',  // FULLWIDTH FULL STOP
+	0xFF07: '\'', // FULLWIDTH APOSTROPHE
+	0x2032: '\'', // PRIME
+	0x02BC: '\'', // MODIFIER LETTER APOSTROPHE
+	0xFF1C: '<',  // FULLWIDTH LESS-THAN SIGN
+	0xFF1E: '>',  // FULLWIDTH GREATER-THAN SIGN
+	0xFF08: '(',  // FULLWIDTH LEFT PARENTHESIS
+	0xFF09: ')',  // FULLWIDTH RIGHT PARENTHESIS
+	0xFF1D: '=',  // FULLWIDTH EQUALS SIGN
+}
+
+// decodePercentUInto resolves "%uXXXX" the way IIS does.
+//
+// An ASCII code point becomes its byte. A character Windows best-fit maps to
+// ASCII becomes what it maps to, which is the whole point of the reading:
+// %u2215 is not a slash to anything that reads Unicode correctly, and is a slash
+// by the time it reaches the handler. Anything else contributes its low byte,
+// which is what a narrowing conversion without a mapping produces.
+func decodePercentUInto(dst, src []byte) []byte {
+	for i := 0; i < len(src); {
+		if src[i] == '%' && i+5 < len(src) && (src[i+1] == 'u' || src[i+1] == 'U') {
+			if v, ok := hex4(src[i+2:]); ok {
+				switch {
+				case v < 0x80:
+					dst = append(dst, byte(v))
+				default:
+					if b, mapped := bestFitASCII[v]; mapped {
+						dst = append(dst, b)
+					} else {
+						dst = append(dst, byte(v))
+					}
+				}
+				i += 6
+				continue
+			}
+		}
+		dst = append(dst, src[i])
+		i++
 	}
 	return dst
 }

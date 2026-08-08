@@ -375,6 +375,18 @@ func isSpace(c byte) bool {
 	switch c {
 	case ' ', '\t', '\n', '\r', '\v', '\f':
 		return true
+	case 0xa0:
+		// MySQL's lexer accepts 0xA0 as whitespace, so "1%a0OR%a01=1" is a
+		// working injection that reads as one long identifier to a tokenizer
+		// that only knows ASCII. It is on every MySQL bypass cheat sheet for
+		// exactly that reason, and the pentest harness confirmed it walked
+		// through while the tab and newline forms of the same payload were
+		// blocked.
+		//
+		// Only 0xA0: the other bytes those lists suggest are either already
+		// here or are not whitespace to any engine we can name, and a separator
+		// that no origin honours is surface with no attack behind it.
+		return true
 	}
 	return false
 }

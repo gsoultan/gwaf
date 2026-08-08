@@ -385,6 +385,26 @@ func scanCommandPositions(src []byte, mark func(Signal, int, int)) {
 			continue
 		}
 
+		// An absolute path standing where a command belongs: "; /usr/bin/id".
+		// commandWord stops at the leading '/' and returns nothing, and
+		// scanPaths only resolves basenames against the interpreter list, so
+		// "/usr/bin/id" and "| /usr/bin/curl evil.test" were reaching the
+		// backend while the bare "; id" was blocked — writing out the full path
+		// was the whole bypass.
+		//
+		// Resolved here rather than in scanPaths because *command position* is
+		// what makes it safe: the basename is only consulted after a separator,
+		// so a URL like "/api/v1/ping" in an ordinary value is untouched. That
+		// is the distinction that lets the whole command vocabulary be used
+		// here, where scanPaths can only afford the interpreters.
+		if end, base := pathCommandWord(src, j); base != "" {
+			if commands[base] || interpreters[base] {
+				mark(SignalCommandPosition, j, end-j)
+				i = end - 1
+				continue
+			}
+		}
+
 		end, word := commandWord(src, j)
 		switch {
 		case word == "" && j < len(src) && src[j] == '$':
@@ -588,6 +608,54 @@ func commandWord(src []byte, i int) (end int, word string) {
 	return i, string(buf[:n])
 }
 
+// pathCommandWord reads an absolute path token at i and returns its final
+// component, which is the name the shell actually executes.
+//
+// "/usr/bin/id" runs id and "/bin/../bin/cat" runs cat, so the last component is
+// the command however many directories precede it. Quotes and backslashes are
+// skipped for the same reason commandWord skips them: the shell removes them
+// before resolving the path, so "/bin/c'a't" is cat.
+//
+// It returns "" for anything that is not an absolute path, for a path ending in
+// a separator, and for one whose last component is empty — none of those name a
+// command.
+func pathCommandWord(src []byte, i int) (end int, word string) {
+	if i >= len(src) || src[i] != '/' {
+		return i, ""
+	}
+
+	var buf [maxTokenLen]byte
+	n := 0
+	sawComponent := false
+
+	for ; i < len(src); i++ {
+		c := src[i]
+		switch {
+		case c == '\'' || c == '"' || c == '\\':
+			continue
+		case c == '/':
+			// A new component begins: whatever was accumulated was a directory.
+			n = 0
+			sawComponent = true
+		case isWordByte(c) || c == '.' || c == '-':
+			if n < len(buf) {
+				buf[n] = fold(c)
+				n++
+			}
+		default:
+			return i, pathWord(buf[:n], sawComponent)
+		}
+	}
+	return i, pathWord(buf[:n], sawComponent)
+}
+
+func pathWord(b []byte, sawComponent bool) string {
+	if !sawComponent || len(b) == 0 {
+		return ""
+	}
+	return string(b)
+}
+
 // globToken reports the end of a path-like token at i and how many wildcard
 // bytes it contains.
 func globToken(src []byte, i int) (end int, wildcards int) {
@@ -687,6 +755,15 @@ func scanPaths(src []byte, mark func(Signal, int, int)) {
 		// declared literals are the lowercase paths. The fuzz harness found
 		// exactly that: "0/nC" scored as an interpreter path while no literal
 		// covered it, so the rule could never have fired on it in practice.
+		// What follows the name decides whether it *is* the executable or merely
+		// a directory or a stem. "/bin/sh" ends there; "/static/js/node.min.js"
+		// continues into an extension and "/js/node/x" into another component,
+		// and neither runs an interpreter. Without this the signal fired on any
+		// URL carrying a bundled asset — /static/js/node.min.js is on a large
+		// share of the web — and it is worth 5 on its own, so it blocked.
+		if j < len(src) && (src[j] == '.' || src[j] == '/') {
+			continue
+		}
 		if interpreters[plainWord(src[i+1:j])] && i > 0 && src[i-1] != ' ' {
 			// Preceded by a path component, so this is /bin/sh rather than a
 			// sentence that happens to contain "/sh".
