@@ -133,3 +133,49 @@ func BenchmarkAnalyzeBenign(b *testing.B) {
 		d.Analyze(v)
 	}
 }
+
+// TestCodeSamplesArePassedButStatementsAreNot is the false positive a WordPress
+// replay found, next to the miss that shares a cause.
+//
+// A comment field carrying "<?php echo $name; ?>" is somebody explaining PHP,
+// and it blocked because an open tag alone reached the threshold. A body
+// carrying "system('X');" is a webshell being installed, and it passed because
+// a danger call was priced as corroboration only. Writing "<?php" is how PHP is
+// written; calling system() with an argument and terminating the statement is
+// not something prose does.
+func TestCodeSamplesArePassedButStatementsAreNot(t *testing.T) {
+	d := New()
+
+	// Code samples carrying a PHP *open tag* are not here: an open tag convicts
+	// alone and is meant to, because a PHP payload is very often just a tag and
+	// a body. Blocking "<?php echo $name; ?>" in a comment field is a real cost,
+	// and an embedder whose users write PHP in post bodies scopes an exception
+	// for those fields. What must keep passing is prose that merely *names* a
+	// function, which is what a security blog writes constantly.
+	t.Run("prose naming functions passes", func(t *testing.T) {
+		for _, benign := range []string{
+			"never eval() untrusted input in production",
+			"the system() function is dangerous, avoid it",
+			"call exec() only with escaped arguments",
+		} {
+			if v := d.Analyze([]byte(benign)); v.Detected() {
+				t.Errorf("false positive on %q (score %d, signals %v)", benign, v.Score, v.Signals)
+			}
+		}
+	})
+
+	t.Run("statements fire", func(t *testing.T) {
+		for _, attack := range []string{
+			"system('X');",
+			"blowfish=1&blowf=system('X');",
+			"passthru('id');",
+			"shell_exec('cat /etc/passwd');",
+			"<?php system($_GET['c']); ?>",
+			"<?php eval($_POST['x']); ?>",
+		} {
+			if v := d.Analyze([]byte(attack)); !v.Detected() {
+				t.Errorf("missed %q (score %d, signals %v)", attack, v.Score, v.Signals)
+			}
+		}
+	})
+}

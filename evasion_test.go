@@ -403,8 +403,17 @@ var evasions = []evasion{
 	// grammar is what makes these one rule rather than a list that ages.
 	{name: "phpobj/object header", technique: "none",
 		arg: `O:4:"User":2:{s:4:"name";s:5:"admin";s:7:"isAdmin";b:1;}`},
-	{name: "phpobj/array header", technique: "none",
-		arg: `a:2:{i:0;s:6:"system";i:1;s:2:"id";}`},
+	// An object hidden inside an array, which is the shape PHPGGC emits and the
+	// reason the scan does not stop at the outermost header.
+	//
+	// A *bare* data array — `a:2:{i:0;s:6:"system";i:1;s:2:"id";}` — used to be
+	// here and is deliberately gone. It is byte-indistinguishable from what
+	// WordPress's options API stores on every plugin settings save, so blocking
+	// it was a false positive with no attack behind it: unserialize() on an
+	// array of scalars instantiates nothing, so no magic method runs and there
+	// is no gadget to reach. The class name is what makes this injection.
+	{name: "phpobj/object nested in array", technique: "none",
+		arg: `a:2:{i:0;s:4:"pwn!";i:1;O:8:"stdClass":1:{s:1:"x";b:1;}}`},
 	{name: "phpobj/laravel gadget", technique: "none",
 		arg: `O:40:"Illuminate\Broadcasting\PendingBroadcast":1:{s:5:"event";s:7:"phpinfo";}`},
 	{name: "phpobj/monolog gadget", technique: "none",

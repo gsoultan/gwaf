@@ -1796,8 +1796,8 @@ func traversalSep(v []byte, i int) int {
 func phpSerializedObject() rules.Operator {
 	return op.Func("php_serialized_object", func(v []byte) bool {
 		for i := 0; i+3 < len(v); i++ {
-			// Object header: o:<digits>:"
-			if v[i] == 'o' || v[i] == 'a' {
+			// Object header: o:<digits>:" or c:<digits>:"
+			if v[i] == 'o' || v[i] == 'c' {
 				// Not part of a longer word -- "foo:1:" is not a header.
 				if i > 0 && isWordByte(v[i-1]) {
 					continue
@@ -1816,12 +1816,18 @@ func phpSerializedObject() rules.Operator {
 				if j >= len(v) {
 					continue
 				}
-				// O:<len>:"name" -- an object names its class.
-				// a:<count>:{ -- an array opens its members directly.
-				if v[i] == 'o' && v[j] == '"' {
-					return true
-				}
-				if v[i] == 'a' && v[j] == '{' {
+				// O:<len>:"name" and C:<len>:"name" both name a class. Only a
+				// named class can be instantiated, and only an instantiation
+				// can reach a magic method, so this is the whole attack.
+				//
+				// a:<count>:{ is deliberately *not* enough on its own. The rule
+				// is named for object injection, and unserialize() on an array
+				// of scalars builds nothing and calls nothing -- there is no
+				// gadget to reach. Matching it blocked WordPress's options API,
+				// which stores exactly that shape in admin-ajax on every plugin
+				// settings save. An object nested inside an array is still an
+				// object and is still found, because the scan continues.
+				if v[j] == '"' {
 					return true
 				}
 			}

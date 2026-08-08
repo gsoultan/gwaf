@@ -100,3 +100,46 @@ func TestSensitiveFileWithoutTraversal(t *testing.T) {
 		}
 	})
 }
+
+// TestPHPSerializedNeedsAnObject is the false positive a WordPress replay found.
+//
+// The rule is named for object injection and matched plain arrays too, so
+// "a:3:{s:7:"enabled";b:1;...}" blocked -- which is what WordPress's options API
+// stores in admin-ajax every time a plugin setting is saved.
+//
+// Requiring an object is not a weakening. The attack needs a class to
+// instantiate before a magic method (__wakeup, __destruct, __toString) can fire;
+// unserialize() on an array of scalars builds no objects and calls nothing, so
+// there is no gadget chain to reach. An object nested inside an array is still
+// an object, which is the shape PHPGGC actually emits.
+func TestPHPSerializedNeedsAnObject(t *testing.T) {
+	o := phpSerializedObject()
+
+	// Values arrive lowercased and whitespace-stripped: the rule runs behind
+	// decodeChain, so the operator never sees an uppercase "O:".
+	t.Run("objects fire", func(t *testing.T) {
+		for _, attack := range []string{
+			`o:8:"stdclass":1:{s:4:"data";s:3:"pwn";}`,
+			`a:2:{i:0;s:4:"pwn!";i:1;o:8:"stdclass":0:{}}`,
+			`o:24:"guzzlehttp\psr7\fnstream":1:{s:33:"_fn_close";s:6:"system";}`,
+			`c:11:"arrayobject":24:{x:i:0;a:0:{};m:a:0:{}}`,
+		} {
+			if _, ok := o.Eval(nil, []byte(attack)); !ok {
+				t.Errorf("missed %q", attack)
+			}
+		}
+	})
+
+	t.Run("scalar arrays pass", func(t *testing.T) {
+		for _, benign := range []string{
+			`a:3:{s:7:"enabled";b:1;s:5:"email";s:17:"alice@example.com";s:5:"limit";i:25;}`,
+			`a:2:{s:4:"name";s:5:"Alice";s:3:"age";i:30;}`,
+			`a:0:{}`,
+			`a:1:{i:0;a:1:{s:3:"key";s:5:"value";}}`,
+		} {
+			if _, ok := o.Eval(nil, []byte(benign)); ok {
+				t.Errorf("false positive on %q", benign)
+			}
+		}
+	})
+}

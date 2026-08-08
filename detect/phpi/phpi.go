@@ -84,6 +84,17 @@ const (
 	// SignalCloseTag is "?>". Weak alone: it appears in documentation and in XML
 	// processing instructions. Corroborating.
 	SignalCloseTag
+
+	// SignalDangerStatement is a danger call written as a complete statement —
+	// a non-empty argument list and a ';' terminator, as in "system('X');".
+	// SignalDangerCall stays corroborating because "never eval() untrusted
+	// input" is a sentence a security blog writes; this is the form prose does
+	// not produce, so it stands alone.
+	SignalDangerStatement
+
+	// SignalShellExec is PHP's backtick operator executing a command. It is only
+	// raised inside a PHP context, because a bare `id` is a markdown code span.
+	SignalShellExec
 )
 
 // String implements fmt.Stringer so a decision can say what it saw.
@@ -116,6 +127,12 @@ func (s Signal) String() string {
 	if s&SignalCloseTag != 0 {
 		add("close_tag")
 	}
+	if s&SignalDangerStatement != 0 {
+		add("danger_statement")
+	}
+	if s&SignalShellExec != 0 {
+		add("shell_exec")
+	}
 	if len(out) == 0 {
 		return "none"
 	}
@@ -125,11 +142,24 @@ func (s Signal) String() string {
 // weightOf prices each signal by what it means alone.
 func weightOf(s Signal) int {
 	switch s {
-	case SignalOpenTag, SignalStreamWrapper,
-		SignalVariableFunction, SignalConfigDirective:
+	case SignalStreamWrapper, SignalVariableFunction,
+		SignalConfigDirective, SignalDangerStatement:
 		return 5
+	case SignalShellExec:
+		return 4
 	case SignalDangerCall:
 		return 4
+	// An open tag convicts alone, and it was measured rather than assumed.
+	// Demoting it to corroborating did fix the one false positive a WordPress
+	// replay produced -- "<?php echo $name; ?>" in a comment field is somebody
+	// explaining PHP -- but it also dropped 32 real exploits from the same
+	// replay: RCE fell from 84% to 43% and upload webshells from 100% to 40%,
+	// because a PHP payload very often *is* just an open tag and a body. Two
+	// false positives are not worth 32 webshells. A blogging platform that
+	// carries PHP in its post bodies scopes an exception for those fields,
+	// which is narrower than every other embedder paying for it.
+	case SignalOpenTag:
+		return 5
 	case SignalSuperglobal:
 		return 3
 	case SignalCloseTag:
@@ -179,6 +209,13 @@ func (d *Detector) Analyze(value []byte) Verdict {
 	sigs |= scanWrappers(src)
 	sigs |= scanVariables(src)
 	sigs |= scanCalls(src)
+	// Backticks are PHP's shell-execution operator: "<?= `id` ?>" runs id. They
+	// are only read that way inside a PHP context, because a bare `id` is a
+	// markdown code span and those arrive constantly in comments and issue
+	// bodies.
+	if sigs&SignalOpenTag != 0 && hasBacktickExec(src) {
+		sigs |= SignalShellExec
+	}
 
 	total := 0
 	for bit := Signal(1); bit != 0; bit <<= 1 {
@@ -317,6 +354,71 @@ var configDirectives = []string{
 // Call position is the whole discriminator: "system" is a word, "system(" is an
 // invocation. Requiring the parenthesis is what keeps "the payment system
 // failed" out of the results while keeping "system('id')" in.
+// isCallStatement reports whether the argument list opening at v[open] is a
+// complete call statement: a non-empty argument list whose closing paren is
+// followed by ';'.
+//
+// This is the line between a sentence naming a function and PHP being executed.
+// "never eval() untrusted input in production" names one -- empty parens, no
+// terminator. "system('X');" is code. Nesting is tracked so that
+// "shell_exec(trim($x));" reads as one statement, and quotes are skipped so a
+// ')' or ';' inside an argument string does not end it early.
+func isCallStatement(v []byte, open int) bool {
+	depth, i := 0, open
+	for i < len(v) {
+		switch v[i] {
+		case '\'', '"':
+			q := v[i]
+			i++
+			for i < len(v) && v[i] != q {
+				if v[i] == '\\' {
+					i++
+				}
+				i++
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				// Empty argument list is how prose names a function.
+				if i == open+1 {
+					return false
+				}
+				for j := i + 1; j < len(v); j++ {
+					if isSpace(v[j]) {
+						continue
+					}
+					return v[j] == ';'
+				}
+				return false
+			}
+		}
+		i++
+	}
+	return false
+}
+
+// hasBacktickExec reports whether v contains a non-empty backtick pair on one
+// line. The line bound matters: two backticks pages apart in prose are two
+// separate code spans, not a command substitution.
+func hasBacktickExec(v []byte) bool {
+	for i := 0; i < len(v); i++ {
+		if v[i] != '`' {
+			continue
+		}
+		for j := i + 1; j < len(v); j++ {
+			if v[j] == '\n' {
+				break
+			}
+			if v[j] == '`' {
+				return j > i+1
+			}
+		}
+	}
+	return false
+}
+
 func scanCalls(v []byte) Signal {
 	var sigs Signal
 	for _, c := range dangerCalls {
@@ -340,6 +442,9 @@ func scanCalls(v []byte) Signal {
 			}
 			if k < len(v) && v[k] == '(' {
 				sigs |= SignalDangerCall
+				if isCallStatement(v, k) {
+					sigs |= SignalDangerStatement
+				}
 				break
 			}
 		}
