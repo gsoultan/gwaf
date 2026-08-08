@@ -8,6 +8,20 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **The UTF-7 reading had never fired on a real request.** `ClassUTF7` looked for
+  a literal `+`, but a bare `+` in a query string *is* a space — so every UTF-7
+  payload a client can send spells the shift `%2B`, and the class never saw one.
+  `+ADw-script+AD4-` was blocked and `%2BADw-script%2BAD4-` was not. This is the
+  reading named in its own comment for CVE-2026-21876, inert against the vector
+  gwaf is positioned around. `ClassSeparator` had the same hole (`%5C`), masked
+  only because rule 1004 matches the backslash form directly.
+
+  Found by auditing every class for the blind spot that made `ClassHTMLEntity`
+  inert, rather than by waiting for the next payload. `internal/interpret` now
+  carries `TestEveryClassSurvivesPercentEncoding`, a table every class must
+  appear in: detect the raw spelling and not the encoded one, and it does not
+  work. Three classes had shipped that way.
+
 - **Readings were blind to the encoding every request actually uses.** They are
   enumerated before the transform chain runs, so a value that arrived over a
   query string is still wearing its percent-escapes — and every class keyed on a

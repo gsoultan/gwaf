@@ -259,6 +259,21 @@ func Detect(src []byte) Class {
 					c |= ClassHTMLEntity
 				}
 			}
+			// "%2B" is the only way a client can send a UTF-7 shift: a bare '+'
+			// in a query string means space, so every real payload is encoded and
+			// the literal-'+' case below never saw one. That made the reading
+			// named for CVE-2026-21876 inert against the vector it exists for.
+			if b, n := percentByteAt(src, i); n == 3 && b == '+' {
+				if j := utf7RunEnd(src, i+n); j > i+n && j < len(src) && src[j] == '-' {
+					c |= ClassUTF7
+				}
+			}
+			// "%5C" is a backslash. Masked in practice by rules that match the
+			// backslash form directly, but a class that is blind to the only
+			// spelling a query string carries is a class waiting to be relied on.
+			if b, n := percentByteAt(src, i); n == 3 && b == '\\' {
+				c |= ClassSeparator
+			}
 			// Lead bytes of overlong two- and three-byte forms.
 			if i+2 < len(src) {
 				hi, ok1 := unhex(src[i+1])
@@ -727,11 +742,23 @@ func decodePercentUInto(dst, src []byte) []byte {
 // backslashToSlashInto reads backslashes as path separators, which Windows,
 // .NET, and several Java stacks do.
 func backslashToSlashInto(dst, src []byte) []byte {
-	for _, c := range src {
+	for i := 0; i < len(src); {
+		// "%5C" as well as a literal backslash: the reading is built before the
+		// transform chain, so a value from a query string still wears its
+		// escapes. Only the backslash is decoded here — the rest is copied
+		// verbatim, so this stays a separator reading rather than turning into a
+		// second URL decoder.
+		if b, n := percentByteAt(src, i); n == 3 && b == '\\' {
+			dst = append(dst, '/')
+			i += n
+			continue
+		}
+		c := src[i]
 		if c == '\\' {
 			c = '/'
 		}
 		dst = append(dst, c)
+		i++
 	}
 	return dst
 }
@@ -814,6 +841,22 @@ func decodeOverlongInto(dst, src []byte) []byte {
 // Explorer and still includes several server-side charset converters. Only the
 // ASCII range is resolved, because that is the range attack payloads live in.
 func decodeUTF7Into(dst, src []byte) []byte {
+	// A shift arrives as "%2B", because a literal '+' in a query string is a
+	// space. Undo that layer first so the scan below sees the '+' it looks for;
+	// the UTF-7 decoding is then identical for both spellings.
+	//
+	// Not decoded in place, unlike the entity reading: a long UTF-7 run can
+	// *grow*, since n base64 characters carry 3n/8 UTF-16 units and each can
+	// reach three bytes of UTF-8. The scratch buffer is only allocated for a
+	// value that carries both a percent escape and a shift sequence, and
+	// addDecoded keeps it for reuse afterwards.
+	if hasPercent(src) {
+		return utf7Decode(dst, urlDecodeInto(make([]byte, 0, len(src)), src))
+	}
+	return utf7Decode(dst, src)
+}
+
+func utf7Decode(dst, src []byte) []byte {
 	for i := 0; i < len(src); {
 		if src[i] != '+' {
 			dst = append(dst, src[i])

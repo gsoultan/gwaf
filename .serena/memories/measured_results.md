@@ -85,10 +85,39 @@ query string actually delivers:
   to `AddArgument` directly — which is how every unit test exercised it.
 - The same held for the fullwidth/best-fit reading.
 
-Both now read through one percent layer (`percentByteAt` / `percentRuneAt`), and
-`hasRawMarkup` does too so the CMS suppression still works. **When adding a
-reading, test it over HTTP, not only through the library API** — the two deliver
-different bytes, and the library path is the one that lies.
+Auditing the rest found **`ClassUTF7` blind the same way, and it is the
+CVE-2026-21876 vector.** A bare `+` in a query string is a space, so every UTF-7
+payload a client can send spells the shift `%2B` — the class had never fired on a
+real request. `ClassSeparator` too (`%5C`), masked only because rule 1004 matches
+the backslash form directly. Three of six classes had shipped inert.
+
+All now read through one percent layer (`percentByteAt` / `percentRuneAt`), and
+`hasRawMarkup` does too so the CMS suppression still works.
+`TestEveryClassSurvivesPercentEncoding` is the standing guard: **a new class goes
+in that table, and if it detects the raw spelling but not the encoded one it does
+not work.**
+
+**When adding a reading, test it over HTTP, not only through the library API** —
+the two deliver different bytes, and the library path is the one that lies.
+
+### Performance of the added readings: measured, no regression
+
+Three classes added and `MaxReadings` 8 → 10, so this needed checking. The
+machine was at load 54/15 cores, where `bench-guard` correctly refuses, so the
+deterministic metrics carried it:
+
+- **Fuel identical**: max fan-out 10,031,189 of 32,000,000 (31.3%) before and
+  after — byte-for-byte the same, measured in a `git worktree` at the
+  pre-change commit.
+- **0 allocs/op preserved** on BenignGET, BenignPOSTJSON, ManyArgs,
+  PrefilterOnly, Concurrent, RulesetScaling.
+- **Ruleset scaling still flat**: 331→360 ns from 10 to 10,000 rules.
+- Paired wall-clock, back to back: BenignGET 1940→1981 ns, BenignPOSTJSON
+  32.9→32.2 µs. Both inside the noise at that load.
+
+Absolute SLO numbers are still owed on a quiet machine with `benchstat`
+installed (`make bench-check`); the above is a paired comparison, not a
+certification.
 
 ### The zero-FP gate is the load-bearing test
 
