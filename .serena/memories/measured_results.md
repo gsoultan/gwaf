@@ -63,5 +63,30 @@ chains (55) are a real IR limit; five transforms account for 43
 
 Do not confuse the two halves when quoting a coverage number.
 
+### Real-tool pentest, core vs converted CRS (`test/pentest/run.sh`)
+
+Same target, same payloads, sqlmap + nikto + curl vectors, WAF-off control first.
+
+| | gwaf core | converted CRS 4.25.1 |
+|---|---|---|
+| Attacks blocked | **189/189 (100%)** | 103/189 (54%) |
+| False positives | **0/62** | 2/62 |
+| sqlmap WAF-on | no injection, 1504 blocks | no injection, 1310 blocks |
+
+**`t:cssDecode` is the highest-value missing transform, measured not guessed.**
+CRS 941100 *is* the `@detectXSS` rule and carries `t:cssDecode`, so it is skipped
+and every XSS category scores 0; 942100 (`@detectSQLi`) has no such transform,
+converts, and scores 3/3. Implementing one transform recovers the whole XSS tier.
+
+Both CRS false positives are CRS's own, faithfully translated: 942151 blocks the
+sentence "use substring(0,5) to trim the prefix", 930120 blocks a legitimate
+`web.config` upload because the filename is in `lfi-os-files.data`. gwaf's
+ruleset passes all five prose sentences.
+
+**The pentest harness found what the unit suite structurally could not.** The
+negation-inversion bug lived in generated source; every unit test asserted on the
+`rules.Set`, where negation was always correct. Point real tools at the artefact
+that actually ships, not only at the data structure behind it.
+
 ## Quality
 Coverage 83.6%. staticcheck + govulncheck clean. Race clean. Zero deps.
