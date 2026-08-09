@@ -433,7 +433,7 @@ func lowerASCII(s string) string {
 //
 // Enable it on an application that does not:
 //
-//	waf, err := gwaf.New(gwaf.WithRuleset(rules.Set{core.SSRFParamRule(1014)}))
+//	waf, err := gwaf.New(gwaf.WithRuleset(rules.Set{core.SSRFParamRule(1016)}))
 //
 // The navigation half of the same comparison -- "redirect_to", "next", "goto" --
 // ships in the default set, because an application sending its own users to

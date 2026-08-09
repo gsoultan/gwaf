@@ -138,6 +138,13 @@ func (r *Result) Reset() {
 type Evaluator struct {
 	candidates bitset.Set
 
+	// argNames and argValues back EvalContext.Siblings. They are rebuilt once
+	// per phase from values the engine already holds and reuse their capacity,
+	// so a request that needs them allocates nothing after warm-up and a
+	// request whose ruleset never asks for them does not build them at all.
+	argNames  [][]byte
+	argValues [][]byte
+
 	// readings holds the plausible interpretations of the value under
 	// evaluation. It owns reusable buffers, so enumerating alternatives costs
 	// no allocation after warm-up.
@@ -434,6 +441,10 @@ func (e *Evaluator) bindRequest(values []Value) {
 	// and the loop exits long before the body fields. Without the early exit
 	// this walked every value of every phase and cost 10% of the benign
 	// benchmarks.
+	e.argNames = e.argNames[:0]
+	e.argValues = e.argValues[:0]
+	e.ctx.Siblings = rules.Args{}
+
 	found := 0
 	for i := range values {
 		v := &values[i]
@@ -454,10 +465,15 @@ func (e *Evaluator) bindRequest(values []Value) {
 				found++
 			}
 		}
-		if found == 3 {
-			return
+		if v.Target.Kind == types.TargetArgs && len(v.Key) > 0 {
+			e.argNames = append(e.argNames, v.Key)
+			e.argValues = append(e.argValues, v.Data)
 		}
 	}
+	// No early exit here, unlike the scalar fields: the sibling view is only
+	// correct if the whole argument collection was walked.
+	_ = found
+	e.ctx.Siblings = rules.Args{Names: e.argNames, Values: e.argValues}
 }
 
 var hostHeader = []byte("host")

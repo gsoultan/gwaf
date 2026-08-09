@@ -238,7 +238,7 @@ func TestNucleiHeadToHead(t *testing.T) {
 	}
 	tuned, err := gwaf.New(
 		gwaf.WithExceptions(profiles.WordPress()...),
-		gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007), core.SSRFParamRule(1014)}),
+		gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007), core.SSRFParamRule(1016)}),
 	)
 	if err != nil {
 		t.Fatalf("gwaf.New(tuned): %v", err)

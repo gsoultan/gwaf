@@ -71,6 +71,7 @@ const (
 	//
 	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007)}))
 	IDOffOriginURL    types.RuleID = 1013
+	IDSplitPath       types.RuleID = 1015
 	IDTypeMarker      types.RuleID = 4020
 	IDConfigTraversal types.RuleID = 1009
 	IDScriptInUpload  types.RuleID = 1010
@@ -1604,6 +1605,7 @@ func requestRules() rules.Set {
 		},
 		offOriginURLRule(IDOffOriginURL),
 		TypeMarkerRule(IDTypeMarker),
+		SplitPathRule(IDSplitPath),
 	}
 }
 

@@ -61,6 +61,46 @@ type EvalContext struct {
 	Method     []byte
 	RequestURI []byte
 	Host       []byte
+
+	// Siblings are the other arguments of the same request, when the engine has
+	// them. It is nil outside the argument collections.
+	//
+	// It exists for the payload that is not in any single value. An application
+	// that joins "path" and "target" reads "/etc/" and "passwd" and opens
+	// /etc/passwd; a rule looking at one argument at a time sees a directory and
+	// a word, and neither is an attack. Splitting a payload across parameters is
+	// a documented technique and per-argument inspection is structurally blind
+	// to it.
+	//
+	// Reading it is deliberately awkward, and that is the point: an operator
+	// that walks every sibling on every value turns per-request work quadratic
+	// in the argument count. Use SiblingValue to ask for one name.
+	Siblings Args
+}
+
+// Args is a read-only view of a request's arguments.
+//
+// It is a slice of pairs rather than a map because building a map per request
+// would allocate, and the argument count is small enough that a scan is
+// cheaper. The engine owns the backing memory; do not retain it.
+type Args struct {
+	Names  [][]byte
+	Values [][]byte
+}
+
+// SiblingValue returns the value of another argument of the same request.
+//
+// The comparison is case-sensitive, because argument names are.
+func (c *EvalContext) SiblingValue(name string) ([]byte, bool) {
+	for i, n := range c.Siblings.Names {
+		if len(n) != len(name) {
+			continue
+		}
+		if string(n) == name && i < len(c.Siblings.Values) {
+			return c.Siblings.Values[i], true
+		}
+	}
+	return nil, false
 }
 
 // Operator decides whether a transformed value matches.
