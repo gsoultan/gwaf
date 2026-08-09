@@ -9,6 +9,7 @@ import (
 	"github.com/gsoultan/gwaf"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
+	"github.com/gsoultan/gwaf/ruleset/profiles"
 	"github.com/gsoultan/gwaf/schema"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -263,4 +264,76 @@ func (r reputationResolver) Resolve() iter.Seq2[string, []byte] {
 	return func(yield func(string, []byte) bool) {
 		yield("score", []byte(r.score))
 	}
+}
+
+// ExampleWithOrigins shows why an open redirect needs configuration to detect.
+//
+// "Is this destination somewhere else?" cannot be answered from the request
+// alone, because the request supplies both sides: an attacker who sets Host to
+// match their own destination makes any comparison against it conclude
+// same-origin. Declaring the hostnames the application answers on is what makes
+// the question answerable, and it is the difference between catching an open
+// redirect and blocking a legitimate OAuth callback.
+func ExampleWithOrigins() {
+	waf, err := gwaf.New(gwaf.WithOrigins("shop.example.com"))
+	if err != nil {
+		panic(err)
+	}
+
+	check := func(destination string) string {
+		tx := waf.NewTransaction()
+		defer tx.Close()
+		tx.SetRequestLine("GET", "/login?redirect_to="+destination, "HTTP/1.1")
+		tx.SetRemoteAddr("192.0.2.1")
+		// Attacker-chosen, and deliberately not what the rule trusts.
+		tx.AddRequestHeader("Host", "evil.tld")
+		if d := tx.ProcessRequestHeaders(); d.Blocked() {
+			return "blocked"
+		}
+		return "allowed"
+	}
+
+	fmt.Println("own site: ", check("https://shop.example.com/cart"))
+	fmt.Println("elsewhere:", check("https://evil.tld/phish"))
+	// Output:
+	// own site:  allowed
+	// elsewhere: blocked
+}
+
+// ExampleWithExceptions applies a platform profile.
+//
+// Some rules are correct in general and wrong for one field of one application.
+// A WordPress comment carrying "<?php echo $name; ?>" really is PHP; it is
+// benign because of where it lands -- a field that is stored and displayed,
+// never executed -- and that is knowledge the application has and gwaf does
+// not. Scoping costs almost nothing: the same payload one field over, or one
+// route over, still blocks.
+func ExampleWithExceptions() {
+	waf, err := gwaf.New(gwaf.WithExceptions(profiles.WordPress()...))
+	if err != nil {
+		panic(err)
+	}
+
+	post := func(path, field, value string) string {
+		tx := waf.NewTransaction()
+		defer tx.Close()
+		tx.SetRequestLine("POST", path, "HTTP/1.1")
+		tx.SetRemoteAddr("192.0.2.1")
+		tx.AddRequestHeader("Content-Type", "application/x-www-form-urlencoded")
+		tx.AddArgument(field, value)
+		if d := tx.ProcessRequestHeaders(); d.Blocked() {
+			return "blocked"
+		}
+		if d := tx.ProcessRequestBody(); d.Blocked() {
+			return "blocked"
+		}
+		return "allowed"
+	}
+
+	const php = "In PHP you write <?php echo $name; ?> to print a variable"
+	fmt.Println("comment field:", post("/wp-comments-post.php", "comment", php))
+	fmt.Println("author field: ", post("/wp-comments-post.php", "author", php))
+	// Output:
+	// comment field: allowed
+	// author field:  blocked
 }

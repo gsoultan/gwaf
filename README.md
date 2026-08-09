@@ -14,7 +14,13 @@ wall-clock.
 [docs/PLAN.md](docs/PLAN.md) for what is built and what is next.
 
 ```go
-waf, _ := gwaf.New()          // working, blocking firewall — no configuration
+// A working, blocking firewall with no configuration at all.
+waf, _ := gwaf.New()
+
+// Tell it which hostnames are yours and it also catches open redirects and
+// SSRF — it cannot judge "somewhere else" without knowing where here is, and
+// the request's own Host header is attacker-supplied.
+waf, _ = gwaf.New(gwaf.WithOrigins("api.example.com"))
 
 mux := http.NewServeMux()
 mux.HandleFunc("GET /api/orders", handleOrders)

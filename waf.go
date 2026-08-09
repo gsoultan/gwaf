@@ -92,10 +92,16 @@ func warnInertOriginRules(cfg *config, set rules.Set) {
 	for i := range set {
 		switch set[i].Op.Name() {
 		case "off_origin_navigation_url", "off_origin_fetch_url":
-			cfg.logger.Warn(
-				"gwaf: rule is inert without configured origins; "+
-					"off-origin redirect and SSRF detection is reporting nothing. "+
-					"Fix: gwaf.New(gwaf.WithOrigins(\"your.host\"))",
+			// Phrased as a capability that is off rather than a firewall that
+			// is broken. Both readers see this line: somebody upgrading from
+			// v0.4.0, who has lost coverage and needs to know, and somebody on
+			// their first ten seconds with the library, who has not lost
+			// anything and should not be alarmed on line one of the README.
+			cfg.logger.Info(
+				"gwaf: off-origin redirect and SSRF detection is off. "+
+					"It needs to know which hostnames are yours, because the "+
+					"request's own Host header is attacker-supplied. "+
+					"Enable with gwaf.New(gwaf.WithOrigins(\"your.host\")).",
 				"rule", set[i].ID, "msg", set[i].Msg)
 			return
 		}

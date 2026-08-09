@@ -666,7 +666,7 @@ func blocked(t *testing.T, w *gwaf.WAF, value string) bool {
 // Losing coverage must never be quieter than gaining it.
 func TestInertOriginRulesAreAnnounced(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	if _, err := gwaf.New(gwaf.WithLogger(logger)); err != nil {
 		t.Fatalf("New: %v", err)
