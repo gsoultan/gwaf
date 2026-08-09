@@ -86,6 +86,13 @@ const (
 	// else.
 	SignalSinkCall
 
+	// SignalScriptBreakout is injection into a *script* context rather than into
+	// markup: the value opens no tag at all, it closes whatever expression the
+	// page already opened and appends a call --  `"-alert(1)-"` inside a JS
+	// string, `1);alert(1);/*` inside a call argument. Nothing in the markup
+	// scans sees these, because there is no tag to read.
+	SignalScriptBreakout
+
 	// SignalCommentBreakout is "-->" escaping an HTML comment.
 	SignalCommentBreakout
 
@@ -134,6 +141,9 @@ func (s Signal) String() string {
 	if s&SignalSinkCall != 0 {
 		add("sink_call")
 	}
+	if s&SignalScriptBreakout != 0 {
+		add("script_breakout")
+	}
 	if s&SignalCommentBreakout != 0 {
 		add("comment_breakout")
 	}
@@ -154,6 +164,8 @@ func (s Signal) String() string {
 // bug reports about XSS.
 func weightOf(s Signal) int {
 	switch s {
+	case SignalScriptBreakout:
+		return 5
 	case SignalExecutingTag, SignalEventHandler, SignalStyleExpression,
 		SignalSchemeInAttribute:
 		return 5
@@ -253,6 +265,7 @@ func (d *Detector) Analyze(value []byte) Verdict {
 	// with markup the value did not contain, so there is no tag to anchor to.
 	sigs |= scanBreakout(src)
 	sigs |= scanHandlerAssignment(src)
+	sigs |= scanScriptBreakout(src)
 
 	total := 0
 	for bit := Signal(1); bit != 0; bit <<= 1 {
@@ -1002,3 +1015,71 @@ func (o *operator) Literals() ([]string, bool) {
 
 // Cost prices one analysis: a single pass with local lookahead.
 func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 4 }
+
+// scanScriptBreakout finds injection into a JavaScript context.
+//
+// The markup scans are blind here by construction: the payload opens no tag, so
+// there is nothing for them to read. What it does instead is *resume* the page's
+// own script -- close the string or the call the page opened, run something, and
+// then keep the remainder parseable.
+//
+// That last part is the discriminator, and it is why this does not fire on code
+// samples. `foo(); bar()` in a snippet closes and calls too. What a snippet
+// never does is swallow the rest of the line with a comment or re-open the
+// string it closed, because it is not trying to survive being pasted into the
+// middle of somebody else's expression.
+func scanScriptBreakout(src []byte) Signal {
+	for i := 0; i < len(src); i++ {
+		// The breakout: a quote or a closing paren ending what the page opened.
+		c := src[i]
+		if c != '"' && c != '\'' && c != ')' {
+			continue
+		}
+		j := i + 1
+		// A separator that keeps the expression well-formed: an operator for a
+		// string context ("-alert(1)-"), a terminator for a statement context
+		// (1);alert(1)).
+		sep := false
+		for j < len(src) && (isSpace(src[j]) || src[j] == '-' || src[j] == '+' ||
+			src[j] == ';' || src[j] == ',' || src[j] == '|' || src[j] == '&') {
+			if !isSpace(src[j]) {
+				sep = true
+			}
+			j++
+		}
+		if !sep || j >= len(src) || !isAlpha(src[j]) {
+			continue
+		}
+		// The call: an identifier, possibly dotted, followed by '('.
+		k := j
+		for k < len(src) && (isNameByte(src[k]) || src[k] == '.') {
+			k++
+		}
+		if k == j || k >= len(src) || src[k] != '(' {
+			continue
+		}
+		// The tail that proves intent: a comment swallowing the remainder, or a
+		// quote re-balancing the string that was closed.
+		if scanBreakoutTail(src, k, c) {
+			return SignalScriptBreakout
+		}
+	}
+	return 0
+}
+
+// scanBreakoutTail reports whether what follows the injected call keeps the
+// surrounding script parseable -- a comment to the end of the line, or a
+// re-opened quote matching the one the payload closed.
+func scanBreakoutTail(src []byte, i int, opened byte) bool {
+	for ; i < len(src); i++ {
+		if src[i] == '/' && i+1 < len(src) && (src[i+1] == '/' || src[i+1] == '*') {
+			return true
+		}
+		if opened != ')' && src[i] == opened {
+			// Re-balancing only counts when an operator rejoined the string:
+			// `"-alert(1)-"` re-opens, `"); foo("x")` does not.
+			return i > 0 && (src[i-1] == '-' || src[i-1] == '+' || src[i-1] == ',')
+		}
+	}
+	return false
+}

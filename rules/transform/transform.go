@@ -14,7 +14,11 @@
 // makes them usable as an oracle.
 package transform
 
-import "github.com/gsoultan/gwaf/rules"
+import (
+	"bytes"
+
+	"github.com/gsoultan/gwaf/rules"
+)
 
 // Lowercase folds ASCII upper case to lower case.
 //
@@ -421,14 +425,12 @@ func simpleEscape(c byte) (byte, bool) {
 	return 0, false
 }
 
-func indexByteIn(b []byte, c byte) int {
-	for i := range b {
-		if b[i] == c {
-			return i
-		}
-	}
-	return -1
-}
+// indexByteIn is the no-op check every escape transform runs before touching
+// anything, so it executes over every value of every request whether or not the
+// transform has work to do. The hand-rolled loop it replaced cost 7% of the
+// benign-GET benchmark once a second escape transform joined the path chain;
+// bytes.IndexByte is the same search with an assembly implementation behind it.
+func indexByteIn(b []byte, c byte) int { return bytes.IndexByte(b, c) }
 
 // appendRuneTo writes r as UTF-8, or as a single byte when it fits, so a
 // "A" and an "\x41" produce the same result.

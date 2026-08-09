@@ -346,9 +346,38 @@ func sensitiveFileOp() rules.Operator {
 	)
 }
 
+// textChain is the chain the semantic detectors share.
+//
+// Percent-decoding, then backslash escapes. It stops there: stripping
+// whitespace or folding case would destroy the positions the detectors depend
+// on, since "onerror" adjacent to "=" inside a tag is a handler and the same
+// bytes elsewhere are a word.
+//
+// EscapeDecode is in the shared chain rather than on the one rule that needed
+// it. A payload arriving as JSON text inside a parameter is written
+// "\u003cscript>", and every structural scan is blind to it because there is no
+// '<' in the bytes at all -- but the same is true of "\x73elect" and of "c\at",
+// which is the form detect/shelli's own documentation cites. Giving XSS a
+// private two-transform chain also cost 2.8us on the benign-POST benchmark and
+// broke its 15us SLO, because a chain nobody else shares is materialised
+// separately over every value of every request. Shared, it is one buffer.
+//
+// The traversal rules deliberately do not use this: EscapeDecode drops the
+// backslash from an unrecognised escape, so "..\..\windows" would lose the
+// separators it is matched on. Those keep pathChain.
+var textChain = []rules.Transform{transform.URLDecode, transform.EscapeDecode}
+
 // pathChain normalizes a path before traversal matching.
+//
+// HexEscapeDecode runs before normalisation because "..\u002f..\u002fetc\u002fpasswd"
+// contains no separator until it does, and a path with no separators normalises
+// to itself and matches nothing. It decodes only \xHH and \uHHHH; the full
+// EscapeDecode cannot go here, because it drops the backslash from an
+// unrecognised escape and would flatten "..\..\windows\win.ini" into one
+// segment.
 var pathChain = []rules.Transform{
 	transform.URLDecode,
+	transform.HexEscapeDecode,
 	transform.Lowercase,
 	transform.NormalizePath,
 }
@@ -472,7 +501,7 @@ func requestRules() rules.Set {
 			// original whitespace and punctuation, because that structure is
 			// exactly what it reads. Stripping whitespace here would destroy
 			// the grammar the detector exists to see.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			// Structural detection rather than string matching. One rule covers
 			// the whole variant family -- comment splitting, case alternation,
 			// alternative operators, quote-context breaking -- that a signature
@@ -500,7 +529,7 @@ func requestRules() rules.Set {
 			// Percent-decoding only, and no case folding: MongoDB rejects
 			// "$NE", so folding would widen the rule onto strings the database
 			// would never honour.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op:         nosqli.Operator(nosqli.SignalEvalOperator),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -512,7 +541,7 @@ func requestRules() rules.Set {
 			ID:         IDNoSQLiOperator,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    nameTargets,
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op: nosqli.Operator(nosqli.SignalQueryOperator |
 				nosqli.SignalUpdateOperator | nosqli.SignalAmbiguousOperator),
 			Actions:  []rules.Action{rules.Block},
@@ -544,7 +573,7 @@ func requestRules() rules.Set {
 			//
 			// Nothing else: folding case or stripping whitespace would destroy
 			// the grammar the detector counts, which is the opposite problem.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op: graphql.Operator(graphql.Limits{},
 				graphql.SignalExcessiveDepth|graphql.SignalExcessiveComplexity|
 					graphql.SignalAliasAmplification|graphql.SignalFragmentCycle),
@@ -568,7 +597,7 @@ func requestRules() rules.Set {
 			// leave the structure intact but is pointless work -- and the
 			// filter grammar is case-insensitive in exactly the places this
 			// does not look at.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op:         ldapi.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -586,7 +615,7 @@ func requestRules() rules.Set {
 			// template expression, so the delimiters, dots, and parentheses it
 			// keys on must survive: folding case or stripping whitespace would
 			// destroy the very structure being read.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op:         ssti.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -605,11 +634,19 @@ func requestRules() rules.Set {
 			ID:      IDXSSSemantic,
 			Phase:   types.PhaseRequestHeaders,
 			Targets: argTargets,
-			// Percent-decoding only. The detector reads markup structure, so
-			// stripping whitespace or folding case here would destroy the very
-			// positions it depends on: "onerror" adjacent to "=" inside a tag
-			// is a handler, and the same bytes elsewhere are a word.
-			Transforms: []rules.Transform{transform.URLDecode},
+			// Percent-decoding, then backslash escapes. Whitespace stripping and
+			// case folding stay out because the detector reads markup structure
+			// and both would destroy the positions it depends on: "onerror"
+			// adjacent to "=" inside a tag is a handler, and the same bytes
+			// elsewhere are a word.
+			//
+			// EscapeDecode is here because a payload that arrives as JSON text
+			// inside a parameter is written "\u003cscript>", and every markup
+			// scan is blind to it -- there is no '<' in the bytes at all. That
+			// is a whole evasion class for one transform, and the transform
+			// already existed; it was simply never applied where the evasion
+			// lands.
+			Transforms: textChain,
 			Op:         xss.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -627,7 +664,7 @@ func requestRules() rules.Set {
 			// and expansion structure, so stripping whitespace or folding case
 			// would destroy the positions it depends on: "cat" after a ';' is a
 			// command, and the same three bytes elsewhere are a word.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op:         shelli.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -650,7 +687,7 @@ func requestRules() rules.Set {
 			// the detector folds case itself where that is correct, and the
 			// serialization header is raw bytes that a case fold would leave
 			// alone but a whitespace strip would not.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op:         javaser.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -667,7 +704,7 @@ func requestRules() rules.Set {
 			ID:         IDPHPSemantic,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			Op:         phpi.Operator(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
@@ -1319,7 +1356,7 @@ func requestRules() rules.Set {
 			// omitted because the detector folds case itself, and reusing the
 			// chain detect/shelli already uses avoids paying for a new
 			// (chain × target) materialisation over every request.
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			// Prompt injection: text that tries to override the instructions an
 			// LLM was given. Number one on the OWASP Top 10 for LLM Applications
 			// since the list existed, including the 2026 edition grounded in
@@ -1490,7 +1527,7 @@ func requestRules() rules.Set {
 			ID:         IDSQLiSuspicious,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			// Three is a tautology standing alone, or a quote break beside a
 			// comment terminator. Both are injection shapes; both also occur in
 			// data. "1=1" is a filter expression in half the query DSLs on the
@@ -1506,7 +1543,7 @@ func requestRules() rules.Set {
 			ID:         IDXSSSuspicious,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			// Three reaches a bare "javascript:" URI and an attribute breakout
 			// with nothing yet attached. A link shortener, a bookmarklet field or
 			// a CMS that stores hrefs will send the first on purpose.
@@ -1521,7 +1558,7 @@ func requestRules() rules.Set {
 			ID:         IDShelliSuspicious,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    shellTargets,
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			// Three is a bare variable in command position, or a mention of a
 			// sensitive path, without the corroboration the default tier wants.
 			// A CI platform carrying shell as data trips this constantly, which
@@ -1537,7 +1574,7 @@ func requestRules() rules.Set {
 			ID:         IDPHPSuspicious,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			// Four is an executing PHP function in call position with no other
 			// PHP structure around it — "system('id')" as a whole value. Real,
 			// and also what "never eval() untrusted input in production" looks
@@ -1553,7 +1590,7 @@ func requestRules() rules.Set {
 			ID:         IDJavaSuspicious,
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    argTargets,
-			Transforms: []rules.Transform{transform.URLDecode},
+			Transforms: textChain,
 			// Four reaches a type reference being invoked without the rest of the
 			// chain. Build tooling and APM agents carry these as configuration.
 			Op:         javaser.OperatorAt(4),
