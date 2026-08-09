@@ -1841,3 +1841,26 @@ bytes — a parameter name the application documents as encoded, or a schema tha
 declares the field base64 — which is knowledge the embedder has and the engine
 does not. That is the same shape as the off-origin and type-marker rules, and it
 is probably where this belongs.
+
+## Rejected: route-aware confidence for the sensitive-file rule (2026-08-09)
+
+The idea was to encode "this route is a file editor" in the rule so that
+`/wp-admin/theme-editor.php?file=functions.php` passes structurally, instead of
+every WordPress deployment needing a profile exception for it. With
+`EvalContext.RequestURI` now available it was cheap to build.
+
+It was built and then measured, and **the false positive it was written to fix
+does not exist**. The default ruleset already passes all three editor routes,
+because `functions.php` and `akismet/akismet.php` were never on the
+sensitive-file list — the list is `etc/passwd`, `win.ini`, `.ssh/id_rsa` and
+their kind, and nothing an editor edits is on it. The wrapper exempted nothing
+and its tests passed for that reason rather than because it worked.
+
+Deleted rather than shipped. **A route-aware rule that exempts nothing is an
+abstraction with a story attached**, and the story was mine rather than the
+corpus's.
+
+The technique is still sound where an FP is actually measured — the remaining
+ones are content fields (a comment quoting PHP, a post quoting SQL), and those
+are deployment knowledge, which is what `ruleset/profiles` is for. Before
+reaching for this again, find the blocked benign request first.

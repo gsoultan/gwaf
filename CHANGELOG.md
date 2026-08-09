@@ -40,6 +40,22 @@ semver, and the four extension interfaces are frozen hard.
   live HTTP middleware, reporting detection, false positives and latency from
   one run. `make nuclei`; the extractor is checked in and the corpus is not.
 
+- **`core.TypeMarkerRule`** and **`core.SplitPathRule`**, both in the default
+  set. The first reads a polymorphic type marker (`__class`, `@type`) naming a
+  class, which is the JSON form of object injection and has no serialization
+  grammar for the existing rules to read. The second reports a sensitive file
+  assembled from two parameters — `path=/etc/&target=passwd` is a real CVE, and
+  the payload is in no single value.
+
+- **`rules.EvalContext.Siblings`** and **`SiblingValue`** — a read-only view of
+  the request's other arguments, for the payload that per-argument inspection is
+  structurally blind to rather than merely weak at.
+
+- **`detect/xss` statement-context breakout.** A payload landing in a numeric
+  context has no quote to break out of: `1026553;alert(1)//772` closes a
+  statement, and `19753";}alert(1);function test(){"` closes a string, a block,
+  and then puts both back.
+
 ### Changed
 
 - `md5sum` and `sha1sum` are command names. `sha256sum` and `timeout` are not:
