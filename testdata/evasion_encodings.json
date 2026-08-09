@@ -1,0 +1,485 @@
+{
+ "note": "Encoding-evasion variants: payloads gwaf blocks in plain form, re-encoded the way an attacker does. Generated from a fixed payload set crossed with eight representations; see strix_corpus_test.go TestEncodingEvasionCorpus.",
+ "cases": [
+  {
+   "id": "evasion-xss-plain",
+   "class": "xss",
+   "path": "/search?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E"
+  },
+  {
+   "id": "evasion-xss-url",
+   "class": "xss",
+   "path": "/search?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E"
+  },
+  {
+   "id": "evasion-xss-double-url",
+   "class": "xss",
+   "path": "/search?q=%253Cscript%253Ealert%25281%2529%253C%252Fscript%253E"
+  },
+  {
+   "id": "evasion-xss-js-unicode",
+   "class": "xss",
+   "path": "/search?q=%5Cu003cscript%5Cu003ealert%5Cu00281%5Cu0029%5Cu003c%5Cu002fscript%5Cu003e"
+  },
+  {
+   "id": "evasion-xss-hex-escape",
+   "class": "xss",
+   "path": "/search?q=%5Cx3cscript%5Cx3ealert%5Cx281%5Cx29%5Cx3c%5Cx2fscript%5Cx3e"
+  },
+  {
+   "id": "evasion-xss-mixed-case",
+   "class": "xss",
+   "path": "/search?q=%3CScRiPt%3EaLeRt%281%29%3C%2FsCrIpT%3E"
+  },
+  {
+   "id": "evasion-xss-nul-inject",
+   "class": "xss",
+   "path": "/search?q=%3Cs%00cript%3Ealert%281%29%3C%2Fscript%3E"
+  },
+  {
+   "id": "evasion-xss-tab-split",
+   "class": "xss",
+   "path": "/search?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E"
+  },
+  {
+   "id": "evasion-xss-plain",
+   "class": "xss",
+   "path": "/search?q=%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-url",
+   "class": "xss",
+   "path": "/search?q=%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-double-url",
+   "class": "xss",
+   "path": "/search?q=%253Cimg%2520src%253Dx%2520onerror%253Dalert%25281%2529%253E"
+  },
+  {
+   "id": "evasion-xss-js-unicode",
+   "class": "xss",
+   "path": "/search?q=%5Cu003cimg%20src%3Dx%20onerror%3Dalert%5Cu00281%5Cu0029%5Cu003e"
+  },
+  {
+   "id": "evasion-xss-hex-escape",
+   "class": "xss",
+   "path": "/search?q=%5Cx3cimg%20src%3Dx%20onerror%3Dalert%5Cx281%5Cx29%5Cx3e"
+  },
+  {
+   "id": "evasion-xss-mixed-case",
+   "class": "xss",
+   "path": "/search?q=%3CImG%20SrC%3DX%20OnErRoR%3DAlErT%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-nul-inject",
+   "class": "xss",
+   "path": "/search?q=%3Cimg%20s%00rc%3Dx%20onerror%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-tab-split",
+   "class": "xss",
+   "path": "/search?q=%3Cimg%09src%3Dx%09onerror%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-plain",
+   "class": "xss",
+   "path": "/search?q=%3Csvg%20onload%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-url",
+   "class": "xss",
+   "path": "/search?q=%3Csvg%20onload%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-double-url",
+   "class": "xss",
+   "path": "/search?q=%253Csvg%2520onload%253Dalert%25281%2529%253E"
+  },
+  {
+   "id": "evasion-xss-js-unicode",
+   "class": "xss",
+   "path": "/search?q=%5Cu003csvg%20onload%3Dalert%5Cu00281%5Cu0029%5Cu003e"
+  },
+  {
+   "id": "evasion-xss-hex-escape",
+   "class": "xss",
+   "path": "/search?q=%5Cx3csvg%20onload%3Dalert%5Cx281%5Cx29%5Cx3e"
+  },
+  {
+   "id": "evasion-xss-mixed-case",
+   "class": "xss",
+   "path": "/search?q=%3CSvG%20OnLoAd%3DaLeRt%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-nul-inject",
+   "class": "xss",
+   "path": "/search?q=%3Cs%00vg%20onload%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-xss-tab-split",
+   "class": "xss",
+   "path": "/search?q=%3Csvg%09onload%3Dalert%281%29%3E"
+  },
+  {
+   "id": "evasion-sqli-plain",
+   "class": "sqli",
+   "path": "/search?q=1%27%20OR%20%271%27%3D%271"
+  },
+  {
+   "id": "evasion-sqli-url",
+   "class": "sqli",
+   "path": "/search?q=1%27%20OR%20%271%27%3D%271"
+  },
+  {
+   "id": "evasion-sqli-double-url",
+   "class": "sqli",
+   "path": "/search?q=1%2527%2520OR%2520%25271%2527%253D%25271"
+  },
+  {
+   "id": "evasion-sqli-js-unicode",
+   "class": "sqli",
+   "path": "/search?q=1%5Cu0027%20OR%20%5Cu00271%5Cu0027%3D%5Cu00271"
+  },
+  {
+   "id": "evasion-sqli-hex-escape",
+   "class": "sqli",
+   "path": "/search?q=1%5Cx27%20OR%20%5Cx271%5Cx27%3D%5Cx271"
+  },
+  {
+   "id": "evasion-sqli-mixed-case",
+   "class": "sqli",
+   "path": "/search?q=1%27%20OR%20%271%27%3D%271"
+  },
+  {
+   "id": "evasion-sqli-nul-inject",
+   "class": "sqli",
+   "path": "/search?q=1%27%20OR%20%271%27%3D%271"
+  },
+  {
+   "id": "evasion-sqli-tab-split",
+   "class": "sqli",
+   "path": "/search?q=1%27%09OR%09%271%27%3D%271"
+  },
+  {
+   "id": "evasion-sqli-plain",
+   "class": "sqli",
+   "path": "/search?q=1%20UNION%20SELECT%20null%2Cversion%28%29"
+  },
+  {
+   "id": "evasion-sqli-url",
+   "class": "sqli",
+   "path": "/search?q=1%20UNION%20SELECT%20null%2Cversion%28%29"
+  },
+  {
+   "id": "evasion-sqli-double-url",
+   "class": "sqli",
+   "path": "/search?q=1%2520UNION%2520SELECT%2520null%252Cversion%2528%2529"
+  },
+  {
+   "id": "evasion-sqli-js-unicode",
+   "class": "sqli",
+   "path": "/search?q=1%20UNION%20SELECT%20null%2Cversion%5Cu0028%5Cu0029"
+  },
+  {
+   "id": "evasion-sqli-hex-escape",
+   "class": "sqli",
+   "path": "/search?q=1%20UNION%20SELECT%20null%2Cversion%5Cx28%5Cx29"
+  },
+  {
+   "id": "evasion-sqli-mixed-case",
+   "class": "sqli",
+   "path": "/search?q=1%20UNION%20SELECT%20NuLl%2CvErSiOn%28%29"
+  },
+  {
+   "id": "evasion-sqli-nul-inject",
+   "class": "sqli",
+   "path": "/search?q=1%20UNION%20SELECT%20null%2Cvers%00ion%28%29"
+  },
+  {
+   "id": "evasion-sqli-tab-split",
+   "class": "sqli",
+   "path": "/search?q=1%09UNION%09SELECT%09null%2Cversion%28%29"
+  },
+  {
+   "id": "evasion-sqli-plain",
+   "class": "sqli",
+   "path": "/search?q=1%20AND%20SLEEP%285%29"
+  },
+  {
+   "id": "evasion-sqli-url",
+   "class": "sqli",
+   "path": "/search?q=1%20AND%20SLEEP%285%29"
+  },
+  {
+   "id": "evasion-sqli-double-url",
+   "class": "sqli",
+   "path": "/search?q=1%2520AND%2520SLEEP%25285%2529"
+  },
+  {
+   "id": "evasion-sqli-js-unicode",
+   "class": "sqli",
+   "path": "/search?q=1%20AND%20SLEEP%5Cu00285%5Cu0029"
+  },
+  {
+   "id": "evasion-sqli-hex-escape",
+   "class": "sqli",
+   "path": "/search?q=1%20AND%20SLEEP%5Cx285%5Cx29"
+  },
+  {
+   "id": "evasion-sqli-mixed-case",
+   "class": "sqli",
+   "path": "/search?q=1%20AND%20SLEEP%285%29"
+  },
+  {
+   "id": "evasion-sqli-nul-inject",
+   "class": "sqli",
+   "path": "/search?q=1%20AND%20SLEEP%285%29"
+  },
+  {
+   "id": "evasion-sqli-tab-split",
+   "class": "sqli",
+   "path": "/search?q=1%09AND%09SLEEP%285%29"
+  },
+  {
+   "id": "evasion-lfi-plain",
+   "class": "lfi",
+   "path": "/search?q=..%2F..%2F..%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-lfi-url",
+   "class": "lfi",
+   "path": "/search?q=..%2F..%2F..%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-lfi-double-url",
+   "class": "lfi",
+   "path": "/search?q=..%252F..%252F..%252Fetc%252Fpasswd"
+  },
+  {
+   "id": "evasion-lfi-js-unicode",
+   "class": "lfi",
+   "path": "/search?q=..%5Cu002f..%5Cu002f..%5Cu002fetc%5Cu002fpasswd"
+  },
+  {
+   "id": "evasion-lfi-hex-escape",
+   "class": "lfi",
+   "path": "/search?q=..%5Cx2f..%5Cx2f..%5Cx2fetc%5Cx2fpasswd"
+  },
+  {
+   "id": "evasion-lfi-mixed-case",
+   "class": "lfi",
+   "path": "/search?q=..%2F..%2F..%2FEtC%2FPaSsWd"
+  },
+  {
+   "id": "evasion-lfi-nul-inject",
+   "class": "lfi",
+   "path": "/search?q=..%2F..%2F..%2Fetc%2Fpas%00swd"
+  },
+  {
+   "id": "evasion-lfi-tab-split",
+   "class": "lfi",
+   "path": "/search?q=..%2F..%2F..%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-lfi-plain",
+   "class": "lfi",
+   "path": "/search?q=%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-lfi-url",
+   "class": "lfi",
+   "path": "/search?q=%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-lfi-double-url",
+   "class": "lfi",
+   "path": "/search?q=%252Fetc%252Fpasswd"
+  },
+  {
+   "id": "evasion-lfi-js-unicode",
+   "class": "lfi",
+   "path": "/search?q=%5Cu002fetc%5Cu002fpasswd"
+  },
+  {
+   "id": "evasion-lfi-hex-escape",
+   "class": "lfi",
+   "path": "/search?q=%5Cx2fetc%5Cx2fpasswd"
+  },
+  {
+   "id": "evasion-lfi-mixed-case",
+   "class": "lfi",
+   "path": "/search?q=%2FEtC%2FPaSsWd"
+  },
+  {
+   "id": "evasion-lfi-nul-inject",
+   "class": "lfi",
+   "path": "/search?q=%2Fetc%2Fpas%00swd"
+  },
+  {
+   "id": "evasion-lfi-tab-split",
+   "class": "lfi",
+   "path": "/search?q=%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-rce-plain",
+   "class": "rce",
+   "path": "/search?q=%3Bcat%20%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-rce-url",
+   "class": "rce",
+   "path": "/search?q=%3Bcat%20%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-rce-double-url",
+   "class": "rce",
+   "path": "/search?q=%253Bcat%2520%252Fetc%252Fpasswd"
+  },
+  {
+   "id": "evasion-rce-js-unicode",
+   "class": "rce",
+   "path": "/search?q=%5Cu003bcat%20%5Cu002fetc%5Cu002fpasswd"
+  },
+  {
+   "id": "evasion-rce-hex-escape",
+   "class": "rce",
+   "path": "/search?q=%5Cx3bcat%20%5Cx2fetc%5Cx2fpasswd"
+  },
+  {
+   "id": "evasion-rce-mixed-case",
+   "class": "rce",
+   "path": "/search?q=%3BCaT%20%2FeTc%2FpAsSwD"
+  },
+  {
+   "id": "evasion-rce-nul-inject",
+   "class": "rce",
+   "path": "/search?q=%3Bcat%20%2Fetc%2Fpas%00swd"
+  },
+  {
+   "id": "evasion-rce-tab-split",
+   "class": "rce",
+   "path": "/search?q=%3Bcat%09%2Fetc%2Fpasswd"
+  },
+  {
+   "id": "evasion-rce-plain",
+   "class": "rce",
+   "path": "/search?q=%24%28id%29"
+  },
+  {
+   "id": "evasion-rce-url",
+   "class": "rce",
+   "path": "/search?q=%24%28id%29"
+  },
+  {
+   "id": "evasion-rce-double-url",
+   "class": "rce",
+   "path": "/search?q=%2524%2528id%2529"
+  },
+  {
+   "id": "evasion-rce-js-unicode",
+   "class": "rce",
+   "path": "/search?q=%24%5Cu0028id%5Cu0029"
+  },
+  {
+   "id": "evasion-rce-hex-escape",
+   "class": "rce",
+   "path": "/search?q=%24%5Cx28id%5Cx29"
+  },
+  {
+   "id": "evasion-rce-mixed-case",
+   "class": "rce",
+   "path": "/search?q=%24%28iD%29"
+  },
+  {
+   "id": "evasion-rce-nul-inject",
+   "class": "rce",
+   "path": "/search?q=%24%28id%29"
+  },
+  {
+   "id": "evasion-rce-tab-split",
+   "class": "rce",
+   "path": "/search?q=%24%28id%29"
+  },
+  {
+   "id": "evasion-ssti-plain",
+   "class": "ssti",
+   "path": "/search?q=%7B%7B%27%27.__class__.__mro__%5B1%5D.__subclasses__%28%29%7D%7D"
+  },
+  {
+   "id": "evasion-ssti-url",
+   "class": "ssti",
+   "path": "/search?q=%7B%7B%27%27.__class__.__mro__%5B1%5D.__subclasses__%28%29%7D%7D"
+  },
+  {
+   "id": "evasion-ssti-double-url",
+   "class": "ssti",
+   "path": "/search?q=%257B%257B%2527%2527.__class__.__mro__%255B1%255D.__subclasses__%2528%2529%257D%257D"
+  },
+  {
+   "id": "evasion-ssti-js-unicode",
+   "class": "ssti",
+   "path": "/search?q=%7B%7B%5Cu0027%5Cu0027.__class__.__mro__%5B1%5D.__subclasses__%5Cu0028%5Cu0029%7D%7D"
+  },
+  {
+   "id": "evasion-ssti-hex-escape",
+   "class": "ssti",
+   "path": "/search?q=%7B%7B%5Cx27%5Cx27.__class__.__mro__%5B1%5D.__subclasses__%5Cx28%5Cx29%7D%7D"
+  },
+  {
+   "id": "evasion-ssti-mixed-case",
+   "class": "ssti",
+   "path": "/search?q=%7B%7B%27%27.__ClAsS__.__MrO__%5B1%5D.__sUbClAsSeS__%28%29%7D%7D"
+  },
+  {
+   "id": "evasion-ssti-nul-inject",
+   "class": "ssti",
+   "path": "/search?q=%7B%7B%27%27.__clas%00s__.__mro__%5B1%5D.__subclasses__%28%29%7D%7D"
+  },
+  {
+   "id": "evasion-ssti-tab-split",
+   "class": "ssti",
+   "path": "/search?q=%7B%7B%27%27.__class__.__mro__%5B1%5D.__subclasses__%28%29%7D%7D"
+  },
+  {
+   "id": "evasion-phpi-plain",
+   "class": "phpi",
+   "path": "/search?q=%3C%3Fphp%20system%28%27id%27%29%3B%20%3F%3E"
+  },
+  {
+   "id": "evasion-phpi-url",
+   "class": "phpi",
+   "path": "/search?q=%3C%3Fphp%20system%28%27id%27%29%3B%20%3F%3E"
+  },
+  {
+   "id": "evasion-phpi-double-url",
+   "class": "phpi",
+   "path": "/search?q=%253C%253Fphp%2520system%2528%2527id%2527%2529%253B%2520%253F%253E"
+  },
+  {
+   "id": "evasion-phpi-js-unicode",
+   "class": "phpi",
+   "path": "/search?q=%5Cu003c%3Fphp%20system%5Cu0028%5Cu0027id%5Cu0027%5Cu0029%5Cu003b%20%3F%5Cu003e"
+  },
+  {
+   "id": "evasion-phpi-hex-escape",
+   "class": "phpi",
+   "path": "/search?q=%5Cx3c%3Fphp%20system%5Cx28%5Cx27id%5Cx27%5Cx29%5Cx3b%20%3F%5Cx3e"
+  },
+  {
+   "id": "evasion-phpi-mixed-case",
+   "class": "phpi",
+   "path": "/search?q=%3C%3FpHp%20sYsTeM%28%27iD%27%29%3B%20%3F%3E"
+  },
+  {
+   "id": "evasion-phpi-nul-inject",
+   "class": "phpi",
+   "path": "/search?q=%3C%3Fphp%20s%00ystem%28%27id%27%29%3B%20%3F%3E"
+  },
+  {
+   "id": "evasion-phpi-tab-split",
+   "class": "phpi",
+   "path": "/search?q=%3C%3Fphp%09system%28%27id%27%29%3B%09%3F%3E"
+  }
+ ]
+}

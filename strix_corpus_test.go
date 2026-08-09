@@ -313,3 +313,59 @@ func TestScopedExceptionResolvesContentFieldsWithoutWeakeningTheRule(t *testing.
 		t.Log("note: a webshell in the excepted field is also suppressed -- that is what excepting a field means, and why the note field exists")
 	}
 }
+
+// TestEncodingEvasionCorpus is the regression for the class of miss an evasion
+// sweep found: gwaf blocked every payload in its plain form and let several
+// through once they were re-encoded. That is the CVE-2026-21876 failure mode --
+// a matcher that reads one representation of the input -- and it is the exact
+// thing this project claims not to have, so it is pinned rather than measured
+// once.
+//
+// The corpus is a fixed payload set crossed with eight representations
+// (percent, double-percent, \uHHHH, \xHH, mixed case, NUL, tab-splitting). It
+// found that backslash escapes reached no chain at all: "<script>" has no
+// '<' in it, and "../../etc/passwd" has no '/'.
+func TestEncodingEvasionCorpus(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "evasion_encodings.json"))
+	if err != nil {
+		t.Fatalf("read evasion corpus: %v", err)
+	}
+	var doc struct {
+		Cases []struct{ ID, Class, Path string } `json:"cases"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("parse evasion corpus: %v", err)
+	}
+	if len(doc.Cases) == 0 {
+		t.Fatal("evasion corpus is empty")
+	}
+
+	w, err := gwaf.New()
+	if err != nil {
+		t.Fatalf("gwaf.New(): %v", err)
+	}
+
+	var missed []string
+	for _, c := range doc.Cases {
+		tx := w.NewTransaction()
+		tx.SetRequestLine("GET", c.Path, "HTTP/1.1")
+		tx.SetRemoteAddr("192.0.2.1")
+		tx.AddRequestHeader("Host", "example.com")
+		d := tx.ProcessRequestHeaders()
+		if !d.Blocked() {
+			d = tx.ProcessRequestBody()
+		}
+		if !d.Blocked() {
+			missed = append(missed, c.ID)
+		}
+		tx.Close()
+	}
+
+	// The bar is every case: each is a payload the plain-form corpus already
+	// proves is detected, so a miss here is a representation gwaf cannot read
+	// rather than a technique it does not know.
+	if len(missed) > 0 {
+		t.Errorf("%d/%d encoded payloads not blocked: %v", len(missed), len(doc.Cases), missed)
+	}
+	t.Logf("encoding evasion: %d/%d blocked", len(doc.Cases)-len(missed), len(doc.Cases))
+}
