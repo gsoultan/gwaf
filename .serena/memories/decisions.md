@@ -1918,3 +1918,53 @@ the actual miss list for class=rce from the current build and classifying all of
 it, not a sample of it. The tooling for that is the throwaway probe pattern used
 all session; it needs to write JSON rather than print, so the classification can
 be counted instead of read.
+
+## The RCE gap, finally located (2026-08-09)
+
+Done the way the correction above demanded: every miss dumped to JSON from the
+current build, classified by counting rather than by reading. 306 misses across
+the payload-bearing corpus, **86 of them RCE**:
+
+      31  other
+      18  other JSON body
+      15  command in a cmd= parameter
+      10  base64 blob
+       7  multipart body
+       2  JSON type-marker gadget
+       1 each  backtick, separator+command, XML/SOAP
+
+Two things follow, and the second is the useful one.
+
+**There is no big tractable bucket.** 49 of 86 are undifferentiated JSON bodies
+and "other". Multipart and XML -- the shapes an earlier entry blamed -- are 8
+between them. Anyone expecting one fix to close this gap should stop expecting
+that.
+
+**The cmd= bucket is not a detector problem, and it is smaller than it looks.**
+Of the 15, only six are commands: `cmd=id` twice, `cmd=echo abc123`,
+`cmd=nslookup oast...` twice, `cmd=mkdir`. The other nine are the
+application's own API verbs -- `cmd=mkfile`, `cmd=resize`, `cmd=cgi_user_add`,
+`cmd=SC_Get_Info`, `Command=sysCommand` -- and blocking a bare word in a cmd=
+parameter would break elFinder and every router CGI in the corpus.
+
+Tested directly, `detect/shelli` already gets all fifteen right:
+
+    AnalyzeIn("id", true)            detected, score 5
+    AnalyzeIn("echo abc123", true)   detected, score 5
+    AnalyzeIn("nslookup ...", true)  detected, score 5
+    AnalyzeIn("mkfile", true)        not detected
+    AnalyzeIn("resize", true)        not detected
+    AnalyzeIn("cgi_user_add", true)  not detected
+
+So the detector is right and the request is still not blocked. **The rule never
+reaches the detector.** The likely cause is the prefilter: shelli's literals are
+shell metacharacters, and `cmd=id` contains none, so the rule is never a
+candidate and commandSink never gets consulted. That is the same shape as the
+type-marker limitation -- a rule whose evidence is the *parameter name* cannot
+be selected by an automaton over *values*.
+
+Confirm that before building anything. If it holds, the question is not "what
+signal is missing" but "how does a key-anchored rule get scheduled without
+becoming unconditional", and that is an engine question with a latency budget
+attached, not a detector question. `mkdir` is separately absent from the command
+list and is a one-word fix worth about one case.
