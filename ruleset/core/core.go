@@ -71,6 +71,7 @@ const (
 	//
 	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007)}))
 	IDOffOriginURL    types.RuleID = 1013
+	IDTypeMarker      types.RuleID = 4020
 	IDConfigTraversal types.RuleID = 1009
 	IDScriptInUpload  types.RuleID = 1010
 	// 2001-2004 were literal SQL injection rules: tautology, UNION SELECT,
@@ -1602,6 +1603,7 @@ func requestRules() rules.Set {
 			Tags:       []string{"rce", "java", "owasp-a08", "semantic", "medium"},
 		},
 		offOriginURLRule(IDOffOriginURL),
+		TypeMarkerRule(IDTypeMarker),
 	}
 }
 
