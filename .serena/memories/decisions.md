@@ -1864,3 +1864,37 @@ The technique is still sound where an FP is actually measured — the remaining
 ones are content fields (a comment quoting PHP, a post quoting SQL), and those
 are deployment knowledge, which is what `ruleset/profiles` is for. Before
 reaching for this again, find the blocked benign request first.
+
+## Sized and dropped: body-anchored type markers for dotted class names (2026-08-09)
+
+TypeMarkerRule covers PHP namespaces and documents the dotted Java/.NET forms
+(`"@type": "java.lang.Class"`) as out of scope, because a dot is useless as a
+prefilter literal. The documented follow-up was a second rule anchored on the
+marker *name* in the raw body, where `"@type"` is itself selective.
+
+Before building it, the corpus was counted. Across 2,455 payload-bearing CVE
+exploits there are **three** occurrences of any type marker at all: one `@type`
+and two `__type`. The rule would be worth at most three cases out of 182 RCE
+misses.
+
+**The follow-up documented in Literals is correct and not worth building.**
+Anyone reaching for it should count first; the note in typemarker.go now points
+here.
+
+## Where the RCE gap actually is (2026-08-09)
+
+gwaf sits at 76% against CRS's 83.5% on RCE, 182 misses. Sampling them, the
+large buckets are not detector-signal problems:
+
+  * multipart bodies -- plugin and .jar uploads, `stream.url` parts
+  * SOAP/XML bodies -- several .asmx endpoints carrying the payload in XML
+
+with smaller groups for `cmd=` parameters, `;id;` separators, expression
+language `${...}`, and base64 blobs. That points at **body-format coverage**
+rather than at the semantic detectors, which is a different kind of work from
+everything done this session: the detectors are not failing to recognise these
+payloads, they are not being handed them.
+
+Next step is to confirm that by checking what internal/body parses for
+multipart and XML, and whether those parsers are reached for the content types
+these CVEs use -- not by adding signals.
