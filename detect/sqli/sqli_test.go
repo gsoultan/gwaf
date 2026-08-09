@@ -449,3 +449,48 @@ func BenchmarkAnalyzeJSON(b *testing.B) {
 		d.Analyze(v)
 	}
 }
+
+// TestSubqueryInjection covers the shape a broad CVE replay found gwaf blind to:
+// a boolean connector or comparison joined to a parenthesised SELECT. It is the
+// backbone of blind and error-based injection, and it carries no tautology, no
+// UNION and no comment, so every existing signal scored it at zero.
+//
+// The benign half is why this needs the connector and the paren together.
+// "select" appears in prose constantly, and an application that legitimately
+// takes a query fragment is not what this matches -- what it matches is a
+// fragment welded onto a WHERE clause the application wrote.
+func TestSubqueryInjection(t *testing.T) {
+	d := New()
+
+	t.Run("subquery payloads fire", func(t *testing.T) {
+		for _, attack := range []string{
+			`123 or 8767 IN (SELECT (sys.fn_sqlvarbasetostr(HASHBYTES('MD5','1'))))`,
+			`2 AND (SELECT 2*(IF((SELECT * FROM (SELECT CONCAT(0x71,md5(1),0x78))s), 8446744073709551610, 8446744073709551610)))`,
+			`1 AND (SELECT COUNT(*) FROM users) > 0`,
+			`1 OR (SELECT SUBSTRING(password,1,1) FROM users) = 'a'`,
+			`1 AND 1=(SELECT COUNT(*) FROM tabname)`,
+			`x' AND (SELECT 1 FROM dual)='1`,
+			`1 AND (SELECT * FROM (SELECT(SLEEP(5)))a)`,
+		} {
+			if v := d.Analyze([]byte(attack)); !v.Detected() {
+				t.Errorf("missed %q (score %d, signals %v)", attack, v.Score, v.Signals)
+			}
+		}
+	})
+
+	t.Run("prose and ordinary values pass", func(t *testing.T) {
+		for _, benign := range []string{
+			"and (select the option that applies)",
+			"choose a plan and (select yearly for a discount)",
+			"filter by region and (select all) is the default",
+			"the report is grouped and (selected rows) are highlighted",
+			"in (select) mode the cursor changes",
+			"1 and 2",
+			"a > b and c < d",
+		} {
+			if v := d.Analyze([]byte(benign)); v.Detected() {
+				t.Errorf("false positive on %q (score %d, signals %v)", benign, v.Score, v.Signals)
+			}
+		}
+	})
+}

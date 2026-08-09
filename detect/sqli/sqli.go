@@ -112,6 +112,17 @@ const (
 	// conjunction, and an apostrophe in French or Irish comes singly, so "the
 	// word 'or' is" and "l'or et l'argent" do not qualify.
 	SignalQuotedConnector
+
+	// SignalSubquery is a boolean connector or comparison joined to a
+	// parenthesised SELECT: "AND (SELECT ...)", "IN (SELECT ...)",
+	// "1=(SELECT ...)". This is the backbone of blind and error-based
+	// injection, and it carries no tautology, no UNION and no comment, so
+	// nothing else here scored it.
+	//
+	// The connector is what makes it an injection rather than a query. An
+	// application may legitimately be handed a SELECT; what it is never handed
+	// is a SELECT welded onto the WHERE clause it wrote itself.
+	SignalSubquery
 )
 
 // String implements fmt.Stringer, so a decision can say what it saw.
@@ -150,6 +161,9 @@ func (s Signal) String() string {
 	if s&SignalTerminatedQuoteBreak != 0 {
 		add("terminated_quote_break")
 	}
+	if s&SignalSubquery != 0 {
+		add("subquery")
+	}
 	if s&SignalQuotedConnector != 0 {
 		add("quoted_connector")
 	}
@@ -169,7 +183,7 @@ func weightOf(s Signal) int {
 	switch s {
 	case SignalUnionSelect, SignalStackedQuery, SignalDangerFunction,
 		SignalBooleanInjection, SignalTerminatedQuoteBreak,
-		SignalQuotedConnector:
+		SignalQuotedConnector, SignalSubquery:
 		return 5
 	case SignalCommentSplit:
 		return 4
@@ -382,6 +396,10 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 	// context, and only when something followed the quote.
 	if ctx != ctxNone && len(toks) > 0 {
 		sigs |= SignalQuoteBreak
+	}
+
+	if subqueryFollowsConnector(toks) {
+		sigs |= SignalSubquery
 	}
 
 	for i := 0; i < len(toks); i++ {
@@ -879,4 +897,81 @@ func isPackagedDangerCall(toks []token, i int) bool {
 	return toks[i+1].kind == tkDot &&
 		(toks[i+2].kind == tkIdent || toks[i+2].kind == tkKeyword) &&
 		toks[i+3].kind == tkLParen
+}
+
+// subqueryFollowsConnector reports a parenthesised SELECT attached to a boolean
+// connector or a comparison: "AND (SELECT ...)", "IN (SELECT ...)",
+// "1=(SELECT ...)".
+//
+// Both halves are required, and that is the whole discrimination. A SELECT on
+// its own may be a query an application was legitimately given. A connector on
+// its own is English -- "choose a plan and (select yearly for a discount)" is a
+// sentence, and it fails here because what follows the paren is a word, not the
+// SELECT keyword. Welded together they are a fragment grafted onto a WHERE
+// clause the application wrote, which is what injection is.
+func subqueryFollowsConnector(toks []token) bool {
+	for i := 0; i+2 < len(toks); i++ {
+		if !isSubqueryConnector(toks[i]) {
+			continue
+		}
+		// The paren may be separated from the connector by a value being
+		// compared -- "1 AND 1=(SELECT" -- so scan a short run rather than
+		// requiring adjacency. The run is bounded because everything on this
+		// path reads attacker input.
+		for j := i + 1; j < len(toks) && j <= i+4; j++ {
+			if toks[j].kind != tkLParen {
+				continue
+			}
+			k := j + 1
+			for k < len(toks) && toks[k].kind == tkLParen {
+				k++
+			}
+			// The same discrimination UNION SELECT already uses: a real SELECT
+			// is followed by a select-list -- a column reference, a number,
+			// NULL, '*', a function -- and prose is followed by English.
+			// "choose a plan and (select yearly for a discount)" gets no
+			// further than this.
+			if k < len(toks) && toks[k].kind == tkKeyword && lowerWord(toks[k].text) == "select" &&
+				selectListFollows(toks, k+1) && subqueryHasBody(toks, k+1) {
+				return true
+			}
+			break
+		}
+	}
+	return false
+}
+
+// isSubqueryConnector reports whether t is the kind of token a subquery gets
+// grafted onto: a boolean connector, a set membership test, or a comparison.
+func isSubqueryConnector(t token) bool {
+	switch t.kind {
+	case tkLogic:
+		return true
+	case tkKeyword:
+		switch lowerWord(t.text) {
+		case "and", "or", "in", "not", "exists", "where", "having":
+			return true
+		}
+	case tkOperator:
+		switch string(t.text) {
+		case "=", "<", ">", "<=", ">=", "<>", "!=":
+			return true
+		}
+	}
+	return false
+}
+
+// subqueryHasBody reports whether the SELECT starting at i selects anything.
+//
+// "(select)" and "(select all)" are not subqueries -- no engine runs them -- but
+// they read as one to a select-list check, because ALL is a SQL keyword. Prose
+// produces them readily: "in (select) mode the cursor changes", "filter by
+// region and (select all) is the default".
+func subqueryHasBody(toks []token, i int) bool {
+	if i < len(toks) && toks[i].kind == tkKeyword {
+		if w := lowerWord(toks[i].text); w == "all" || w == "distinct" {
+			i++
+		}
+	}
+	return i < len(toks) && toks[i].kind != tkRParen
 }
