@@ -295,3 +295,20 @@ func WithException(x rules.Exception) Option {
 		c.exceptions = append(c.exceptions, x)
 	}
 }
+
+// WithExceptions applies several exceptions at once.
+//
+// It exists for ruleset/profiles, which returns a platform's whole set:
+//
+//	waf, err := gwaf.New(gwaf.WithExceptions(profiles.WordPress()...))
+//
+// Each is validated exactly as WithException validates one, so a malformed
+// entry in a profile fails at construction rather than silently suppressing
+// everything.
+func WithExceptions(xs ...rules.Exception) Option {
+	return func(c *config) {
+		for _, x := range xs {
+			c.exceptions = append(c.exceptions, x)
+		}
+	}
+}
