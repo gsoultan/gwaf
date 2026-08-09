@@ -1809,3 +1809,35 @@ rule that never reaches the threshold alone, so it passed for both a working rul
 and a silenced one; (3) the FP sweep passed an empty method for corpus entries
 that omit the field, building a genuinely malformed line and blaming gwaf for
 catching it. **Each time the harness was the broken side.**
+
+## Rejected: base64 as an interpretation class (2026-08-09)
+
+Real payloads arrive base64-wrapped — elFinder's `target=l1_ZXRjL3Bhc3N3ZA` is
+`etc/passwd` to the code that opens the file. The architecturally right home is
+`internal/interpret`, as a reading rather than a transform, so every rule sees
+the decoded form. It was built that way, with a bail-early run scan, a
+prefix-separator retry for `l1_`-style namespacing, and a decode gate requiring
+the output to be four-fifths printable and to carry a separator so that session
+identifiers and hex digests earned no reading.
+
+It works and it is not payable:
+
+- **benign GET +31%**, benign POST +2.8%, attack +1.5%
+- **`TestSLOZeroAllocations` fails** — the decode allocates
+- **`TestCoreRulesetIsClean` fails** — new calibration false positives
+
+The cause is structural rather than a tuning miss. Every other ambiguity class
+announces itself with a lead byte — a percent, a backslash, a plus — and
+`Detect`'s table rejects almost every byte of real traffic in one lookup. Base64
+is entirely alphanumeric, so it cannot use that table at all. Worse, `/` and `-`
+are alphabet characters, so **every URL path is a base64 run**: `/api/v1/orders/12345`
+clears any run-length floor, and the decode gate then runs on it. The floor
+cannot fix this, because real payloads are short — `ZXRjL3Bhc3N3ZA==` is sixteen
+characters, so a floor high enough to exclude paths excludes the attacks too.
+
+**A reading needs a cheap negative test, and base64 does not have one.** If this
+is revisited, the anchor has to come from somewhere other than the value's own
+bytes — a parameter name the application documents as encoded, or a schema that
+declares the field base64 — which is knowledge the embedder has and the engine
+does not. That is the same shape as the off-origin and type-marker rules, and it
+is probably where this belongs.
