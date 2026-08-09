@@ -1898,3 +1898,23 @@ payloads, they are not being handed them.
 Next step is to confirm that by checking what internal/body parses for
 multipart and XML, and whether those parsers are reached for the content types
 these CVEs use -- not by adding signals.
+
+**Correction, same day: that diagnosis was wrong, and it was wrong because it
+was eyeballed.** It came from reading about twenty-eight lines of printed miss
+output and noticing multipart and SOAP in them. Tested properly -- six real
+corpus payloads of exactly those shapes, replayed through gwaf.New() -- five of
+six block, including both arbitrary-file-upload multiparts (rule 1010
+ScriptInUpload and rule 4919 PHP). The samples were drawn from the corpus rather
+than from the miss list, which is the mistake: at 76% RCE most cases are caught,
+so any sample that is not *specifically the misses* is mostly caught cases.
+
+internal/body does have a real limit -- DetectContent handles JSON, +json and
+form-urlencoded, and everything else including XML falls back to whole-body
+inspection rather than parsed fields -- but whole-body inspection is not zero
+coverage, and it is not established that this is where the RCE gap lives.
+
+**The RCE gap is still unlocated.** Anyone picking it up should start by dumping
+the actual miss list for class=rce from the current build and classifying all of
+it, not a sample of it. The tooling for that is the throwaway probe pattern used
+all session; it needs to write JSON rather than print, so the classification can
+be counted instead of read.
