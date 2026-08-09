@@ -59,6 +59,13 @@ func (splitPathOp) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool
 	// Join this prefix with each other argument and ask the rule that already
 	// decides what a sensitive file is. Bounded by the argument count, and only
 	// reached for a value that is already a sensitive directory.
+	//
+	// buf escapes -- it is handed to an interface method the compiler cannot
+	// prove does not retain it -- so this costs one allocation. It is declared
+	// after the guards above on purpose: ordinary traffic returns before
+	// reaching it and allocates nothing, which is where the SLO applies.
+	// Measured at 0 allocs benign, 1 alloc on a value already shaped like a
+	// sensitive directory, by BenchmarkSplitPathEval and its benign twin.
 	var buf [maxJoinLen]byte
 	for i, name := range ctx.Siblings.Names {
 		if i >= len(ctx.Siblings.Values) || string(name) == ctx.Key {
@@ -74,7 +81,10 @@ func (splitPathOp) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool
 			n++
 		}
 		n += copy(buf[n:], other)
-		if _, ok := sensitiveFileOp().Eval(nil, buf[:n]); ok {
+		// An empty context rather than nil: sensitiveFileOp ignores it today,
+		// and a nil here would turn any future key-aware implementation into a
+		// panic on the request path rather than a compile error.
+		if _, ok := sensitiveFileOp().Eval(&emptyCtx, buf[:n]); ok {
 			return rules.WholeValue(value), true
 		}
 	}
@@ -86,6 +96,10 @@ func (splitPathOp) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool
 func (splitPathOp) Literals() ([]string, bool) { return []string{"/"}, true }
 
 func (splitPathOp) Cost() types.Fuel { return types.CostLiteralMatch * 4 }
+
+// emptyCtx is handed to the nested operator call above. It is a package-level
+// value rather than a literal so the call site allocates nothing.
+var emptyCtx rules.EvalContext
 
 // maxJoinLen bounds the join. Both halves are attacker-supplied.
 const maxJoinLen = 512

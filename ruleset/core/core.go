@@ -330,7 +330,17 @@ var decodeChain = []rules.Transform{
 // widening it is false positives on prose, since these rules also see comment
 // bodies: "etc" is an English word, which is why every fragment below is one a
 // sentence does not produce ("etc/passwd" yes, "etc/issue" no).
-func sensitiveFileOp() rules.Operator {
+// sensitiveFileOperator is built once. rules.Operator is documented as safe for
+// concurrent use precisely so one instance can be shared by every transaction,
+// and SplitPathRule consults this one inside a loop over the request's
+// arguments -- rebuilding it there cost 88 allocations and 6.6 KB per
+// evaluation, on a path whose SLO is zero.
+var sensitiveFileOperator = buildSensitiveFileOp()
+
+// sensitiveFileOp returns the shared operator.
+func sensitiveFileOp() rules.Operator { return sensitiveFileOperator }
+
+func buildSensitiveFileOp() rules.Operator {
 	return op.ContainsAny(
 		// Unix account and system state.
 		"etc/passwd", "etc/shadow", "etc/group", "etc/gshadow",
