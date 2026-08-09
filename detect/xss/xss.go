@@ -1030,18 +1030,41 @@ func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 4 }
 // middle of somebody else's expression.
 func scanScriptBreakout(src []byte) Signal {
 	for i := 0; i < len(src); i++ {
-		// The breakout: a quote or a closing paren ending what the page opened.
+		// The breakout: whatever ends what the page opened. A quote closes a
+		// string, a paren closes a call, a brace closes a block -- and a bare
+		// ';' closes a statement, which is what a payload landing in a numeric
+		// context has to do because there is no quote around it.
 		c := src[i]
-		if c != '"' && c != '\'' && c != ')' {
+		if c != '"' && c != '\'' && c != ')' && c != '}' && c != ';' {
 			continue
 		}
 		j := i + 1
+		if c == ';' {
+			// The terminator is itself the separator, so do not require another.
+			// It must follow something, or a leading ';' in prose qualifies.
+			if i == 0 {
+				continue
+			}
+			for j < len(src) && isSpace(src[j]) {
+				j++
+			}
+			if j < len(src) && isAlpha(src[j]) {
+				if k := callAt(src, j); k > 0 && scanBreakoutTail(src, k, 0) {
+					return SignalScriptBreakout
+				}
+			}
+			continue
+		}
 		// A separator that keeps the expression well-formed: an operator for a
 		// string context ("-alert(1)-"), a terminator for a statement context
 		// (1);alert(1)).
+		// Separators are what a payload writes between closing the page's
+		// construct and starting its own: an operator to rejoin a string, or a
+		// terminator and closing brackets to finish a statement and a block.
 		sep := false
 		for j < len(src) && (isSpace(src[j]) || src[j] == '-' || src[j] == '+' ||
-			src[j] == ';' || src[j] == ',' || src[j] == '|' || src[j] == '&') {
+			src[j] == ';' || src[j] == ',' || src[j] == '|' || src[j] == '&' ||
+			src[j] == ')' || src[j] == '}') {
 			if !isSpace(src[j]) {
 				sep = true
 			}
@@ -1051,11 +1074,8 @@ func scanScriptBreakout(src []byte) Signal {
 			continue
 		}
 		// The call: an identifier, possibly dotted, followed by '('.
-		k := j
-		for k < len(src) && (isNameByte(src[k]) || src[k] == '.') {
-			k++
-		}
-		if k == j || k >= len(src) || src[k] != '(' {
+		k := callAt(src, j)
+		if k < 0 {
 			continue
 		}
 		// The tail that proves intent: a comment swallowing the remainder, or a
@@ -1070,15 +1090,35 @@ func scanScriptBreakout(src []byte) Signal {
 // scanBreakoutTail reports whether what follows the injected call keeps the
 // surrounding script parseable -- a comment to the end of the line, or a
 // re-opened quote matching the one the payload closed.
+// callAt returns the index of the '(' opening a call whose identifier starts at
+// j, or -1 when what follows is not a call.
+func callAt(src []byte, j int) int {
+	k := j
+	for k < len(src) && (isNameByte(src[k]) || src[k] == '.') {
+		k++
+	}
+	if k == j || k >= len(src) || src[k] != '(' {
+		return -1
+	}
+	return k
+}
+
 func scanBreakoutTail(src []byte, i int, opened byte) bool {
 	for ; i < len(src); i++ {
 		if src[i] == '/' && i+1 < len(src) && (src[i+1] == '/' || src[i+1] == '*') {
 			return true
 		}
-		if opened != ')' && src[i] == opened {
-			// Re-balancing only counts when an operator rejoined the string:
-			// `"-alert(1)-"` re-opens, `"); foo("x")` does not.
-			return i > 0 && (src[i-1] == '-' || src[i-1] == '+' || src[i-1] == ',')
+		if opened != ')' && opened != 0 && opened != '}' && src[i] == opened {
+			// Re-balancing only counts when the payload put the string back
+			// the way it found it: an operator rejoins an expression
+			// (`"-alert(1)-"`), and an assignment or an opening bracket starts
+			// a fresh one (`; s='`, `x=("`, `function test(){"`). A quote that
+			// simply appears later is somebody quoting twice in a sentence.
+			switch src[i-1] {
+			case '-', '+', ',', '=', '(', '{':
+				return i > 0
+			}
+			return false
 		}
 	}
 	return false

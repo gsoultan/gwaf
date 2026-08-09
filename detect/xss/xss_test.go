@@ -533,3 +533,47 @@ func TestScriptContextBreakout(t *testing.T) {
 		}
 	})
 }
+
+// TestScriptContextStatementBreakout extends the script-context signal to the
+// shapes a broad CVE replay found it blind to.
+//
+// scanScriptBreakout required a quote or a closing paren to open the payload and
+// an operator to rejoin it. Real payloads close whatever the page opened, which
+// is often a statement rather than an expression: "1026553;alert(1)//772" needs
+// no quote at all, and `19753";}alert(1);function test(){"` closes a string, a
+// block and then re-opens both.
+func TestScriptContextStatementBreakout(t *testing.T) {
+	d := New()
+
+	t.Run("statement-context payloads fire", func(t *testing.T) {
+		for _, attack := range []string{
+			`1026553;alert(document.domain)//772`,
+			`'; alert(document.domain); s='`,
+			`x");alert(9);x=("`,
+			`19753";}alert(document.domain);function test(){"`,
+			`80089948; alert(document.domain)//`,
+			`1); alert(document.domain);/*x`,
+		} {
+			if v := d.Analyze([]byte(attack)); !v.Detected() {
+				t.Errorf("missed %q (score %d, signals %v)", attack, v.Score, v.Signals)
+			}
+		}
+	})
+
+	t.Run("code and prose still pass", func(t *testing.T) {
+		for _, benign := range []string{
+			`foo(); bar()`,
+			`init(); render(); teardown()`,
+			`price(1); price(2)`,
+			`SELECT count(1); -- not javascript`,
+			`total = subtotal(1); tax = rate(2)`,
+			`he said "hello"; she said "hi"`,
+			`step 1; step 2; step 3`,
+			`if (a) { b(); } else { c(); }`,
+		} {
+			if v := d.Analyze([]byte(benign)); v.Detected() {
+				t.Errorf("false positive on %q (score %d, signals %v)", benign, v.Score, v.Signals)
+			}
+		}
+	})
+}
