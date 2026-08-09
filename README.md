@@ -127,6 +127,53 @@ a small constant independent of ruleset size — zero for values containing no
 attack vocabulary, and bounded above by a handful otherwise. Enforced as tests
 (`TestSLO*`), not merely observed in benchmarks.
 
+### Against Coraza + CRS, on somebody else's corpus
+
+Detection numbers are easy to publish and hard to trust, so this one is a
+comparison, on a corpus neither engine's authors wrote, run through both engines
+the way an adopter deploys them — as ordinary `net/http` middleware in front of
+the same origin.
+
+**2,455 payload-bearing exploit requests** extracted from
+[projectdiscovery/nuclei-templates][nt] — real requests for real CVEs — against
+**Coraza v3.7.0 + CRS v4.25.0**:
+
+| | gwaf | gwaf tuned | Coraza + CRS 4.25 |
+|---|---|---|---|
+| Detection | 86.8% | **89.2%** | 89.7% |
+| False positives (ordinary traffic) | 2/12 | **0/12** | 4/12 |
+| Latency | 191 µs | **178 µs** | 1,677 µs |
+
+Detection is a tie. The difference is the other two columns: **zero false
+positives against four, at roughly a tenth of the latency.** CRS leads on RCE,
+XSS and SQLi; gwaf leads on redirect, XXE, deserialization, SSRF and file
+upload, and wins outright on encoded payloads — 100% against 85.4% on a corpus
+of the same attacks re-encoded eight ways.
+
+Run it yourself:
+
+```sh
+git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates /tmp/nuclei-templates
+git clone --depth 1 https://github.com/coreruleset/coreruleset /tmp/crs
+python3 test/headtohead/extract_corpus.py /tmp/nuclei-templates/http > /tmp/corpus.json
+NUCLEI_CORPUS=/tmp/corpus.json CRS_RULES=/tmp/crs/rules make nuclei
+```
+
+Two things about that harness are worth knowing, because both produced
+flattering nonsense before they were found. A **missing `Host` header** makes
+CRS score rule 920280 at its entire anomaly threshold, so every request blocks
+for a reason unrelated to its payload — the first version of this comparison
+reported 100% detection beside a 100% false-positive rate. And **LF-normalised
+multipart bodies** are refused by every parser, so uploads become invisible.
+Roughly 56% of the corpus is also version probes carrying no payload; counting
+those as misses understates both engines by about twenty points and
+distinguishes neither, so they are separated rather than scored.
+
+`test/headtohead` also runs the CRS regression suite, which is CRS's home turf.
+Both are there deliberately: quoting either alone is picking the ground.
+
+[nt]: https://github.com/projectdiscovery/nuclei-templates
+
 ## What makes it different
 
 | | |

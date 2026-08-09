@@ -181,3 +181,39 @@ rate, same gate as every other detector.
 | **Transducers silently introduce the bypass class we built the lattice to kill** | Differential fuzz vs. the materialized oracle is a ship-gate, not a nice-to-have. Ship 5 transforms, not 30. This is the project's top technical risk. |
 | Closure-threaded plan doesn't beat a naive loop at small ruleset sizes | Benchmark at 10/100/1k rules in Phase 1; IR and executor are decoupled, so the executor is swappable without touching frontends |
 | Schema specialization prunes real coverage when a schema is wrong | Fall back to the full plan when unspecified; recompile on schema change; never trust a runtime-supplied schema. Coverage equivalence is a Phase 3 exit gate. |
+
+## What v1.0 requires
+
+v1.0 is one promise: the root package, `types/`, and the four extension
+interfaces stop moving. Everything below exists because that promise is only
+worth making once, and only when there is evidence it can be kept.
+
+Right now there is not. Two fields were added to `rules.EvalContext` in a single
+session of v0.4.0 development, and one of them — `Host` — enabled a rule that
+shipped with a bypass. **The extension surface is still learning, and it is
+learning from one adopter.** Freezing it now freezes one opinion.
+
+So the criteria are deliberately about evidence rather than about features:
+
+- [ ] **Three external adopters in production**, at least one of them profile C
+      (a vendor building a product on gwaf — INTEGRATION.md). Profiles A and B
+      exercise `New`, the middleware and the transaction API; only C stresses
+      `Operator`, `Transform`, `Action` and `Resolver`, which are the parts that
+      freeze hardest.
+- [ ] **The four extension interfaces unchanged across three consecutive minor
+      releases.** Not "we think they are stable" — three releases where nobody
+      needed to add a field.
+- [ ] **The trust table in RULES.md §4 unchanged across those same releases.**
+      Moving a field between its columns is a breaking change to the security
+      model even when the signature is untouched.
+- [ ] **The CVE process exercised once, for real.** SECURITY.md describes a
+      reporting channel, a 90-day clock and a regression-test commitment. A
+      process that has never run is a document.
+- [ ] **A benchmark baseline recorded on hardware that is not one laptop**, so
+      the SLO table means something to somebody else.
+
+Deliberately *not* on the list: a detection-rate target. Detection is already at
+parity with CRS on a third-party corpus, and the differentiators — zero false
+positives on ordinary traffic, an order of magnitude of latency, and being
+embeddable at all — are not things another point of recall improves. Chasing one
+would be optimising the column where the competition is a tie.

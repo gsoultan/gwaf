@@ -66,10 +66,40 @@ func New(opts ...Option) (*WAF, error) {
 		return nil, fmt.Errorf("gwaf: compiling ruleset: %w", err)
 	}
 
+	warnInertOriginRules(&cfg, set)
+
 	w := &WAF{cfg: cfg}
 	w.ruleset.Store(rs)
 	w.txPool.New = func() any { return newTransaction(w) }
 	return w, nil
+}
+
+// warnInertOriginRules says so when a compiled rule cannot decide anything.
+//
+// The off-origin redirect and SSRF rules compare a destination against the
+// hostnames the embedder declared, and report nothing when none were. That is
+// the safe behaviour -- it is the fix for a v0.4.0 bypass where the comparison
+// read the attacker-supplied Host header -- but silence is exactly the wrong
+// user experience for it: an embedder upgrading from v0.4.0 keeps a ruleset
+// that compiles, passes, and quietly stops covering a whole OWASP category.
+//
+// So it is said out loud, once, at construction, naming the rule and the fix.
+// Losing coverage should never be quieter than gaining it.
+func warnInertOriginRules(cfg *config, set rules.Set) {
+	if len(cfg.origins) > 0 || cfg.logger == nil {
+		return
+	}
+	for i := range set {
+		switch set[i].Op.Name() {
+		case "off_origin_navigation_url", "off_origin_fetch_url":
+			cfg.logger.Warn(
+				"gwaf: rule is inert without configured origins; "+
+					"off-origin redirect and SSRF detection is reporting nothing. "+
+					"Fix: gwaf.New(gwaf.WithOrigins(\"your.host\"))",
+				"rule", set[i].ID, "msg", set[i].Msg)
+			return
+		}
+	}
 }
 
 // selectByConfidence drops rules below the configured minimum tier.

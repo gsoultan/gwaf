@@ -3,6 +3,8 @@
 package gwaf_test
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -652,4 +654,33 @@ func blocked(t *testing.T, w *gwaf.WAF, value string) bool {
 	tx.SetRequestLine("GET", "/", "HTTP/1.1")
 	tx.AddArgument("q", value)
 	return tx.ProcessRequestBody().Blocked()
+}
+
+// TestInertOriginRulesAreAnnounced covers the upgrade cliff created in v0.4.1.
+//
+// The off-origin rules report nothing when no origins are declared, which is the
+// safe direction and the fix for a real bypass. The failure mode it creates is a
+// user one: an embedder upgrading from v0.4.0 keeps a ruleset that compiles,
+// passes its tests, and quietly stops covering a whole OWASP category.
+//
+// Losing coverage must never be quieter than gaining it.
+func TestInertOriginRulesAreAnnounced(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	if _, err := gwaf.New(gwaf.WithLogger(logger)); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "WithOrigins") {
+		t.Errorf("no warning naming the fix when origins are unset; got %q", got)
+	}
+
+	buf.Reset()
+	if _, err := gwaf.New(gwaf.WithLogger(logger), gwaf.WithOrigins("shop.example.com")); err != nil {
+		t.Fatalf("New(origins): %v", err)
+	}
+	if s := buf.String(); strings.Contains(s, "WithOrigins") {
+		t.Errorf("warned despite configured origins: %q", s)
+	}
 }
