@@ -25,6 +25,26 @@ func WholeValue(value []byte) Match {
 
 // EvalContext carries the context an operator may need beyond the value itself.
 //
+// # What may be trusted
+//
+// The fields come from two places that look identical in Go and are not:
+//
+//   - Target, Key and Origins are trustworthy. The first two are how gwaf
+//     parsed the request rather than what the request said; Origins is
+//     embedder configuration, set with gwaf.WithOrigins.
+//   - Method, RequestURI, Host and Siblings are attacker-controlled. All four
+//     are bytes the client chose.
+//
+// Attacker-controlled context is evidence, never ground truth. It may raise
+// suspicion; it may not be the thing that clears a value. The direction is what
+// matters: Siblings used to convict -- "path=/etc/ together with target=passwd"
+// -- is sound, because supplying it gains an attacker nothing. Host used to
+// acquit -- "this destination matches Host, so it is same-origin" -- is a
+// bypass, because the attacker supplies both sides and sets them equal.
+//
+// That was a real bypass in v0.4.0's OffOriginURLRule, fixed in v0.4.1 by
+// comparing against Origins. docs/RULES.md §4 has the table and the reasoning.
+//
 // It is passed by pointer and is owned by the engine; operators must not retain
 // it or any slice reachable from it beyond the Eval call, because the backing
 // arena is recycled when the transaction ends.

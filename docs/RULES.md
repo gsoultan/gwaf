@@ -156,6 +156,50 @@ without a hint, a custom `Operator`, `Transform`, `Action`, and `Resolver`, and
 an `Exception` — is `examples/customrules`. It is a test as well as an example,
 so the behaviour its comments describe is the behaviour CI checks.
 
+### What an extension may trust
+
+`EvalContext` is the only thing an `Operator` or `Action` sees beyond the value, and it mixes two
+kinds of data that look identical in Go and are not the same at all. **Reading the wrong one turns
+a rule into a bypass**, so the split is stated here rather than left to be inferred.
+
+| Field | Source | Trust |
+|---|---|---|
+| `Target`, `Key` | engine | **Trustworthy.** Derived from how gwaf parsed the request, not from its bytes. |
+| `Origins` | embedder, via `gwaf.WithOrigins` | **Trustworthy.** Configuration. The one field an attacker cannot reach. |
+| `Method`, `RequestURI`, `Host` | the request | **Attacker-controlled.** |
+| `Siblings` (names and values) | the request | **Attacker-controlled.** |
+
+The rule that follows is short:
+
+> Attacker-controlled context is **evidence**, never **ground truth**. It may raise suspicion. It
+> may never be the thing that clears a value.
+
+The difference is the direction the field points. `Siblings` used to *convict* — `path=/etc/` plus
+`target=passwd` is worse than either alone, and an attacker gains nothing by supplying it — is
+sound. `Host` used to *acquit* — "this destination matches the Host, so it is same-origin" — is a
+bypass, because the attacker supplies both sides and simply sets them equal.
+
+That is not hypothetical. `OffOriginURLRule` shipped in v0.4.0 doing exactly that, was enabled by
+default on the strength of it, and `Host: evil.tld` with `redirect_to=https://evil.tld/` walked
+through. It is fixed in v0.4.1 by comparing against `Origins` instead, and the rule now reports
+nothing when no origins are declared — because a destination cannot be shown foreign without
+something trustworthy to be foreign to, and silently falling back to `Host` would be a guarantee
+the request can revoke.
+
+Three consequences worth stating for anyone writing an extension:
+
+- **Needing to acquit means needing configuration.** If a rule's decision requires knowing something
+  about the deployment — which hosts are ours, which tenants exist, which routes are internal — that
+  knowledge is the embedder's. Take it as an option, not from a header.
+- **A rule with no trustworthy input should report nothing, not guess.** Absence of evidence is the
+  safe direction for anything in the default set.
+- **`Resolver` is where out-of-scope signals arrive** (§4 above), and the same rule applies to what
+  it returns: a reputation score the embedder computed is trustworthy, one derived from a header the
+  client sent is not.
+
+These four interfaces freeze at v1.0. The table freezes with them, so a change to which column a
+field sits in is a breaking change to the security model even when the type signature is untouched.
+
 ### Registration
 
 `Operator`, `Transform`, and `Action` are values on a rule — a rule literal names the ones it uses,
