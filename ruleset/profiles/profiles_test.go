@@ -54,11 +54,17 @@ func TestEveryExceptionIsScopedAndExplained(t *testing.T) {
 // path over -- if the exception leaked to either, it would be a switch wearing a
 // scope.
 func TestProfileFixesFalsePositivesWithoutWeakeningDetection(t *testing.T) {
-	base, err := gwaf.New()
+	base, err := gwaf.New(gwaf.WithOrigins("blog.example.com"))
 	if err != nil {
 		t.Fatalf("gwaf.New(): %v", err)
 	}
-	tuned, err := gwaf.New(gwaf.WithExceptions(profiles.WordPress()...))
+	// WithOrigins is required for the off-origin rule to say anything at all --
+	// without a declared origin it cannot show any destination is foreign, which
+	// is the fix for the v0.4.0 Host-header bypass.
+	tuned, err := gwaf.New(
+		gwaf.WithExceptions(profiles.WordPress()...),
+		gwaf.WithOrigins("blog.example.com"),
+	)
 	if err != nil {
 		t.Fatalf("gwaf.New(profile): %v", err)
 	}

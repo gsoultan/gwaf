@@ -4,6 +4,46 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## v0.4.1
+
+### Security
+
+- **Fixed a bypass in `core.OffOriginURLRule`, shipped in v0.4.0
+  (`ruleset/core/offorigin.go`).** The rule decided whether a destination
+  pointed somewhere else by comparing it against the request's `Host` header —
+  and an attacker supplies that header as freely as the destination. `Host:
+  evil.tld` with `redirect_to=https://evil.tld/` compared same-origin and
+  passed.
+
+  The technique is Host-header spoofing, and the lesson generalises past this
+  rule: **a verdict that depends on attacker-supplied data is not a verdict.**
+  The rule's entire justification for shipping enabled was that it could finally
+  tell an OAuth callback from an open redirect; that justification was revocable
+  by the request being judged.
+
+  Exploitability is limited for classic open-redirect phishing, because the
+  victim's browser sets `Host`, not the attacker. The real damage is silent
+  false negatives wherever `Host` is not what the rule assumed — proxy rewrites,
+  port variants, multi-tenant vhosts — and `core.SSRFParamRule`, which shares
+  the comparison and *is* reached by requests the attacker sends directly.
+
+  Regression test: `TestOffOriginURLTrustsConfigurationNotTheRequest`, which
+  asserts the fix by setting `Host` to the attacker's own domain.
+
+### Added
+
+- **`gwaf.WithOrigins(hosts...)`** — the hostnames this application answers on.
+  The off-origin redirect and SSRF rules compare against these and no longer read
+  `Host` at all. Subdomains of a declared origin are accepted; ports are ignored.
+
+### Changed
+
+- **The off-origin rules report nothing when no origins are declared.** Without
+  something trustworthy to compare against, no destination can be shown foreign,
+  and silently trusting `Host` would give a guarantee the request can revoke.
+  Embedders wanting redirect and SSRF coverage must now call `WithOrigins` —
+  a deliberate trade of coverage-by-default for a guarantee that holds.
+
 ## v0.4.0
 
 ### Added

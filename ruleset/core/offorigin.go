@@ -198,71 +198,54 @@ func (o offOriginOp) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bo
 	if !matchesParam(ctx.Key, names) {
 		return rules.Match{}, false
 	}
-	// No request host means no origin to compare against, and this rule ships
-	// enabled: it must not block on absence of evidence. A destination cannot be
-	// shown foreign without something to be foreign to, so it stands. The
-	// net/http integration always supplies one; a caller driving the transaction
-	// API by hand may not, and that is their traffic to describe, not ours to
-	// guess at.
-	if len(ctx.Host) == 0 {
+	// Nothing trustworthy to compare against, so nothing can be shown foreign.
+	//
+	// This deliberately does not read ctx.Host, and that is the fix for a bypass
+	// this rule shipped with in v0.4.0: an attacker supplies the Host header as
+	// freely as the destination, so "Host: evil.tld" with
+	// "redirect_to=https://evil.tld/" compared same-origin and passed. A verdict
+	// the request itself can revoke is not a verdict.
+	//
+	// Reporting nothing is the safe direction for a rule in the default set. The
+	// embedder enables it by saying who it is, with gwaf.WithOrigins.
+	if len(ctx.Origins) == 0 {
 		return rules.Match{}, false
 	}
 	host, ok := absoluteHostOf(value)
 	if !ok {
 		return rules.Match{}, false
 	}
-	// A destination on the site's own domain is the application navigating
-	// itself, which is most of what these parameters carry. Only a foreign one
-	// is the vulnerability.
-	if sameSite(host, ctx.Host) {
+	// A destination on a declared origin is the application navigating itself,
+	// which is most of what these parameters carry. Only a foreign one is the
+	// vulnerability.
+	if isDeclaredOrigin(host, ctx.Origins) {
 		return rules.Match{}, false
 	}
 	return rules.WholeValue(value), true
 }
 
-// sameSite reports whether dest is the request's own host or a sibling under the
-// same registrable domain.
+// isDeclaredOrigin reports whether dest is one of the embedder's own hostnames,
+// or a subdomain of one.
 //
-// The comparison is a label-boundary suffix match rather than a public-suffix
-// lookup, because core takes no third-party dependencies and the Public Suffix
-// List is exactly that. The approximation errs toward *allowing* a sibling under
-// a shared two-label suffix, which for a rule that ships enabled is the right
-// direction: the failure is a miss, not somebody's login flow.
-//
-// An empty request host means the request carried none, and nothing can be shown
-// same-site against nothing, so the destination stands as foreign.
-func sameSite(dest, reqHost []byte) bool {
-	if len(reqHost) == 0 || len(dest) == 0 {
+// The list comes from configuration, never from the request. Subdomains are
+// accepted so that declaring "example.com" covers "www.example.com", and the
+// match is on a label boundary so that "example.com.evil.tld" is not.
+func isDeclaredOrigin(dest []byte, origins []string) bool {
+	if len(dest) == 0 {
 		return false
 	}
-	self := stripPort(lowerBytes(reqHost))
-	other := stripPort(lowerBytes(dest))
-	if bytesEqual(self, other) {
-		return true
-	}
-	a, b := registrable(self), registrable(other)
-	return len(a) > 0 && bytesEqual(a, b)
-}
-
-// registrable returns the last two labels of a host, which approximates the
-// registrable domain for the common single-suffix case ("example.com" from
-// "shop.example.com"). A host with fewer than two labels has none.
-func registrable(h []byte) []byte {
-	dot := -1
-	for i := len(h) - 1; i >= 0; i-- {
-		if h[i] != '.' {
-			continue
+	d := string(stripPort(lowerBytes(dest)))
+	for _, o := range origins {
+		if d == o {
+			return true
 		}
-		if dot < 0 {
-			dot = i
-			continue
+		// Subdomain: "www.example.com" under "example.com". The dot is required,
+		// which is what keeps "notexample.com" and "example.com.evil.tld" out.
+		if len(d) > len(o)+1 && d[len(d)-len(o)-1] == '.' && d[len(d)-len(o):] == o {
+			return true
 		}
-		return h[i+1:]
 	}
-	if dot < 0 {
-		return nil
-	}
-	return h
+	return false
 }
 
 // stripPort removes a trailing ":port". IPv6 literals are bracketed, so a colon
@@ -280,18 +263,6 @@ func stripPort(h []byte) []byte {
 		}
 	}
 	return h
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // lowerBytes lowercases ASCII in place-free fashion, returning the input when it

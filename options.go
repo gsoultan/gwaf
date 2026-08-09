@@ -4,6 +4,7 @@ package gwaf
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/gsoultan/gwaf/internal/budget"
 	"github.com/gsoultan/gwaf/rules"
@@ -124,6 +125,7 @@ type config struct {
 
 	schema     *schema.Schema
 	exceptions rules.Exceptions
+	origins    []string
 
 	// err carries a validation failure from an option that can fail, so New
 	// reports it. Options are void functions -- the signature is frozen for
@@ -293,6 +295,32 @@ func WithException(x rules.Exception) Option {
 			return
 		}
 		c.exceptions = append(c.exceptions, x)
+	}
+}
+
+// WithOrigins declares the hostnames this application answers on.
+//
+// Rules that ask whether a destination points somewhere else need something
+// trustworthy to compare against, and the request is not it: an attacker
+// supplies the Host header as freely as the destination, so comparing the two
+// concludes same-origin whenever they are set to match. That was a live bypass
+// in v0.4.0.
+//
+//	waf, err := gwaf.New(gwaf.WithOrigins("shop.example.com", "auth.example.com"))
+//
+// Subdomains of a declared origin are accepted, so "shop.example.com" covers
+// "www.shop.example.com". Ports are ignored.
+//
+// Without it, the off-origin redirect and SSRF rules cannot establish that any
+// destination is foreign and report nothing. That is deliberate: silently
+// trusting the Host header would give a guarantee the request can revoke.
+func WithOrigins(hosts ...string) Option {
+	return func(c *config) {
+		for _, h := range hosts {
+			if h = strings.TrimSpace(strings.ToLower(h)); h != "" {
+				c.origins = append(c.origins, h)
+			}
+		}
 	}
 }
 

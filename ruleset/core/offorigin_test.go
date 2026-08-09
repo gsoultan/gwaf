@@ -25,7 +25,7 @@ func TestOffOriginURLOperator(t *testing.T) {
 		// this case tests the sink-parameter logic and not the same-origin
 		// logic -- TestOffOriginURLIsSameOriginAware covers that.
 		ctx := rules.EvalContext{Target: types.Target{Kind: types.TargetArgs}, Key: key,
-			Host: []byte("target.local")}
+			Origins: []string{"target.local"}}
 		_, ok := o.Eval(&ctx, []byte(value))
 		return ok
 	}
@@ -55,7 +55,7 @@ func TestOffOriginURLOperator(t *testing.T) {
 		nav, fetch := offOriginURL(), offOriginFetchURL()
 		ev := func(o rules.Operator, key, val string) bool {
 			ctx := rules.EvalContext{Target: types.Target{Kind: types.TargetArgs},
-				Key: key, Host: []byte("target.local")}
+				Key: key, Origins: []string{"target.local"}}
 			_, ok := o.Eval(&ctx, []byte(val))
 			return ok
 		}
@@ -107,67 +107,69 @@ func TestOffOriginURLOperator(t *testing.T) {
 	})
 }
 
-// TestOffOriginURLIsSameOriginAware is what moved this rule out of opt-in.
+// TestOffOriginURLTrustsConfigurationNotTheRequest is the regression for a
+// bypass this rule shipped with in v0.4.0.
 //
-// Without the request's own Host there is no difference between
-// "redirect_to=https://shop.example.com/cart" and
-// "redirect_to=https://evil.tld/cart", so the rule had to fire on both and
-// could not ship enabled -- OAuth, SSO and payment returns all send an absolute
-// destination and all of them would have broken. With the Host it fires on the
-// second and not the first, which is the actual vulnerability.
+// The rule compared the destination against the request's Host header to decide
+// whether it pointed somewhere else. An attacker supplies both: "Host: evil.tld"
+// with "redirect_to=https://evil.tld/" compared same-origin and passed, which
+// made the rule's entire safety argument -- that it could now tell an OAuth
+// callback from an open redirect -- revocable by the request it was judging.
 //
-// The registrable-domain comparison is deliberately a suffix match on a label
-// boundary rather than a public-suffix lookup. gwaf's core module takes no
-// third-party dependencies, and the failure mode of the cheap comparison is to
-// *allow* a sibling under a shared suffix -- a miss, not a block -- which is the
-// right direction for a rule that ships on.
-func TestOffOriginURLIsSameOriginAware(t *testing.T) {
+// The trusted side is configuration now. The Host header is not read at all,
+// and the test asserts that by setting it to the attacker's own domain.
+func TestOffOriginURLTrustsConfigurationNotTheRequest(t *testing.T) {
 	o := offOriginURL()
 
-	fire := func(host, key, value string) bool {
-		ctx := rules.EvalContext{Target: types.Target{Kind: types.TargetArgs}, Key: key,
-			Host: []byte(host)}
-		_, ok := o.Eval(&ctx, []byte(value))
+	fire := func(origins []string, host, val string) bool {
+		ctx := rules.EvalContext{
+			Target: types.Target{Kind: types.TargetArgs}, Key: "redirect_to",
+			Host: []byte(host), Origins: origins,
+		}
+		_, ok := o.Eval(&ctx, []byte(val))
 		return ok
 	}
+	mine := []string{"shop.example.com", "auth.example.com"}
 
-	t.Run("same origin passes", func(t *testing.T) {
-		for _, c := range []struct{ host, val string }{
-			{"shop.example.com", "https://shop.example.com/cart"},
-			{"shop.example.com", "https://shop.example.com:443/cart"},
-			{"shop.example.com", "https://auth.example.com/oauth/cb"},
-			{"shop.example.com", "//shop.example.com/x"},
-			{"example.com", "https://www.example.com/"},
-			{"shop.example.com:8443", "https://shop.example.com/cart"},
-		} {
-			if fire(c.host, "redirect_to", c.val) {
-				t.Errorf("false positive: host=%s redirect_to=%s", c.host, c.val)
+	t.Run("a forged Host no longer excuses a foreign destination", func(t *testing.T) {
+		for _, host := range []string{"evil.tld", "x.evil.tld", "shop.example.com", ""} {
+			if !fire(mine, host, "https://evil.tld/") {
+				t.Errorf("bypass: Host=%q made https://evil.tld/ same-origin", host)
 			}
 		}
 	})
 
-	t.Run("off origin fires", func(t *testing.T) {
-		for _, c := range []struct{ host, val string }{
-			{"shop.example.com", "https://evil.tld/cart"},
-			{"shop.example.com", "http://interact.sh"},
-			{"shop.example.com", "//oast.me/x"},
-			{"shop.example.com", "https://example.com.evil.tld/"},
-			{"shop.example.com", "https://shop.example.com.evil.tld/"},
+	t.Run("declared origins and their subdomains pass", func(t *testing.T) {
+		for _, val := range []string{
+			"https://shop.example.com/cart",
+			"https://shop.example.com:443/cart",
+			"https://www.shop.example.com/cart",
+			"https://auth.example.com/oauth/cb",
+			"//shop.example.com/x",
 		} {
-			if !fire(c.host, "redirect_to", c.val) {
-				t.Errorf("missed: host=%s redirect_to=%s", c.host, c.val)
+			if fire(mine, "evil.tld", val) {
+				t.Errorf("false positive on a declared origin: %s", val)
 			}
 		}
 	})
 
-	t.Run("no Host header does not fire", func(t *testing.T) {
-		// This rule ships in the default set, so it must not block on absence of
-		// evidence: with no request host there is nothing for a destination to
-		// be foreign to. The repo's own benign corpus found this -- a JSON body
-		// carrying {"url": "https://example.com/x"} through a transaction with
-		// no Host was blocked, which is a false positive on ordinary traffic.
-		if fire("", "redirect_to", "https://evil.tld/") {
-			t.Error("fired with no Host to compare against")
+	t.Run("lookalikes are not subdomains", func(t *testing.T) {
+		for _, val := range []string{
+			"https://shop.example.com.evil.tld/",
+			"https://notshop.example.com/",
+			"https://example.com/",
+		} {
+			if !fire(mine, "shop.example.com", val) {
+				t.Errorf("missed lookalike: %s", val)
+			}
+		}
+	})
+
+	t.Run("no declared origins reports nothing", func(t *testing.T) {
+		// The safe direction for a rule in the default set: without something
+		// trustworthy to compare against, nothing can be shown foreign.
+		if fire(nil, "shop.example.com", "https://evil.tld/") {
+			t.Error("fired with no configured origins")
 		}
 	})
 }

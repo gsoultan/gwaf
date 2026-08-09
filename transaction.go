@@ -151,6 +151,7 @@ type valueSpan struct{ key, data types.Span }
 func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.rs = rs
 	tx.meter.Reset(tx.waf.cfg.fuelLimit)
+	tx.eval.SetOrigins(tx.waf.cfg.origins)
 	tx.arena.SetLimit(tx.waf.cfg.limits.MaxArenaSize)
 	tx.arena.Reset()
 	tx.values = tx.values[:0]

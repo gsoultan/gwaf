@@ -62,6 +62,20 @@ type EvalContext struct {
 	RequestURI []byte
 	Host       []byte
 
+	// Origins are the hostnames the embedder declared as its own, via
+	// gwaf.WithOrigins. Empty when none were declared.
+	//
+	// This exists because Host does not. A rule that asks "is this destination
+	// somewhere else?" cannot answer it from the request, because the request
+	// supplies both sides: set Host to match the destination and any comparison
+	// against it concludes same-origin. That was a real bypass in v0.4.0's
+	// off-origin rule, and the lesson generalises -- a verdict that depends on
+	// attacker-supplied data is not a verdict.
+	//
+	// Who the application is, is configuration. It is the embedder's to state
+	// and gwaf's to trust.
+	Origins []string
+
 	// Siblings are the other arguments of the same request, when the engine has
 	// them. It is nil outside the argument collections.
 	//

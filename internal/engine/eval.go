@@ -145,6 +145,10 @@ type Evaluator struct {
 	argNames  [][]byte
 	argValues [][]byte
 
+	// origins are the embedder's declared hostnames, set once per transaction
+	// rather than read from the request. See rules.EvalContext.Origins.
+	origins []string
+
 	// readings holds the plausible interpretations of the value under
 	// evaluation. It owns reusable buffers, so enumerating alternatives costs
 	// no allocation after warm-up.
@@ -431,6 +435,9 @@ func matchedBytes(data []byte, m rules.Match) []byte {
 // A phase can legitimately see none of these -- a response-phase evaluation, or
 // an embedder that never called SetRequestLine -- so the fields are cleared
 // first and operators are documented to handle empty.
+// SetOrigins records the hostnames the embedder declared as its own.
+func (e *Evaluator) SetOrigins(origins []string) { e.origins = origins }
+
 func (e *Evaluator) bindRequest(values []Value) {
 	e.ctx.Method = nil
 	e.ctx.RequestURI = nil
@@ -444,6 +451,7 @@ func (e *Evaluator) bindRequest(values []Value) {
 	e.argNames = e.argNames[:0]
 	e.argValues = e.argValues[:0]
 	e.ctx.Siblings = rules.Args{}
+	e.ctx.Origins = e.origins
 
 	found := 0
 	for i := range values {
