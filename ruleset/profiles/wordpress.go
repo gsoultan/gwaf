@@ -59,6 +59,27 @@ func WordPress() []rules.Exception {
 			Note:   "the block editor sends raw HTML by design; sanitisation is WordPress's job on render, and doing it here would break every post save",
 		},
 		{
+			RuleID: core.IDSQLiSemantic,
+			Path:   "/wp-json/wp/v2/*",
+			Target: types.TargetArgs,
+			Key:    "content",
+			Note:   "post content is rendered, never queried; the head-to-head harness found this the moment it ran -- a post titled \"Understanding SQL injection\" quoting 1' OR '1'='1 in a code block is the single most on-brand false positive a WordPress WAF can have",
+		},
+		{
+			RuleID: core.IDSQLiSuspicious,
+			Path:   "/wp-json/wp/v2/*",
+			Target: types.TargetArgs,
+			Key:    "content",
+			Note:   "as above, for the Medium confidence tier",
+		},
+		{
+			RuleID: core.IDSQLiSemantic,
+			Path:   "/wp-admin/post.php",
+			Target: types.TargetArgs,
+			Key:    "content",
+			Note:   "classic editor form post of the same content",
+		},
+		{
 			RuleID: core.IDXSSSemantic,
 			Path:   "/wp-admin/post.php",
 			Target: types.TargetArgs,

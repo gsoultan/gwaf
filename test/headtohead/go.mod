@@ -16,6 +16,7 @@ replace github.com/gsoultan/gwaf/seclang => ../../seclang
 require (
 	github.com/corazawaf/coraza/v3 v3.7.0
 	github.com/gsoultan/gwaf v0.0.0
+	github.com/gsoultan/gwaf/middleware v0.0.0-00010101000000-000000000000
 	github.com/gsoultan/gwaf/test/conformance v0.0.0-00010101000000-000000000000
 )
 
@@ -41,3 +42,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	rsc.io/binaryregexp v0.2.0 // indirect
 )
+
+replace github.com/gsoultan/gwaf/middleware => ../../middleware

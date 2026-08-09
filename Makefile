@@ -284,3 +284,16 @@ deps:
 .PHONY: help
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //'
+
+nuclei: ## gwaf vs Coraza + CRS on real CVE exploit traffic from nuclei-templates.
+##
+##   git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates /tmp/nuclei-templates
+##   git clone --depth 1 https://github.com/coreruleset/coreruleset /tmp/crs
+##   python3 test/headtohead/extract_corpus.py /tmp/nuclei-templates/http > /tmp/corpus.json
+##   NUCLEI_CORPUS=/tmp/corpus.json CRS_RULES=/tmp/crs/rules make nuclei
+##
+## Reports detection, false positives and latency from one run. Read all three:
+## an engine that blocks everything scores 100% on any corpus of attacks.
+.PHONY: nuclei
+nuclei:
+	cd test/headtohead && go test -run TestNucleiHeadToHead -v -timeout 25m .

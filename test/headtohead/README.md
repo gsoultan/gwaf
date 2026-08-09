@@ -93,3 +93,52 @@ Latency. The two engines differ in startup, parsing, and body handling, and a
 throughput figure from a harness that drives neither the way production would is
 not quotable. gwaf's latency lives in `docs/BENCHMARKS.md`, against itself, with
 the methodology stated.
+
+## The nuclei corpus
+
+`headtohead_test.go` runs the CRS regression suite, which is CRS's home turf.
+`nuclei_test.go` runs the other direction: real exploit requests for real CVEs,
+taken from [projectdiscovery/nuclei-templates][nt] — a corpus maintained by
+people with no stake in either engine — and replayed through both as ordinary
+`net/http` middleware in front of the same origin.
+
+```sh
+git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates /tmp/nuclei-templates
+git clone --depth 1 https://github.com/coreruleset/coreruleset /tmp/crs
+python3 test/headtohead/extract_corpus.py /tmp/nuclei-templates/http > /tmp/corpus.json
+NUCLEI_CORPUS=/tmp/corpus.json CRS_RULES=/tmp/crs/rules make nuclei
+```
+
+Both corpora are here for the same reason: each one is somebody's home turf, and
+quoting either alone would be picking the ground.
+
+### Reading it
+
+Three numbers come out of one run, and none of them means anything alone.
+
+* **Detection.** Reported, never asserted — it moves when upstream adds
+  templates, and a test that fails because somebody else wrote a CVE is a test
+  nobody keeps.
+* **False positives.** Asserted, on the tuned configuration, because that one is
+  ours. An engine that blocks everything scores 100% on any corpus of attacks.
+* **Latency.** From the same replay, so it is the cost of the detection actually
+  measured rather than a separate benchmark.
+
+Roughly 56% of the corpus carries no payload at all. nuclei templates are
+multi-step and the first step is usually a version probe
+(`GET /wp-content/plugins/x/readme.txt`). No per-request WAF can block those, so
+they are separated rather than counted as misses — including them understates
+both engines by about twenty points and distinguishes neither.
+
+Two harness bugs are worth knowing about, because both produced flattering
+nonsense before they were found:
+
+* **A missing `Host` header.** CRS scores rule 920280 at 5, which is its entire
+  default anomaly threshold, so every request blocks for a reason unrelated to
+  its payload. The first version of this comparison reported 100% detection next
+  to a 100% false-positive rate.
+* **LF-normalised multipart bodies.** RFC 7578 says CRLF. Normalise it and every
+  parser correctly refuses to read the body, so the upload, its filename and its
+  content all become invisible — measuring a path no real client takes.
+
+[nt]: https://github.com/projectdiscovery/nuclei-templates
