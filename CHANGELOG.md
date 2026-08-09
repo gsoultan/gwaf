@@ -4,6 +4,56 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## Unreleased
+
+### Added
+
+- **`rules.EvalContext` carries `Method`, `RequestURI` and `Host`.** Additive to
+  a frozen extension point, and deliberate: without the request's own origin a
+  rule cannot tell `redirect_uri=https://app.example.com/cb` arriving at
+  app.example.com from the same bytes arriving anywhere else, and has to choose
+  between missing open redirects and blocking OAuth. Bytes, not strings, because
+  three allocations per transaction would cost the zero-allocation benign case.
+
+- **`core.OffOriginURLRule` ships in `core.Default()` and is same-origin
+  aware.** A destination on the site's own registrable domain passes; a foreign
+  one fires. Redirect detection 20.6% → 87.3%, against CRS's 4.8%.
+
+- **`core.SSRFParamRule(id)`** — the server-side-fetch half of the same
+  comparison, opt-in. Enabling it by default blocked a webhook registration and
+  a WordPress comment author's website field, which are ordinary operations:
+  handing an application a foreign URL to fetch is the feature.
+
+- **`ruleset/profiles`** — `WordPress()`, `Drupal()`, `Laravel()`,
+  `IssueTracker()`. Scoped exceptions with a rule, a path, a target, a field and
+  a rationale on every entry. On the WordPress corpus they take false positives
+  from 2/56 to 0/56 and detection from 606 to 605 — one case, because an attack
+  landing in an excepted field is what excepting a field means.
+
+- **`gwaf.WithExceptions(...)`** applies a profile in one call.
+
+- **`detect/shelli.Detector.AnalyzeIn`** — lifts the stored-command-line
+  suppression when the parameter names a shell sink. `cmd=echo -n X|md5sum` is a
+  CVE because of the parameter it arrived in; `cmd=list` still scores nothing.
+
+- **`test/headtohead` runs the nuclei-templates corpus** over both engines as
+  live HTTP middleware, reporting detection, false positives and latency from
+  one run. `make nuclei`; the extractor is checked in and the corpus is not.
+
+### Changed
+
+- `md5sum` and `sha1sum` are command names. `sha256sum` and `timeout` are not:
+  the calibration corpus found both in real GitLab CI steps, and they took rule
+  4910 from under its 0.1% ceiling to 0.296% on 10,473 benign requests.
+
+### Performance
+
+Benign GET +1.3%, attack path +1.6%, benign POST JSON +6.3%. The last is over
+the 5% gate and is taken deliberately rather than silently: isolating it showed
+2.8% is the context plumbing and the rest is one more rule in the default set,
+the zero-allocation GET path is unaffected, allocations stay at zero, and the
+trade is a fourfold improvement in a whole OWASP category.
+
 ## v0.3.0
 
 ### Added
