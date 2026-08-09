@@ -4,9 +4,15 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
-## Unreleased
+## v0.4.0
 
 ### Added
+
+- **`SECURITY.md`** — the reporting channel, the scope, and the disclosure
+  timeline. It was the last unchecked v1.0 prerequisite in CLAUDE.md §4, and it
+  commits to the thing that actually matters: every fixed bypass ships a
+  regression test in the evasion corpus, because one fixed without a test is one
+  that comes back.
 
 - **`rules.EvalContext` carries `Method`, `RequestURI` and `Host`.** Additive to
   a frozen extension point, and deliberate: without the request's own origin a
