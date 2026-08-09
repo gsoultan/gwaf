@@ -4,7 +4,98 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
-## Unreleased
+## v0.3.0
+
+### Added
+
+- **`transform.HexEscapeDecode`** — `\xHH` and `\uHHHH` only, every other
+  backslash sequence byte-for-byte. It exists because `EscapeDecode` cannot be
+  used on a path: the full JavaScript reading drops the backslash from an
+  unrecognised escape, so `..\..\windows\win.ini` would flatten into one
+  segment and every Windows traversal rule would stop matching. The split is the
+  ambiguity boundary, not a compromise — `\x2f` is `/` to every consumer that
+  reads escapes, while `\.` genuinely forks between a JS string and a Windows
+  path, and gwaf answers a fork with a reading rather than a rewrite.
+
+- **`core.OffOriginURLRule(id)`** — opt-in, not in `core.Default()`. An absolute
+  URL in a parameter whose name says the application will follow it. Open
+  redirect and SSRF are the same request-side signal; only the dereferencer
+  differs. It is opt-in because a cross-origin destination is exactly what OAuth
+  and payment returns send, and separating that from an attack needs the
+  allow-list of trusted destinations, which is the embedder's.
+
+- **`detect/xss` script-context breakout** — `"-alert(1)-"` and
+  `1);alert(1);/*` open no tag, so every markup scan was blind to them by
+  construction. The trailing comment or quote-rebalance is required, which is
+  what keeps ordinary code samples out.
+
+- **`detect/sqli` subquery signal** — a parenthesised `SELECT` grafted onto a
+  boolean connector or comparison. Blind and error-based injection carries no
+  tautology, no `UNION` adjacency and no comment, so
+  `2 AND (SELECT 2*(IF((SELECT ...))))` scored **zero**.
+
+- **`detect/phpi` danger-statement and backtick signals** — a call with a
+  non-empty argument list and a `;` terminator convicts alone, while a bare
+  `eval()` stays corroborating because a security blog writes that sentence.
+  Backticks are PHP's shell-execution operator and were unread.
+
+### Changed
+
+- **The semantic detectors share one chain (`textChain`), now including
+  `EscapeDecode`.** A payload arriving as JSON text inside a parameter is
+  written `\u003cscript>`, which contains no `<` at all — every structural scan
+  was blind by construction rather than by weakness. Giving XSS a private
+  two-transform chain instead cost 2.8µs on the benign-POST benchmark, because a
+  chain nobody else shares is materialised separately over every value of every
+  request.
+
+- **`pathChain` gained `HexEscapeDecode`.** `..\u002f..\u002fetc\u002fpasswd`
+  reached no traversal rule, because a path with no separators normalises to
+  itself.
+
+- **`indexByteIn` is `bytes.IndexByte`.** It is the no-op check every escape
+  transform runs before touching anything, so it executes over every value of
+  every request; the hand-rolled loop cost 7% of benign GET once a second escape
+  transform joined the path chain. The whole change lands at +4.67% there,
+  inside the 5% gate, with allocations still zero.
+
+- **Rule 4007 requires a class name.** It is named for object injection and
+  matched plain arrays too, so WordPress's options API blocked on every plugin
+  settings save. `unserialize()` on an array of scalars instantiates nothing, so
+  no magic method fires and there is no gadget to reach. An object nested inside
+  an array is still found.
+
+- **`detect/xss` breakout walks the whole attribute list.** Stopping at the
+  first attribute after a quote-break missed every payload that pads the handler
+  behind something harmless — `" autofocus onfocus=alert(1)` and
+  `" style=position:fixed onmouseover=alert(1)`, both real WordPress plugin
+  CVEs.
+
+- **The sensitive-file list dropped its leading slashes and grew.** Most real
+  LFI never walks: it hands a parameter the whole path, and exploitation writes
+  `etc/passwd` as often as `/etc/passwd`.
+
+### Measured
+
+Against 2,775 real exploit requests extracted from `projectdiscovery/nuclei-templates`
+and replayed over HTTP through both engines as middleware, with Coraza v3.7.0 +
+CRS v4.25.0 as the control:
+
+| Corpus | gwaf | Coraza + CRS |
+|---|---|---|
+| WordPress/PHP CVEs (654) | **93.0%** | 89.9% |
+| All-technology CVEs (2,775) | 81.5% | 82.3% |
+| Encoding evasion (96) | **100%** | 85.4% |
+| Benign WordPress (56), scoped | **0 FP** | 8 FP |
+| Latency | **85µs** | 1,046µs |
+
+gwaf leads on redirect (82.5% vs 4.8%), XXE (71% vs 42%), deserialization
+(58% vs 38%), SSRF (44% vs 25%) and file upload (68% vs 61%); CRS still leads on
+RCE (71.5% vs 63.5%), XSS (97.3% vs 93.7%) and SQLi (79.2% vs 70.3%).
+
+### Also in this release
+
+The work that had accumulated unreleased before the corpus replay above.
 
 ### Removed
 
