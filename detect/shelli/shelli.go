@@ -182,6 +182,20 @@ func weightOf(s Signal) int {
 // That is precisely why the list is only consulted in command position; used
 // anywhere else it would block half of all prose.
 var commands = map[string]bool{
+	// Hashing utilities, which are how a blind RCE proof is usually taken:
+	// "echo -n X|md5sum" returns a value the attacker can predict, so it proves
+	// execution without needing output of its own.
+	//
+	// The list is md5sum and sha1sum only, and that is the calibration corpus
+	// talking rather than taste. "sha256sum" and "timeout" were here and are
+	// gone: real GitLab CI steps run "tar czf artifacts.tar.gz dist/ &&
+	// sha256sum artifacts.tar.gz" and "&& timeout 600 npm test", both in command
+	// position and both entirely benign, and rule 4910 went from under its 0.1%
+	// ceiling to 0.296% on 10,473 benign requests. A checksum an attacker uses
+	// to prove execution is one a build pipeline uses to publish an artifact;
+	// where the two overlap, the pipeline wins, because it is the traffic that
+	// exists.
+	"md5sum": true, "sha1sum": true,
 	// Shells and interpreters. Piping into one of these is the payload.
 	"sh": true, "bash": true, "zsh": true, "ksh": true, "csh": true,
 	"tcsh": true, "dash": true, "ash": true, "busybox": true,
@@ -266,6 +280,25 @@ const maxTokenLen = 32
 
 // Analyze scores value and returns the verdict.
 func (d *Detector) Analyze(value []byte) Verdict {
+	return d.AnalyzeIn(value, false)
+}
+
+// AnalyzeIn scores value, told whether it arrived in a parameter the
+// application hands to a shell.
+//
+// The flag lifts one suppression and nothing else. isStoredCommandLine exists
+// because a value that is a command line from its first byte is usually a
+// command line somebody stored -- "cat VERSION | tr" in a CI field -- and
+// reading its own separators as injection points would block every build
+// configuration in existence. But when the parameter is named cmd, exec or
+// shell, that reading belongs to the attacker: an application that takes such a
+// parameter and passes it to a shell is the bug, and "echo -n X|md5sum" arriving
+// there is the proof-of-concept, not a saved pipeline.
+//
+// It lifts a suppression, it does not lower the bar. "cmd=list" is how half of
+// all admin UIs are written and still scores nothing, because "list" is not a
+// command line.
+func (d *Detector) AnalyzeIn(value []byte, commandSink bool) Verdict {
 	if len(value) == 0 {
 		return Verdict{}
 	}
@@ -294,8 +327,17 @@ func (d *Detector) Analyze(value []byte) Verdict {
 	// "/bin/sh -c id" arriving in a request value is the most conclusive RCE
 	// shape there is, and an application that stores one on purpose needs a
 	// scoped exception rather than a quieter detector.
-	if !isStoredCommandLine(src) {
+	if commandSink || !isStoredCommandLine(src) {
 		scanCommandPositions(src, mark)
+	}
+	// A command sink is also the one place a bare invocation counts: the whole
+	// value being "cat /etc/passwd" is the payload, and there is no separator in
+	// front of it to anchor the ordinary scan.
+	if commandSink {
+		if end, word := commandWord(src, leadingSpace(src)); end > 0 && word != "" &&
+			(end == len(src) || isSpace(src[end])) && commands[word] {
+			mark(SignalCommandPosition, leadingSpace(src), end-leadingSpace(src))
+		}
 	}
 
 	total := 0
@@ -870,8 +912,8 @@ type operator struct {
 
 func (o *operator) Name() string { return "detect_shelli" }
 
-func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) {
-	v := o.d.Analyze(value)
+func (o *operator) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool) {
+	v := o.d.AnalyzeIn(value, ctx != nil && isCommandSinkParam(ctx.Key))
 	if v.Score < o.threshold {
 		return rules.Match{}, false
 	}
@@ -906,3 +948,44 @@ func (o *operator) Literals() ([]string, bool) {
 
 // Cost prices one analysis: three passes with local lookahead.
 func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 6 }
+
+// leadingSpace returns the index of the first non-space byte.
+func leadingSpace(src []byte) int {
+	i := 0
+	for i < len(src) && isSpace(src[i]) {
+		i++
+	}
+	return i
+}
+
+// commandSinkParams are parameter names an application hands to a shell.
+//
+// Short and closed on purpose. Every entry lifts a false-positive suppression,
+// so a wrong one costs blocked traffic -- which is why "action", "task" and
+// "query" are deliberately absent even though plugins use them for the same
+// thing. These are the names whose only reading is "run this".
+var commandSinkParams = map[string]bool{
+	"cmd": true, "command": true, "commands": true, "cmdline": true,
+	"exec": true, "execute": true, "shell": true, "shell_exec": true,
+	"system": true, "popen": true, "proc": true, "spawn": true,
+	"ping": true, "host_cmd": true, "run_cmd": true, "do_cmd": true,
+}
+
+// isCommandSinkParam reports whether key names a parameter handed to a shell.
+func isCommandSinkParam(key string) bool {
+	if key == "" || len(key) > 32 {
+		return false
+	}
+	if commandSinkParams[key] {
+		return true
+	}
+	lower := make([]byte, 0, len(key))
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		lower = append(lower, c)
+	}
+	return commandSinkParams[string(lower)]
+}

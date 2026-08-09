@@ -35,6 +35,32 @@ type EvalContext struct {
 	// Key is the specific key within a keyed collection — a header name, an
 	// argument name — or empty for unkeyed targets.
 	Key string
+
+	// Method, RequestURI and Host describe the request the value arrived in.
+	// They are the same for every value in a transaction and are populated once
+	// per phase, so reading them costs nothing.
+	//
+	// They exist because some questions are not answerable from a value alone.
+	// "Is this URL a destination the attacker chose?" needs the request's own
+	// origin to compare against — without it, a rule cannot tell
+	// "redirect_to=https://app.example.com/cb" arriving at app.example.com from
+	// the same bytes arriving anywhere else, and has to choose between missing
+	// open redirects and blocking OAuth. Route also carries real evidence:
+	// "file=functions.php" is the WordPress theme editor working on
+	// /wp-admin/theme-editor.php and local file inclusion on /download.
+	//
+	// These are bytes, not strings, because they are read on the request path
+	// and materialising three strings per transaction would cost the
+	// zero-allocation benign case. They point into the transaction's arena and
+	// follow the same rule as everything else here: read them, do not retain
+	// them.
+	//
+	// Any of them may be empty — a request need not carry a Host header, and a
+	// value can be evaluated in a phase before the request line was set. An
+	// operator that requires one must handle its absence rather than assume it.
+	Method     []byte
+	RequestURI []byte
+	Host       []byte
 }
 
 // Operator decides whether a transformed value matches.
