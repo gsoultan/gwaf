@@ -4,6 +4,53 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## v0.4.2
+
+### Added
+
+- **An inert rule now says so.** v0.4.1 made the off-origin redirect and SSRF
+  rules report nothing when no origins are declared — the safe direction, and
+  the fix for a bypass that read the attacker-supplied `Host` header. The
+  failure mode that creates is a user one: an embedder upgrading from v0.4.0
+  keeps a ruleset that compiles, passes its tests, and quietly stops covering a
+  whole OWASP category. `gwaf.New` now warns once, naming the rule and the fix.
+  **Losing coverage must never be quieter than gaining it.**
+
+- **A trust model for the extension interfaces** (`docs/RULES.md` §4, and the
+  `rules.EvalContext` godoc). `Target`, `Key` and `Origins` are trustworthy;
+  `Method`, `RequestURI`, `Host` and `Siblings` are attacker-controlled. The
+  rule is about direction: attacker context used to *convict* is sound, used to
+  *acquit* is a bypass. That distinction was the whole content of the v0.4.1
+  vulnerability and existed only in a commit message.
+
+- **The head-to-head comparison in the README**, with the reproduce command.
+  Against Coraza v3.7.0 + CRS v4.25.0 on 2,455 exploit requests from
+  nuclei-templates: detection 89.2% against 89.7%, **zero false positives
+  against four**, 178 µs against 1,677 µs. The two harness bugs that produced
+  flattering nonsense before they were caught are documented beside the numbers.
+
+- **Falsifiable v1.0 criteria** (`docs/ROADMAP.md`). Three external adopters
+  with at least one profile C, three consecutive releases without an extension
+  interface change, the trust table unchanged across them, the CVE process
+  exercised once for real, and a baseline measured on hardware that is not one
+  laptop. Deliberately no detection-rate target: detection is already at parity,
+  and chasing another point optimises the one column where the competition is a
+  tie.
+
+### Fixed
+
+- **`SplitPathRule` rebuilt a 27-literal operator once per sibling per request.**
+  `rules.Operator` is documented as safe for concurrent use precisely so one
+  instance can be shared, and this ignored it in the one place it mattered:
+  evaluating one value against four siblings cost 88 allocations and 6.6 KB on a
+  path whose SLO is zero. Built once now — **2,714 ns and 88 allocs becomes
+  247 ns and 1**, with the benign path at 29 ns and zero. Both pinned by
+  benchmarks rather than asserted.
+
+- The same nested call passed a `nil` `EvalContext`, silently depending on the
+  callee ignoring it. A key-aware implementation would have turned that into a
+  panic on the request path rather than a compile error.
+
 ## v0.4.1
 
 ### Security
