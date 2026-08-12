@@ -269,17 +269,24 @@ func TestUnknownRouteFallsBackToFullInspection(t *testing.T) {
 // with a schema that does not describe the corpus routes. Adding a schema must
 // never reduce coverage elsewhere.
 func TestSchemaDoesNotWeakenTheEvasionCorpus(t *testing.T) {
-	w := newWAF(t, gwaf.WithSchema(ordersAPI(t, false)))
+	// Same configuration the evasion corpus is measured in, origins included:
+	// the question here is whether a schema weakens detection, so anything else
+	// that differs between the two WAFs shows up as a schema regression and is
+	// not one.
+	w := newWAF(t, gwaf.WithSchema(ordersAPI(t, false)),
+		gwaf.WithOrigins(evasionOrigin))
 	// Cases covered by an opt-in rule are replayed against a WAF that has it,
 	// for the same reason the evasion corpus does: this test asks whether a
 	// schema *weakens* detection, and measuring an opt-in case against a WAF
 	// that was never given the rule would answer a different question.
 	wOpt := newWAF(t, gwaf.WithSchema(ordersAPI(t, false)),
-		gwaf.WithRuleset(rules.Set{
+		gwaf.WithOrigins(evasionOrigin),
+		gwaf.WithRuleset(core.WithBodyPhase(rules.Set{
 			core.CRLFHeaderRule(1007),
 			core.LoopbackSSRFRule(11003),
 			core.WordPressHardeningRule(1011),
-		}))
+			core.SSRFParamRule(1016),
+		})))
 
 	missed := 0
 	for _, e := range evasions {

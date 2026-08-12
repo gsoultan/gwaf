@@ -4,6 +4,66 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## Unreleased
+
+### Security
+
+- **The off-origin rules could not match a protocol-relative destination.**
+  `offOriginOp.Literals` returned `"://"` and the colon-prefixed backslash
+  forms, while its own doc comment said the invariant was "two adjacent
+  slash-or-backslash bytes" and listed `"//host"` among the forms it matched.
+  The narrower claim reads like a tightening of the same statement and is not
+  one: it excludes every destination the scheme is omitted from.
+  `redirect_to=//evil.tld/` navigates off-origin in every browser, `absoluteHostOf`
+  parses it correctly, and the prefilter never nominated the rule — so the
+  handling was right and unreachable. Now `"//"`, `/\`, `\/`, `\\`. Measured:
+  no change to nominations on benign traffic, because a benign absolute URL
+  contains `://` and was always a candidate.
+
+  **Literals are the one place where being more specific is a bypass rather than
+  an optimisation.** Three corpus cases fail without this fix.
+
+### Fixed
+
+- **Every corpus measurement in the repository ran with the off-origin redirect
+  and SSRF rules inert.** v0.4.1 correctly made them require `WithOrigins` —
+  the fix for a bypass that read the attacker-supplied `Host` header — and no
+  harness was updated, so `test/headtohead` and the evasion corpus measured two
+  rules that could not fire. The `tuned` configuration explicitly opted into
+  `core.SSRFParamRule` and then reported its detection rate. `gwaf.New` had been
+  printing the warning into the test log both times; nothing read it.
+
+  Re-measured against nuclei-templates with origins declared: **redirect 13/60 →
+  55/60** (Coraza + CRS: 3/60), **SSRF 5/63 → 44/63** (14/63), overall tuned
+  **85.9% → 89.5%**. README and the numbers below are updated. The evasion
+  corpus now declares a `redirect` and an `offssrf` class with 18 attack cases
+  and 11 benign counterparts, so this cannot go quiet again.
+
+- **Opt-in rules never got a request-body counterpart.** `withBodyPhase` runs
+  inside `core.Default()`, so a rule added through `WithRuleset` is compiled
+  exactly as declared — at the header phase, seeing the query string and never a
+  form or JSON body. The one-liner in `SSRFParamRule`'s own godoc therefore
+  built a rule that could not inspect the bodies webhook and import endpoints
+  are made of. Exported as **`core.WithBodyPhase(set)`**; every opt-in rule's
+  documented example now uses it.
+
+  This is the second time this exact bug has shipped. The first is recorded at
+  `core.go`'s `bodyPhaseOffset`: two of ten injection rules were mirrored by
+  hand, so a payload blocked in a query string sailed through in a JSON body.
+  Generating the pair fixed it for core rules and left embedders on the old
+  footing.
+
+### Added
+
+- **`(*gwaf.WAF).Diagnostics() []Diagnostic`** — the rules that compiled, linted
+  clean, and still cannot decide anything: an off-origin rule with no origins,
+  an argument rule with no body counterpart. Both failures above were invisible
+  because this did not exist; a log line is not an API, and a control plane
+  building a coverage view has to be able to ask (CLAUDE.md §2b). `New` still
+  logs the first one. The evasion corpus asserts the list is empty before it
+  reports a detection rate, so a miss can no longer be misconfiguration wearing
+  a miss's clothes.
+
 ## v0.4.2
 
 ### Added

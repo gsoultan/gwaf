@@ -286,8 +286,21 @@ func lowerBytes(b []byte) []byte {
 // Literals is an honest assertion: every form this matches -- "scheme://host",
 // "//host", and the backslash variants browsers normalise -- contains two
 // adjacent slash-or-backslash bytes, so a value without one cannot match.
+//
+// The pairs are listed without a leading colon, and that is the whole content
+// of the assertion. An earlier version returned "://" and the colon-prefixed
+// backslash forms, which reads as a tighter version of the same claim and is
+// not one: it silently excluded every destination the scheme is *omitted*
+// from. "//evil.tld" is protocol-relative and navigates off-origin in every
+// browser; `/\evil.tld` is the same thing spelled the way browsers normalise.
+// absoluteHostOf parses both -- the code was right and unreachable, because a
+// value the prefilter never nominates is a rule that never runs.
+//
+// Literals are the one place where being too specific is a bypass rather than
+// an optimisation, which is why the claim here is exactly the loosest one that
+// is still true (docs/RULES.md 5).
 func (offOriginOp) Literals() ([]string, bool) {
-	return []string{"://", `:\\`, `:/\`, `:\/`}, true
+	return []string{"//", `/\`, `\/`, `\\`}, true
 }
 
 func (offOriginOp) Cost() types.Fuel { return types.CostLiteralMatch * 2 }
@@ -404,7 +417,19 @@ func lowerASCII(s string) string {
 //
 // Enable it on an application that does not:
 //
-//	waf, err := gwaf.New(gwaf.WithRuleset(rules.Set{core.SSRFParamRule(1016)}))
+//	waf, err := gwaf.New(
+//	    gwaf.WithOrigins("api.example.com"),
+//	    gwaf.WithRuleset(core.WithBodyPhase(rules.Set{core.SSRFParamRule(1016)})),
+//	)
+//
+// Both wrappers are load-bearing and the rule is silent without either.
+// WithOrigins gives it a "here" to call a destination foreign to. WithBodyPhase
+// gives it a request-body counterpart -- an opt-in rule does not pass through
+// Default(), so it is compiled exactly as declared, at the header phase, seeing
+// the query string and never a JSON body. This rule exists for webhook, import
+// and feed endpoints, which take a JSON body, so the unmirrored form inspects
+// the one place the payload usually is not. (*gwaf.WAF).Diagnostics reports
+// both omissions rather than leaving them to be discovered.
 //
 // The navigation half of the same comparison -- "redirect_to", "next", "goto" --
 // ships in the default set, because an application sending its own users to

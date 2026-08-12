@@ -39,6 +39,16 @@ import (
 	"github.com/gsoultan/gwaf/types"
 )
 
+// evasionOrigin is the hostname the corpus's imaginary application answers on.
+//
+// The off-origin rules need a "here" before "somewhere else" means anything,
+// and it must come from configuration: the request's own Host header is
+// attacker-supplied, so comparing a destination against it concludes
+// same-origin whenever the attacker sets both to match. Declaring it here is
+// what makes the redirect and offssrf cases below measure detection rather
+// than measure that the rule was switched off.
+const evasionOrigin = "target.local"
+
 // evasion is one attack payload with the technique it uses.
 type evasion struct {
 	name      string
@@ -447,6 +457,66 @@ var evasions = []evasion{
 	{name: "ssrf/dict memcached", technique: "none", arg: "dict://10.0.0.5:11211/stats"},
 	{name: "ssrf/imds urlencoded", technique: "urlencode",
 		target: "/fetch?url=http%3A%2F%2F169.254.169.254%2Flatest%2Fmeta-data%2F"},
+
+	// ---- Off-origin navigation (open redirect) -----------------------------
+	//
+	// These arrive through target rather than arg, because the parameter *name*
+	// is half the evidence and runEvasion sends arg under "q" -- which is a
+	// search box, not a destination. A case written as an arg would test
+	// nothing and pass, which is the worst kind of green.
+	//
+	// evasionOrigin is what makes "somewhere else" meaningful; without it every
+	// one of these is a no-match rather than a miss.
+	{name: "redirect/absolute off-origin", technique: "none",
+		target: "/login?redirect_to=https://evil.tld/"},
+	{name: "redirect/protocol relative", technique: "scheme-omitted",
+		target: "/login?next=//evil.tld/"},
+	{name: "redirect/backslash authority", technique: "backslash",
+		target: `/login?next=/\evil.tld/`},
+	{name: "redirect/backslash scheme", technique: "backslash",
+		target: `/login?goto=https:\\evil.tld/`},
+	// The label before "@" is userinfo, not the host. A validator that reads it
+	// as the host and an HTTP client that does not is the classic disagreement.
+	{name: "redirect/userinfo confusion", technique: "userinfo",
+		target: "/login?redirect_uri=https://target.local@evil.tld/"},
+	// "target.local.evil.tld" ends with the origin but not on a label boundary.
+	{name: "redirect/suffix lookalike", technique: "domain-confusion",
+		target: "/login?return_url=https://target.local.evil.tld/"},
+	{name: "redirect/urlencoded", technique: "urlencode",
+		target: "/login?redirect=https%3A%2F%2Fevil.tld%2F"},
+	{name: "redirect/uppercase scheme", technique: "case",
+		target: "/login?destination=HTTPS://EVIL.TLD/"},
+	// Namespaced and array-style parameter names are the shapes real PHP and
+	// WordPress forms use; matchesParam covers them by segment, not by equality.
+	{name: "redirect/namespaced param", technique: "param-naming",
+		target: "/login?x_return_url=https://evil.tld/"},
+	{name: "redirect/array param", technique: "param-naming",
+		target: "/login?redirect[]=https://evil.tld/"},
+	{name: "redirect/leading whitespace", technique: "whitespace",
+		target: "/login?next=%20%20https://evil.tld/"},
+	// Body-borne, which only works because core mirrors rule 1013 into the
+	// request-body phase. The opt-in rules do not get that for free; see
+	// core.WithBodyPhase and (*gwaf.WAF).Diagnostics.
+	{name: "redirect/json body", technique: "body",
+		target: "/login", body: `{"redirect_to":"https://evil.tld/"}`},
+
+	// ---- Off-origin server-side fetch (SSRF) -------------------------------
+	//
+	// optIn: the fetch half ships exported rather than enabled, because handing
+	// a server a foreign URL is what webhook registration and feed import are.
+	// The benign corpus carries those, and they must keep passing.
+	{name: "offssrf/absolute off-origin", technique: "none", optIn: true,
+		target: "/import?url=https://evil.tld/payload"},
+	{name: "offssrf/image import", technique: "none", optIn: true,
+		target: "/avatar?image_url=https://evil.tld/x.png"},
+	{name: "offssrf/namespaced fetch param", technique: "param-naming", optIn: true,
+		target: "/x?swp_url=https://evil.tld/"},
+	{name: "offssrf/userinfo confusion", technique: "userinfo", optIn: true,
+		target: "/import?feed=https://target.local@evil.tld/"},
+	{name: "offssrf/protocol relative", technique: "scheme-omitted", optIn: true,
+		target: "/import?remote_url=//evil.tld/"},
+	{name: "offssrf/json body", technique: "body", optIn: true,
+		target: "/import", body: `{"webhook":"https://evil.tld/hook"}`},
 
 	// ---- Prototype pollution -----------------------------------------------
 	//
@@ -881,6 +951,31 @@ var benignTraffic = []benignCase{
 	{name: "regex with dollar", arg: "^[a-z]+$"},
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
+
+	// ---- destinations that are not off-origin ------------------------------
+	//
+	// The other half of the redirect and offssrf cases. A detector that blocks
+	// every absolute URL in a "redirect_to" scores 100% on those and breaks
+	// every login flow in production, so these decide whether that number is
+	// worth anything.
+	{name: "same-origin redirect", target: "/login?redirect_to=https://target.local/dashboard"},
+	{name: "subdomain redirect", target: "/login?next=https://www.target.local/account"},
+	{name: "subdomain redirect deep", target: "/login?next=https://eu.shop.target.local/cart"},
+	{name: "same-origin with port", target: "/login?redirect_uri=https://target.local:8443/cb"},
+	// Relative destinations are the overwhelmingly common case and carry no
+	// authority at all, so nothing can be foreign about them.
+	{name: "relative redirect", target: "/login?next=/dashboard"},
+	{name: "relative redirect with query", target: "/login?return_url=%2Faccount%3Ftab%3Dbilling"},
+	{name: "root relative redirect", target: "/login?goto=/"},
+	// A URL is ordinary content nearly everywhere; what makes it a destination
+	// is the parameter it arrives in. These are the same bytes in names that
+	// are not sinks, and "author_url" specifically must not read as one.
+	{name: "url in search box", target: "/search?q=https://example.com/docs"},
+	{name: "commenter homepage", target: "/comments?author_url=https://dev.example.com"},
+	{name: "url in prose body", body: `{"comment":"see https://evil.tld for the writeup"}`},
+	// Sentence containing a URL in a sink-named parameter: the operator anchors
+	// at the start precisely so a destination is a destination and not prose.
+	{name: "sentence in redirect param", target: "/login?redirect=see%20https://example.com%20first"},
 }
 
 // sortedKeys returns a map's keys in order, so a report reads the same twice.
@@ -994,16 +1089,29 @@ var declaredClasses = map[string]int{
 	"javaser":   3,
 	"ssrf":      6,
 	"protopoll": 3,
-	"llm":       8,
-	"artifact":  8,
-	"elinj":     5,
-	"gadget":    7,
-	"phpeval":   5,
-	"phpcode":   5,
-	"rfi":       4,
-	"crlf":      3,
-	"upload":    9,
-	"htaccess":  5,
+
+	// Off-origin destinations. Absent from this list until the head-to-head
+	// harness was found to have been measuring these rules with no origins
+	// declared, which made them inert: they compiled, they linted, and they
+	// could not fire. The corpus could not contradict that because it had no
+	// case for them either -- the six "ssrf" cases above are all cloud-metadata
+	// and protocol-scheme literals, which need no origin to match.
+	//
+	// Split by who dereferences the URL, because that is what decides whether a
+	// benign reading exists and therefore which ruleset the case runs against:
+	// navigation ships in core, fetch is opt-in.
+	"redirect": 10,
+	"offssrf":  6,
+	"llm":      8,
+	"artifact": 8,
+	"elinj":    5,
+	"gadget":   7,
+	"phpeval":  5,
+	"phpcode":  5,
+	"rfi":      4,
+	"crlf":     3,
+	"upload":   9,
+	"htaccess": 5,
 
 	// The upload-filter bypass that put a web shell in an adopter's WordPress,
 	// and the three classes added alongside it.
@@ -1127,17 +1235,40 @@ func runBenign(t *testing.T, w *gwaf.WAF, b benignCase) gwaf.Decision {
 // security metric, and it is reported alongside the false-positive rate from
 // TestBenignCorpus because neither number means anything alone.
 func TestEvasionCorpus(t *testing.T) {
-	w := newWAF(t)
+	w := newWAF(t, gwaf.WithOrigins(evasionOrigin))
 	// The same corpus, measured against the default ruleset plus the rules that
 	// ship opt-in. Cases marked optIn run here instead.
 	// Only the extra rules. WithRuleset *accumulates* onto the default set
 	// rather than replacing it, so passing core.Default() here would define
 	// every core rule twice and fail compilation with a duplicate-ID error.
-	wOpt := newWAF(t, gwaf.WithRuleset(rules.Set{
-		core.CRLFHeaderRule(1007),
-		core.LoopbackSSRFRule(11003),
-		core.WordPressHardeningRule(1011),
-	}))
+	//
+	// WithBodyPhase because an opt-in rule does not pass through core.Default()
+	// and is compiled exactly as written: declared at the header phase, it sees
+	// the query string and never a JSON body. The corpus asserts this below by
+	// carrying body-borne cases for these rules.
+	wOpt := newWAF(t,
+		gwaf.WithOrigins(evasionOrigin),
+		gwaf.WithRuleset(core.WithBodyPhase(rules.Set{
+			core.CRLFHeaderRule(1007),
+			core.LoopbackSSRFRule(11003),
+			core.WordPressHardeningRule(1011),
+			core.SSRFParamRule(1016),
+		})))
+
+	// Both WAFs must be able to decide everything the corpus asks them.
+	// Diagnostics is the engine's own account of what it cannot decide, so a
+	// non-empty one here means the run below would report misses that are
+	// really misconfiguration -- exactly the failure this corpus was measuring
+	// past for the off-origin rules.
+	for _, tc := range []struct {
+		name string
+		waf  *gwaf.WAF
+	}{{"default", w}, {"opt-in", wOpt}} {
+		for _, d := range tc.waf.Diagnostics() {
+			t.Errorf("%s ruleset cannot decide: rule %d (%s): %s; fix: %s",
+				tc.name, d.ID, d.Msg, d.Reason, d.Fix)
+		}
+	}
 
 	byTechnique := map[string]struct{ caught, total int }{}
 	byClass := map[string]struct{ caught, total int }{}
@@ -1197,7 +1328,11 @@ func TestEvasionCorpus(t *testing.T) {
 // blocks legitimate traffic gets the whole firewall switched off, which is a
 // worse outcome than the attack it was meant to stop.
 func TestBenignCorpus(t *testing.T) {
-	w := newWAF(t)
+	// Same origin the evasion corpus declares. The false-positive half is only
+	// meaningful against the configuration the detection half was measured in:
+	// a rule that is inert cannot produce a false positive either, and reading
+	// 0% from a switched-off rule is how a corpus flatters an engine.
+	w := newWAF(t, gwaf.WithOrigins(evasionOrigin))
 
 	falsePositives := 0
 	for _, b := range benignTraffic {
@@ -1304,9 +1439,22 @@ func TestBenignTrafficBoundsRuleEvaluation(t *testing.T) {
 	// jQuery selector — which are exactly the shapes those detectors key on.
 	// Six candidates that all reject is correct behaviour, not a regression.
 	//
+	// Raised from 6 to 10 when the corpus gained benign values that carry an
+	// absolute URL -- a same-origin redirect, a subdomain redirect, a commenter's
+	// homepage. A URL is a legitimate prefilter candidate for the off-origin
+	// rules in exactly the way prose containing a quote is one for the SQL
+	// detector: the rules run, and they reject.
+	//
+	// Measured rather than assumed, because the raise landed in the same change
+	// as a widening of those rules' literals from "://" to "//" and it would be
+	// easy to hide one in the other. The same six values were counted under both
+	// literal sets and the counts were identical (10, 8, 5, 8, 1, 8): a benign
+	// absolute URL contains "://" too, so it was always a candidate. The bound
+	// had simply never been exercised against a value carrying a URL.
+	//
 	// The number is a smoke alarm; TestRuleEvaluationDoesNotScaleWithRuleset is
 	// the actual invariant.
-	const maxEvaluated = 6
+	const maxEvaluated = 10
 
 	for _, b := range benignTraffic {
 		t.Run(b.name, func(t *testing.T) {

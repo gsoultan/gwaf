@@ -1968,3 +1968,61 @@ signal is missing" but "how does a key-anchored rule get scheduled without
 becoming unconditional", and that is an engine question with a latency budget
 attached, not a detector question. `mkdir` is separately absent from the command
 list and is a one-word fix worth about one case.
+
+## An inert rule measured as a detected rate (off-origin redirect / SSRF)
+
+v0.4.1 correctly made the off-origin rules require `gwaf.WithOrigins` -- the fix
+for a bypass that compared a destination against the attacker-supplied `Host`
+header. **No measurement harness was updated.** `test/headtohead/nuclei_test.go`
+and the evasion corpus both built their WAFs without origins, so rule 1013 and
+`core.SSRFParamRule` compiled, linted, and could not fire. The `tuned` config
+explicitly opted into `SSRFParamRule` and then published its detection rate.
+`gwaf.New` printed the inert warning into the test log on every run; nothing
+read it.
+
+Re-measured with origins declared: **redirect 13/60 -> 55/60** (Coraza+CRS
+3/60), **SSRF 5/63 -> 44/63** (14/63), tuned overall **85.9% -> 89.5%**. The
+CHANGELOG's older "redirect 82.5%" was from before the origins requirement; the
+collapse to 21.7% was never noticed because nothing re-ran.
+
+**The lesson is not "declare origins in tests."** It is that a configuration
+precondition silently converts detection into a no-op, and only the engine knows.
+Hence `(*gwaf.WAF).Diagnostics()`, and the evasion corpus asserting it is empty
+*before* reporting a rate -- a miss must not be misconfiguration in disguise.
+
+## Literals: more specific is a bypass, not an optimisation
+
+`offOriginOp.Literals` returned `"://"` and colon-prefixed backslash forms. Its
+own doc comment stated the correct invariant -- "two adjacent slash-or-backslash
+bytes" -- and listed `"//host"` as a matched form. The colon reads as a
+tightening of the same claim and is not one: it excludes every scheme-omitted
+destination. `redirect_to=//evil.tld/` navigates off-origin in every browser and
+`absoluteHostOf` parses it; the prefilter simply never nominated the rule, so
+correct code was unreachable.
+
+Measured before changing the ceiling it broke: the same six benign values were
+counted under both literal sets and nomination counts were **identical**
+(10,8,5,8,1,8), because a benign absolute URL contains `://` too. So the
+`maxEvaluated` 6->10 raise is attributable to adding URL-carrying benign cases,
+not to widening the literals. Check that separation before raising any bound --
+a raised ceiling is the easiest place to hide a real regression.
+
+## Opt-in rules got no body-phase counterpart (second occurrence)
+
+`withBodyPhase` runs inside `core.Default()`. A rule added via `WithRuleset` is
+compiled exactly as declared, so an argument rule at `PhaseRequestHeaders` sees
+the query string and never a form or JSON body. `SSRFParamRule`'s own godoc
+one-liner therefore built a rule that could not inspect the bodies webhook and
+import endpoints are made of -- the precise endpoints it exists for.
+
+This is the same bug recorded at `bodyPhaseOffset` (two of ten injection rules
+mirrored by hand; a payload blocked in a query string sailed through in JSON).
+Generating the pair fixed it for core and left embedders on the old footing.
+Now exported as `core.WithBodyPhase(set)`, and `Diagnostics` names a rule that
+needed a counterpart and did not get one.
+
+**Confirmed still-correct rejection:** `SSRFParamRule` stays opt-in. With
+origins *and* body coverage it blocks webhook registration on the benign corpus
+-- the original measurement was right, and declaring origins does not rescue it,
+because `hooks.example.com` is genuinely somewhere else. The head-to-head models
+the real answer: a scoped exception on the one route.

@@ -200,7 +200,7 @@ const (
 	// ordinary values in CI, staging, and developer traffic, so blocking them by
 	// default is the rule that gets the WAF switched off. Opt in:
 	//
-	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.LoopbackSSRFRule(11003)}))
+	//	gwaf.New(gwaf.WithRuleset(WithBodyPhase(rules.Set{core.LoopbackSSRFRule(11003)})))
 
 	// 12,000-12,999: JavaScript prototype pollution.
 	IDPrototypePollution types.RuleID = 12001
@@ -1683,6 +1683,29 @@ func bodyTargetsFor(src []types.Target) []types.Target {
 	return out
 }
 
+// WithBodyPhase returns set plus a request-body counterpart for every rule in
+// it that inspects attacker-supplied argument values.
+//
+// Default() already applies this to the core rules. It is exported for the
+// opt-in rules, which do not go through Default(): a rule handed to
+// gwaf.WithRuleset is compiled exactly as written, and one declared at
+// PhaseRequestHeaders sees the query string and nothing else.
+//
+// That matters most for the rules it is most needed by. SSRFParamRule exists
+// for webhook, feed and import endpoints, and those take a JSON body — so the
+// unmirrored form inspects the one place the payload usually is not:
+//
+//	waf, err := gwaf.New(
+//	    gwaf.WithOrigins("api.example.com"),
+//	    gwaf.WithRuleset(core.WithBodyPhase(rules.Set{core.SSRFParamRule(1016)})),
+//	)
+//
+// IDs of the generated counterparts are the original plus 900
+// (bodyPhaseOffset), so choose opt-in rule IDs that leave that slot free.
+// gwaf.New reports a rule that needed a counterpart and did not get one; see
+// (*gwaf.WAF).Diagnostics.
+func WithBodyPhase(set rules.Set) rules.Set { return withBodyPhase(set) }
+
 // withBodyPhase returns set plus a request-body counterpart for every rule that
 // inspects attacker-supplied argument values.
 //
@@ -1909,8 +1932,12 @@ func isWordByte(b byte) bool {
 // knows something gwaf cannot know from one request, so they opt in:
 //
 //	waf, err := gwaf.New(gwaf.WithRuleset(
-//	    rules.Set{core.LoopbackSSRFRule(11003)},
+//	    WithBodyPhase(rules.Set{core.LoopbackSSRFRule(11003)}),
 //	))
+//
+// WithBodyPhase because an opt-in rule does not pass through Default() and so
+// gets no request-body counterpart: without it this inspects the query string
+// and not the JSON body a fetch target usually arrives in.
 //
 // Only the extra rule: WithRuleset accumulates onto the default set rather than
 // replacing it, so passing core.Default() as well defines every core rule twice

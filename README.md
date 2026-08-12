@@ -140,21 +140,29 @@ comparison, on a corpus neither engine's authors wrote, run through both engines
 the way an adopter deploys them — as ordinary `net/http` middleware in front of
 the same origin.
 
-**2,455 payload-bearing exploit requests** extracted from
+**2,457 payload-bearing exploit requests** extracted from
 [projectdiscovery/nuclei-templates][nt] — real requests for real CVEs — against
 **Coraza v3.7.0 + CRS v4.25.0**:
 
 | | gwaf | gwaf tuned | Coraza + CRS 4.25 |
 |---|---|---|---|
-| Detection | 86.8% | **89.2%** | 89.7% |
+| Detection | 86.9% | **89.5%** | 89.7% |
 | False positives (ordinary traffic) | 2/12 | **0/12** | 4/12 |
-| Latency | 191 µs | **178 µs** | 1,677 µs |
+| Latency | 64 µs | **58 µs** | 993 µs |
 
 Detection is a tie. The difference is the other two columns: **zero false
-positives against four, at roughly a tenth of the latency.** CRS leads on RCE,
-XSS and SQLi; gwaf leads on redirect, XXE, deserialization, SSRF and file
-upload, and wins outright on encoded payloads — 100% against 85.4% on a corpus
-of the same attacks re-encoded eight ways.
+positives against four, at a seventeenth of the latency.** CRS leads on RCE,
+XSS, SQLi and deserialization; gwaf leads on redirect (55/60 against 3/60),
+SSRF (44/63 against 14/63), file upload and SSTI, and wins outright on encoded
+payloads — 100% against 85.4% on a corpus of the same attacks re-encoded eight
+ways.
+
+`tuned` is the shape an adopter deploys rather than a flattering one: a platform
+profile, the opt-in rules with their body-phase counterparts, and one scoped
+exception for a webhook route that takes third-party URLs by design. All of it
+is in the test, and the exception is there because without it the fetch rule
+correctly blocks webhook registration — which is exactly why that rule ships
+opt-in.
 
 Run it yourself:
 
@@ -301,15 +309,29 @@ documented at the point of use:
 | Rule | Why it is opt-in |
 |---|---|
 | `core.WordPressHardeningRule` | blocks all direct PHP under `wp-content`; a minority of plugins expose endpoints that way |
+| `core.SSRFParamRule` | handing a server a foreign URL is what webhook, feed and avatar import *are* |
 | `core.LoopbackSSRFRule` | `localhost` and `127.0.0.1` are ordinary in CI, staging, and webhook targets |
 | `core.CRLFHeaderRule` | needs a transform chain no other rule shares — measured at 8% of the latency budget |
 | `graphql.IntrospectionRule` | introspection is how every GraphQL development tool discovers a schema |
 
 ```go
-waf, _ := gwaf.New(gwaf.WithRuleset(rules.Set{core.WordPressHardeningRule(1011)}))
+waf, _ := gwaf.New(gwaf.WithRuleset(core.WithBodyPhase(
+    rules.Set{core.WordPressHardeningRule(1011), core.SSRFParamRule(1016)})))
 ```
 
 `WithRuleset` *accumulates* onto the default set — pass only the extra rules.
+
+`core.WithBodyPhase` is not decoration. The core rules get a request-body
+counterpart generated for them; a rule you add does not, so an argument rule
+declared at the header phase sees the query string and never a JSON body. When
+that matters and you left it out, `waf.Diagnostics()` says so by name — as it
+does for the off-origin rules when no origins are declared:
+
+```go
+for _, d := range waf.Diagnostics() {
+    log.Warn("coverage gap", "rule", d.ID, "reason", d.Reason, "fix", d.Fix)
+}
+```
 
 Methodology, hardware, re-run instructions, and what the numbers **do not**
 show: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). One command reproduces them:

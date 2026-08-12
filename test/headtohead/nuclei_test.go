@@ -52,6 +52,7 @@ import (
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/ruleset/core"
 	"github.com/gsoultan/gwaf/ruleset/profiles"
+	"github.com/gsoultan/gwaf/types"
 )
 
 type nucleiCase struct {
@@ -140,6 +141,14 @@ type engineResult struct {
 	fps     []string
 }
 
+// nucleiHost is the hostname every replayed request is addressed to.
+//
+// It is a constant rather than a literal in two places because it is also the
+// origin declared to gwaf: the rules that ask "does this point somewhere else"
+// need a "here", and here is whatever the replay claims to be. Changing one
+// without the other silently disarms those rules.
+const nucleiHost = "target.local"
+
 func replayNuclei(srv *httptest.Server, cases []nucleiCase) engineResult {
 	client := &http.Client{Timeout: 30 * time.Second}
 	r := engineResult{byClass: map[string][2]int{}}
@@ -157,7 +166,7 @@ func replayNuclei(srv *httptest.Server, cases []nucleiCase) engineResult {
 		if err != nil {
 			continue // a target the template built that is not a valid URL
 		}
-		req.Host = "target.local"
+		req.Host = nucleiHost
 		setClientHeaders(req)
 		for k, v := range c.Headers {
 			req.Header.Set(k, v)
@@ -197,7 +206,7 @@ func replayBenign(srv *httptest.Server) []string {
 		if err != nil {
 			continue
 		}
-		req.Host = "target.local"
+		req.Host = nucleiHost
 		setClientHeaders(req)
 		if b.ctype != "" {
 			req.Header.Set("Content-Type", b.ctype)
@@ -232,13 +241,51 @@ func TestNucleiHeadToHead(t *testing.T) {
 	t.Logf("corpus: %d requests, %d payload-bearing (%d are version probes carrying nothing to detect)",
 		len(all), len(payload), len(all)-len(payload))
 
-	plain, err := gwaf.New()
+	// WithOrigins is what both replays make true: every request is sent with
+	// Host: target.local, so that is the hostname this application answers on.
+	//
+	// Without it the off-origin redirect rule and SSRFParamRule compile, lint
+	// clean, and match nothing -- they have no origin to call a destination
+	// foreign to. This harness omitted it from the day the origins requirement
+	// landed, which meant the published redirect and SSRF numbers were measured
+	// against two rules that could not fire, and the `tuned` config below was
+	// opting into one of them. gwaf.New said so on stderr both times; the
+	// harness was not reading its own output.
+	plain, err := gwaf.New(gwaf.WithOrigins(nucleiHost))
 	if err != nil {
 		t.Fatalf("gwaf.New: %v", err)
 	}
 	tuned, err := gwaf.New(
+		gwaf.WithOrigins(nucleiHost),
 		gwaf.WithExceptions(profiles.WordPress()...),
-		gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007), core.SSRFParamRule(1016)}),
+		// WithBodyPhase, because an opt-in rule does not go through Default()
+		// and so is compiled exactly as written -- at the header phase, seeing
+		// the query string only. Without it SSRFParamRule inspects everything
+		// except the JSON bodies that webhook and import endpoints are made of,
+		// which is both a coverage hole and a flattering false-positive count:
+		// the two benign cases below that carry a foreign URL carry it in a
+		// body, so the unmirrored rule never saw them.
+		gwaf.WithRuleset(core.WithBodyPhase(
+			rules.Set{core.CRLFHeaderRule(1007), core.SSRFParamRule(1016)})),
+		// The fetch half fires on webhook registration, because registering a
+		// webhook *is* handing the server a foreign URL. That is the measured
+		// reason the rule is opt-in rather than core, and it does not go away
+		// by declaring origins -- hooks.example.com is genuinely somewhere
+		// else. An adopter who runs both a webhook endpoint and this rule scopes
+		// the one route, which is narrower than turning the rule off, so that is
+		// what is modelled here. Both IDs: the counterpart carries its own.
+		gwaf.WithExceptions(
+			rules.Exception{
+				RuleID: 1016, Path: "/api/webhooks",
+				Target: types.TargetArgs, Key: "url",
+				Note: "webhook registration takes a third-party URL by design",
+			},
+			rules.Exception{
+				RuleID: 1916, Path: "/api/webhooks",
+				Target: types.TargetArgs, Key: "url",
+				Note: "the body-phase counterpart of 1016, which is where a JSON registration arrives",
+			},
+		),
 	)
 	if err != nil {
 		t.Fatalf("gwaf.New(tuned): %v", err)
