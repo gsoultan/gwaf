@@ -161,6 +161,11 @@ const (
 	// Groovy had nothing. See procspawn.go.
 	IDProcessSpawn types.RuleID = 4023
 
+	// Turning a string into running code -- the Function constructor, the
+	// constructor walk, decode-then-eval, and PHP's invoke-by-name. See
+	// codeexec.go.
+	IDStringToCode types.RuleID = 4024
+
 	// The Medium tier, in its own 5xxx band so an exception written against a
 	// default-tier rule can never accidentally silence the opt-in one, and so a
 	// reader of an audit log can tell at a glance which bar a finding cleared.
@@ -1398,6 +1403,22 @@ func requestRules() rules.Set {
 			Confidence: types.High,
 			Msg:        "JavaScript injected into a script context",
 			Tags:       []string{"xss", "javascript", "owasp-a03"},
+		},
+		{
+			ID:         IDStringToCode,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Asks the question the other rules do not: is this value turning a
+			// string into code? detect/xss reads HTML, 3012 reads breakouts,
+			// 4021 reads Node modules, 4023 reads process APIs -- and a
+			// constructor walk carries none of those. See codeexec.go.
+			Op:         stringToCode(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "String compiled as code in request value",
+			Tags:       []string{"rce", "xss", "owasp-a03"},
 		},
 		{
 			ID:         IDProcessSpawnWeak,

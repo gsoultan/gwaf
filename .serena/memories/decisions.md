@@ -2499,3 +2499,50 @@ Python docs link and a sentence about shelling out. Rule 4021's own
 documentation says exactly this, and the benign cases written *for 4021* are
 what caught it. The subprocess API is listed by call now; child_process is left
 to 4021, which pairs it properly.
+
+## Language-specific red team: 17 of 24 through on the first run
+
+The generic rounds were thinning (3/24, then 1/20). Switching to the evasions a
+*PHP or JavaScript specialist* reaches for reopened the seam completely.
+
+The JavaScript half was **one idea spelled ten ways**: Function('…'),
+[]['constructor']['constructor'](…), globalThis['eval'](…), setTimeout with a
+string, eval(atob(…)), window['ale'+'rt'](1). None carries HTML for detect/xss,
+a breakout for 3012, or a module name for 4021 -- each of those is right about
+the question it asks, and none asks **"is this value turning a string into
+code"**. Rule 4024 asks it.
+
+The PHP half added invoke-by-name: `call_user_func('system','id')`,
+`array_map('system',['id'])`. Rule 4023 looks for "system(" and these never
+write it -- the name travels as a string and something else applies the parens.
+Paired with an invoker, because {"type":"system"} is ordinary JSON.
+
+Also added to 3012: `import('data:`, tagged-template calls (alert`1` survives a
+filter looking for "alert("), and cookie/localStorage read paired with a network
+sink.
+
+17 -> 7 bypasses, zero false positives, no latency change.
+
+## OPEN, and deliberately not rule-shaped: constant folding
+
+Five of the remaining six are one problem:
+
+    sy.'stem'('id')                     PHP concatenation
+    ('sys'.'tem')('id')                 PHP concatenation
+    "\x73\x79\x73\x74\x65\x6d"('id')    PHP hex escapes in a quoted string
+    window['ale'+'rt'](1)               JavaScript concatenation
+    $f='system';$f('id');               PHP variable function
+
+Every one builds an identifier the language assembles before it runs. **A
+literal list for these is the regex bag this project is defined against** --
+there are infinitely many spellings of "system".
+
+The principled answer is a **constant-folding interpretation**: fold adjacent
+string literals joined by "." or "+", resolve \xNN and \NNN inside quotes, and
+evaluate that reading alongside utf7 and double-encoding. It belongs in
+`internal/interpret`, **not** a transform chain -- chains are the expensive axis
+(decisions.md: 12 chains vs 10 cost more than 90 extra literals) and an
+interpretation is not.
+
+Designed and tracked rather than built, because it is a layer rather than a rule
+and deserves its own measurement.

@@ -76,7 +76,38 @@ func jsContextInjection() rules.Operator {
 	// and none was needed for any payload the corpus actually carries.
 	breakouts := []byte{';', '}', ')'}
 
+	// Self-evidencing JavaScript, found by a language-specific red-team round.
+	// None needs a breakout beside it because none has an ordinary reading in a
+	// request parameter.
+	selfEvident := []string{
+		// A dynamic import of a data URL is a module built from the request.
+		"import('data:", `import("data:`, "import(`data:",
+		// Tagged-template invocation: alert`1` calls alert with no parentheses,
+		// which is how a payload survives a filter that looks for "alert(".
+		"alert`", "confirm`", "prompt`", "eval`",
+	}
+	// Reading the cookie is ordinary in a page and never in a request
+	// parameter, and paired with a way off the machine it is exfiltration
+	// rather than a mention.
+	exfilSources := []string{"document.cookie", "localstorage.", "sessionstorage."}
+	exfilSinks := []string{"fetch(", "xmlhttprequest", "sendbeacon(", "new image", ".src=", "location="}
+
 	return op.Func("js_context_injection", func(v []byte) bool {
+		for _, s := range selfEvident {
+			if indexOfFold(v, s) >= 0 {
+				return true
+			}
+		}
+		for _, src := range exfilSources {
+			if indexOfFold(v, src) < 0 {
+				continue
+			}
+			for _, snk := range exfilSinks {
+				if indexOfFold(v, snk) >= 0 {
+					return true
+				}
+			}
+		}
 		for _, s := range sinks {
 			i := 0
 			for {
@@ -126,9 +157,13 @@ func jsContextInjection() rules.Operator {
 		}
 		return false
 	}).WithLiterals(
-		// Honest: every branch requires one of the three call forms as a
-		// substring, so a value containing none cannot match.
+		// Honest: every branch requires one of these as a substring. The call
+		// forms cover the breakout, handler and identity branches; the rest
+		// cover the self-evidencing and exfiltration ones.
 		"alert(", "confirm(", "prompt(",
+		"import('data:", `import("data:`, "import(`data:",
+		"alert`", "confirm`", "prompt`", "eval`",
+		"document.cookie", "localstorage.", "sessionstorage.",
 	)
 }
 
