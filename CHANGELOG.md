@@ -8,6 +8,60 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Security
 
+- **Six of seven detector classes could be bypassed by padding.** Every semantic
+  detector bounded its work with a constant named `maxScan` and applied it by
+  truncating — `src = src[:maxScan]`. The reasoning written beside each one is
+  sound and still true: signals are local to one command, one tag, one header.
+  But locality justifies a bounded **window**, not a bounded **prefix**. The
+  payload never needed to be longer than the bound; it only needed to sit past
+  it.
+
+  Measured, with the payload after N bytes of ordinary text:
+
+  | detector | bound | missed at |
+  |---|---|---|
+  | `phpi`, `javaser`, `ldapi` | 8 KiB | 16 KiB |
+  | `shelli`, `xss`, `ssti` | 64 KiB | 128 KiB |
+
+  Only `sqli` — the one detector with no such constant — was unaffected.
+
+  This is the technique the 2026 literature calls the WAF blind spot, and the
+  answer gwaf already had for it was one layer too high. `noteOversize` in
+  `transaction.go` states the rule exactly: *"Inspecting the first 64 KiB of a
+  value and reporting the request as clean is a bypass with a padding step."*
+  The transaction layer refused to do it and every detector did it anyway.
+
+  Fixed by `internal/scan`, which walks the value in overlapping windows so the
+  per-window bound that made the detectors affordable is kept while the whole
+  value is covered. Overlap is sized proportionally — a signal cannot straddle a
+  boundary, since the longest any detector reports is measured in tens of bytes
+  against a 1–4 KiB overlap. `TestPaddingPositionDoesNotHide` pins 14 payload
+  classes at six padding depths.
+
+  `graphql` and `nosqli` are deliberately left alone: GraphQL scores *global*
+  document structure, where a window is not a document, and the NoSQL detector
+  reads parameter names, which `MaxKeyLen` already bounds at 256 bytes — four
+  times under its own limit.
+
+  **Cost, stated plainly.** `BenchmarkBenignLargeBody` goes from 11.5 ms to
+  18.1 ms on a 1 MiB body — 58% slower, because roughly 99% of that body was
+  previously not inspected at all. That is not an efficiency regression; it is
+  the removal of a shortcut that was a bypass. Benign 1 MiB bodies are still
+  allowed, verified, so the cost is time rather than false positives. The
+  committed `bench/baseline.txt` figure (7.8 ms) predates this and was recorded
+  on different hardware — the same benchmark measured 11.5 ms on this machine
+  before the change — so it is left in place rather than silently rewritten.
+
+- **A multipart body labelled `application/x-www-form-urlencoded` was not read
+  as multipart.** The WAFFLED field survey found over 90% of live sites accept
+  the two interchangeably, so for most origins that request *is* multipart and
+  gwaf was reading one flat urlencoded pair the origin never sees. The mirror
+  image was already handled, because `SniffJSON` is applied on the form path;
+  this direction had nothing. `body.SniffMultipart` derives the boundary from
+  the body — the header being the thing not believed — and requires a legal
+  RFC 2046 boundary plus a real part header, so a diff, a PGP block, a YAML
+  document or a CLI transcript beginning with `--` does not qualify.
+
 - **A command injection in the most obvious place it can appear walked through.**
   `?cmd=;whoami` was not detected. The query parser split pairs on `;` as well as
   `&`, so the pair became `cmd=` plus a stray `whoami` and the value `;whoami`

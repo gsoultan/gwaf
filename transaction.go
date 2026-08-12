@@ -656,6 +656,28 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 		return
 	}
 
+	// A body shaped like a multipart document is parsed as one whatever it
+	// claims to be, for the same reason SniffJSON exists below and with more
+	// evidence behind it: the WAFFLED survey found over 90% of live sites accept
+	// urlencoded and multipart interchangeably, so "Content-Type:
+	// application/x-www-form-urlencoded" wrapped around a multipart body is a
+	// multipart request to most origins. gwaf caught the mirror image already --
+	// a urlencoded body labelled multipart falls through to the raw-body reading
+	// -- and missed this direction completely, which made
+	// "--B\r\nContent-Disposition: form-data; name=\"cmd\"\r\n\r\n;whoami" a
+	// clean request.
+	//
+	// The boundary comes from the body, because the header is the thing not
+	// being believed. Checked before DetectContent so it applies to every
+	// declared type rather than only the form path.
+	if sniffed, ok := body.SniffMultipart(b); ok {
+		if _, declared := body.Boundary(tx.contentType); !declared {
+			if tx.parseMultipartBody(b, sniffed) {
+				return
+			}
+		}
+	}
+
 	switch body.DetectContent(tx.contentType) {
 	case body.ContentJSON:
 		if tx.parseStructuredBody(b, true) {

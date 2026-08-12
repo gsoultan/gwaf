@@ -2086,3 +2086,50 @@ depth is still *detected*, so depth is not a hiding place either.
 
 **A differentiator that rests on a property rather than a rule still needs a
 test, or it is one refactor from being a regression nobody notices.**
+
+## Bounded work must be a window, not a prefix (the padding bypass)
+
+**Six of seven detector classes were bypassable by padding.** Every semantic
+detector bounded analysis with `maxScan` and applied it as `src = src[:maxScan]`.
+The reasoning beside each is sound -- signals are local to one command, one tag,
+one header -- but **locality justifies a bounded window, not a bounded prefix.**
+The payload never needed to be longer than the bound, only to sit past it.
+
+Measured: phpi/javaser/ldapi (8 KiB) missed at 16 KiB of padding;
+shelli/xss/ssti (64 KiB) missed at 128 KiB. Only sqli, which has no such
+constant, was unaffected.
+
+The bitter part: `transaction.go`'s `noteOversize` already states the rule --
+"Inspecting the first 64 KiB of a value and reporting the request as clean is a
+bypass with a padding step" -- and refuses to do it at the transaction layer.
+Every detector then did it one level down. **A principle enforced at one layer
+is not enforced.**
+
+Fixed with `internal/scan.Windows`: overlapping windows, overlap sized
+proportionally (window/8, clamped 1-4 KiB) because a flat 4 KiB on an 8 KiB
+window meant scanning every byte twice for a guarantee needing tens of bytes.
+
+`graphql` and `nosqli` deliberately excluded: GraphQL scores *global* structure
+(a window is not a document), and nosqli reads names that `MaxKeyLen` bounds at
+256 -- four times under its own 1 KiB limit.
+
+**Cost accepted and documented:** BenchmarkBenignLargeBody 11.5ms -> 18.1ms on a
+1 MiB body, because ~99% of that body was previously not inspected. Not an
+efficiency regression -- the removal of a shortcut that was a bypass. Verified
+benign 1 MiB bodies still pass, so the cost is time, not false positives.
+
+## Framing is an axis the payload corpus cannot see
+
+Two real bypasses this cycle were found by holding the payload *constant* and
+varying how the request was framed -- something a corpus of hundreds of attack
+payloads cannot do, because it varies the payload instead. `discrepancy_test.go`
+is that axis: one payload, every framing an origin might honour.
+
+Found this way: the ';' query separator, and a multipart body labelled
+urlencoded (WAFFLED: >90% of sites accept the two interchangeably; gwaf handled
+the mirror direction via SniffJSON and had nothing for this one).
+
+**Rule for the file:** a new framing goes in *before* the fix, so the miss is on
+record. It must never fail because a detector got weaker -- the payload is a
+command injection scoring 5 against a threshold of 5 precisely so a failure
+means framing, not detection.

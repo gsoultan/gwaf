@@ -68,6 +68,7 @@
 package shelli
 
 import (
+	"github.com/gsoultan/gwaf/internal/scan"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -912,12 +913,30 @@ type operator struct {
 
 func (o *operator) Name() string { return "detect_shelli" }
 
+// Eval scores the value, covering all of it rather than its first maxScan bytes.
+//
+// The windowing is the fix for a padding bypass. AnalyzeIn bounds its work at
+// maxScan and used to do it by truncating, which is sound reasoning about how
+// long a payload is and wrong about where it sits: ";whoami" after 128 KiB of
+// ordinary text scored nothing, while the same bytes at offset zero score 5.
+// See internal/scan.
 func (o *operator) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool) {
-	v := o.d.AnalyzeIn(value, ctx != nil && isCommandSinkParam(ctx.Key))
-	if v.Score < o.threshold {
-		return rules.Match{}, false
-	}
-	return rules.Match{Span: v.Span}, true
+	sink := ctx != nil && isCommandSinkParam(ctx.Key)
+
+	var match rules.Match
+	var found bool
+	scan.Windows(value, maxScan, func(off int, w []byte) bool {
+		v := o.d.AnalyzeIn(w, sink)
+		if v.Score < o.threshold {
+			return true
+		}
+		// The span is relative to the window; an audit log wants it relative to
+		// the value the caller passed in.
+		match = rules.Match{Span: types.SpanOf(off+int(v.Span.Off), int(v.Span.Len))}
+		found = true
+		return false
+	})
+	return match, found
 }
 
 // Literals are the byte sequences without which no scoring signal can fire.

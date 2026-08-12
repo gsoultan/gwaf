@@ -390,6 +390,110 @@ func Boundary(contentType string) ([]byte, bool) {
 	return b, true
 }
 
+// SniffMultipart reports the boundary of a body that is shaped like a multipart
+// document, whatever its Content-Type claims.
+//
+// # Why the declared type is not enough
+//
+// It is the same argument SniffJSON exists for, and it is the discrepancy the
+// WAFFLED study found most of: a field survey of live sites reported that over
+// 90% accepted application/x-www-form-urlencoded and multipart/form-data
+// interchangeably. So "Content-Type: application/x-www-form-urlencoded" with a
+// multipart body is not a malformed request — for most origins it is a
+// multipart request, and a firewall that reads it as one flat urlencoded pair
+// has read a document the origin will never see.
+//
+// gwaf caught the mirror image already, because SniffJSON is applied on the form
+// path, and missed this direction entirely. The boundary is taken from the body
+// rather than the header precisely because the header is the thing not being
+// believed.
+//
+// # Why this is conservative
+//
+// A wrong sniff is not harmless: it re-parses a body under a reading nobody
+// will use, which costs work and can only invent findings. So the shape has to
+// be unambiguous — a delimiter line, a boundary that is legal per RFC 2046, and
+// an actual part header after it. Bodies that merely start with "--" (a diff, a
+// signature, a CLI transcript) do not qualify, because none of them carries
+// Content-Disposition.
+func SniffMultipart(data []byte) ([]byte, bool) {
+	// A multipart body opens with the delimiter. No leading whitespace is
+	// allowed here: the preamble is optional but a body that does not start with
+	// "--" is one this function has no business guessing about.
+	if len(data) < 4 || data[0] != '-' || data[1] != '-' {
+		return nil, false
+	}
+	end := 2
+	for end < len(data) && data[end] != '\r' && data[end] != '\n' {
+		end++
+	}
+	if end == len(data) {
+		return nil, false
+	}
+	b := data[2:end]
+	// RFC 2046 bounds a boundary at 70 characters and defines its alphabet. A
+	// trailing space is permitted in the grammar and stripped here.
+	for len(b) > 0 && b[len(b)-1] == ' ' {
+		b = b[:len(b)-1]
+	}
+	if len(b) == 0 || len(b) > 70 {
+		return nil, false
+	}
+	for _, c := range b {
+		if !isBoundaryByte(c) {
+			return nil, false
+		}
+	}
+	// The delimiter alone is a coincidence; a part header is evidence. Bounded
+	// so a large body is not rescanned in full for a sniff that will fail.
+	limit := len(data)
+	if limit > 4096 {
+		limit = 4096
+	}
+	if indexFoldBytes(data[:limit], "content-disposition:") < 0 {
+		return nil, false
+	}
+	return b, true
+}
+
+// isBoundaryByte reports whether c may appear in a boundary (RFC 2046 bchars).
+func isBoundaryByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	switch c {
+	case '\'', '(', ')', '+', '_', ',', '-', '.', '/', ':', '=', '?':
+		return true
+	}
+	return false
+}
+
+// indexFoldBytes finds needle in haystack, case-insensitively, without
+// allocating a lowered copy.
+func indexFoldBytes(haystack []byte, needle string) int {
+	if len(needle) == 0 || len(haystack) < len(needle) {
+		return -1
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		ok := true
+		for j := 0; j < len(needle); j++ {
+			c := haystack[i+j]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != needle[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return i
+		}
+	}
+	return -1
+}
+
 func hasPrefixStr(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

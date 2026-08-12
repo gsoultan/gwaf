@@ -42,6 +42,7 @@
 package ldapi
 
 import (
+	"github.com/gsoultan/gwaf/internal/scan"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -252,12 +253,27 @@ type operator struct{ d *Detector }
 
 func (o *operator) Name() string { return "detect_ldapi" }
 
+// Eval scores the value, covering all of it rather than its first maxScan bytes.
+//
+// The windowing is the fix for a padding bypass: the bound was applied by
+// truncating, which reasons correctly about how long a payload is and not at all
+// about where it sits. The same payload scored nothing when preceded by enough
+// ordinary text. See internal/scan.
 func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) {
-	v := o.d.Analyze(value)
-	if !v.Detected() {
-		return rules.Match{}, false
-	}
-	return rules.Match{Span: v.Span}, true
+	var match rules.Match
+	var found bool
+	scan.Windows(value, maxScan, func(off int, w []byte) bool {
+		v := o.d.Analyze(w)
+		if !v.Detected() {
+			return true
+		}
+		// The span is relative to the window; callers want it relative to the
+		// value they passed in.
+		match = rules.Match{Span: types.SpanOf(off+int(v.Span.Off), int(v.Span.Len))}
+		found = true
+		return false
+	})
+	return match, found
 }
 
 // Literals are the byte sequences without which no scoring combination can
