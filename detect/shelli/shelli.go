@@ -922,13 +922,20 @@ func (o *operator) Name() string { return "detect_shelli" }
 // long a payload is and wrong about where it sits: ";whoami" after 128 KiB of
 // ordinary text scored nothing, while the same bytes at offset zero score 5.
 // See internal/scan.
-func (o *operator) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool) {
-	sink := ctx != nil && isCommandSinkParam(ctx.Key)
-
+func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) {
+	// Deliberately not consulting the parameter name any more.
+	//
+	// This operator used to lift the stored-command-line suppression when
+	// ctx.Key was a sink, which made it able to report on values carrying none
+	// of its literals -- "cmd=id" -- and therefore made that path unreachable
+	// through the prefilter. A rule that can only fire on values the automaton
+	// drops is not a rule. SinkOperator now covers the key-anchored case
+	// properly, by keying on the name the automaton *can* match, so this one
+	// answers the question it can actually be scheduled for.
 	var match rules.Match
 	var found bool
 	scan.Windows(value, maxScan, func(off int, w []byte) bool {
-		v := o.d.AnalyzeIn(w, sink)
+		v := o.d.AnalyzeIn(w, false)
 		if v.Score < o.threshold {
 			return true
 		}
@@ -954,17 +961,35 @@ func (o *operator) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool
 //   - the only signal that fires without a separator is an interpreter path,
 //     so those are named specifically rather than by their leading slash.
 //
-// The weak signals never fire alone and always need a separator alongside, so
-// they need no literals of their own. FuzzLiteralsAreExhaustive enforces all of
-// this rather than trusting the reasoning.
+// The weak signals never fire alone *at the default threshold* and always need
+// a separator alongside, so at that threshold they need no literals of their
+// own.
+//
+// That qualifier was missing and it mattered. A weak signal weighs 3, and the
+// Medium tier runs OperatorAt(3) -- where one alone reaches the bar. So the
+// suspicious rule could report on "/etc/passwd" with no separator anywhere, and
+// its declared literals covered none of it: the rule was unreachable through
+// the prefilter for exactly the values it exists to catch.
+//
+// The harness that should have caught this existed, and tested Operator() --
+// the default threshold, where the reasoning holds. **A contract checked on one
+// instance of a configurable thing is not checked.**
 func (o *operator) Literals() ([]string, bool) {
-	return []string{
+	lits := []string{
 		";", "|", "&", "`", "\n",
 		"${", "$'", "$(", "$IFS",
 		"/sh", "/bash", "/zsh", "/ksh", "/csh", "/dash", "/ash",
 		"/busybox", "/python", "/perl", "/ruby", "/php", "/node",
 		"/nc", "/ncat", "/netcat",
-	}, true
+	}
+	// At a threshold a weak signal can reach alone, its own literals become
+	// required. Sensitive paths are the only weak signal that fires without a
+	// separator; a bare variable in command position needs one, and separators
+	// are declared above.
+	if o.threshold <= weightOf(SignalSensitivePath) {
+		lits = append(lits, sensitivePaths...)
+	}
+	return lits, true
 }
 
 // Cost prices one analysis: three passes with local lookahead.

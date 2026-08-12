@@ -2412,3 +2412,53 @@ way to build one.
 unwrap twice. **The rule throughout: follow the readings the origin performs,
 and no others.** Multi-interpretation is not "try everything"; a reading nobody
 performs is cost and false positives, not coverage.
+
+## The literals contract was enforced on detectors, not on rules
+
+`FuzzLiteralsAreExhaustive` covered 7 of 10 detectors and **0 core rules** --
+and the rules are where it was actually broken. `offOriginOp` declared "://"
+while matching the protocol-relative "//host"; that took an afternoon of
+hand-probing to find. `ruleset/core/literals_test.go` now fuzzes every rule's
+operator against its own declared literals and finds that shape in seconds.
+
+**It found two violations on its first run.**
+
+### 1. Rule 4010 could report on a value carrying none of its literals
+
+The value-anchored shelli operator consulted `ctx.Key` and lifted the
+stored-command-line suppression for sink names -- so it could report on
+`cmd=id`, which contains no separator and no interpreter path. **A rule that can
+only fire on values the automaton drops is not a rule.** Removed; `SinkOperator`
+now covers the key-anchored case by keying on the name the automaton *can*
+match.
+
+### 2. The Medium tier's literals were the default tier's
+
+shelli's `Literals()` reasoned that "the weak signals never fire alone and
+always need a separator alongside". True at threshold 5. The Medium tier runs
+`OperatorAt(3)`, where a weak signal weighing 3 reaches the bar **alone** -- so
+rule 5912 could report on a bare `/etc/passwd` whose literals it did not
+declare.
+
+The harness that should have caught this **existed and tested `Operator()`** --
+the one threshold where the reasoning holds. *A contract checked on one instance
+of a configurable thing is not checked.* Literals are threshold-aware now, and
+shelli's harness covers both.
+
+## detect/xss: SignalScriptBreakout was unreachable
+
+The new xss harness found `0;A(/*` reported with no covering literal. Every
+breakout path requires a call -- an identifier then `(` -- and `(` was not
+declared, so the whole signal was dropped by the prefilter before the detector
+ran. That is why the XSS misses looked the way they did: a working signal the
+automaton never scheduled.
+
+Declaring `(` cost **no measurable latency** (16.85us vs 17.0us), no false
+positives on either corpus, and two extra candidates on benign values containing
+a parenthesis.
+
+**maxEvaluated has now been raised three times** (6 -> 10 -> 12 -> 14), each for
+a different legitimate cause. The trend is the finding: that number grows with
+the ruleset, which is exactly what it cannot distinguish from a prefilter
+regression. `TestRuleEvaluationDoesNotScaleWithRuleset` measures the shape of
+the curve rather than a point on it and does not degrade; prefer it.

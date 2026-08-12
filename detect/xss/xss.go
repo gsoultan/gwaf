@@ -1026,6 +1026,7 @@ func (o *operator) Literals() ([]string, bool) {
 		"eval", "settimeout", "setinterval", "atob", "unescape", "function",
 		"\"", "'",
 		"-->",
+		"(",
 	}, true
 }
 

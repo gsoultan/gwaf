@@ -577,3 +577,50 @@ func TestScriptContextStatementBreakout(t *testing.T) {
 		}
 	})
 }
+
+// FuzzLiteralsAreExhaustive enforces the contract the prefilter rests on.
+//
+// A rule is only evaluated when the automaton finds one of its operator's
+// declared literals in the value. If the operator can report on a value
+// containing none of them, the automaton drops that value first and the rule is
+// **silently dead** — it compiles, it lints, and it never fires.
+//
+// That is not hypothetical. core.offOriginOp declared "://" while its matcher
+// accepted the protocol-relative "//host", so every scheme-omitted open
+// redirect was undetectable in a shipping core rule. It was found by hand; this
+// harness finds that shape in seconds.
+//
+// Matching is case-insensitive because the automaton folds ASCII.
+func FuzzLiteralsAreExhaustive(f *testing.F) {
+	for _, s := range fuzzLiteralSeeds {
+		f.Add(s)
+	}
+	op := Operator()
+	lits, declared := op.Literals()
+	if !declared {
+		f.Skip("operator declares no literals")
+	}
+
+	f.Fuzz(func(t *testing.T, value string) {
+		if len(value) > 8192 {
+			t.Skip()
+		}
+		if _, ok := op.Eval(nil, []byte(value)); !ok {
+			return
+		}
+		lower := strings.ToLower(value)
+		for _, l := range lits {
+			if strings.Contains(lower, strings.ToLower(l)) {
+				return
+			}
+		}
+		t.Fatalf("reported %q but no declared literal covers it: "+
+			"the prefilter would drop this value and the rule would never run", value)
+	})
+}
+
+var fuzzLiteralSeeds = []string{
+	"<script>alert(1)</script>", "<svg/onload=alert(1)>", `x" onerror="alert(1)`,
+	"javascript:alert(1)", "<img src=x onerror=alert(1)>", "hello world", "",
+	"the onerror callback fires when loading fails", "<b>bold</b>", "a<b",
+}

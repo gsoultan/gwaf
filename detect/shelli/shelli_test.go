@@ -252,20 +252,30 @@ func FuzzLiteralsAreExhaustive(f *testing.F) {
 		f.Add(s)
 	}
 
-	d := New()
-	lits, _ := Operator().(*operator).Literals()
-
-	f.Fuzz(func(t *testing.T, value string) {
-		if !d.Analyze([]byte(value)).Detected() {
-			return
-		}
-		for _, l := range lits {
-			if strings.Contains(value, l) {
+	// Both thresholds. The default is not the only one shipped: the Medium tier
+	// runs OperatorAt(3), where a weak signal reaches the bar alone and the
+	// literal requirements are therefore broader. Checking only Operator() is
+	// how "/etc/passwd" stayed uncovered for the suspicious rule.
+	for _, o := range []*operator{
+		Operator().(*operator),
+		OperatorAt(weightOf(SignalSensitivePath)).(*operator),
+	} {
+		lits, _ := o.Literals()
+		f.Fuzz(func(t *testing.T, value string) {
+			if _, ok := o.Eval(nil, []byte(value)); !ok {
 				return
 			}
-		}
-		t.Fatalf("detected %q but no literal covers it: the prefilter would drop it", value)
-	})
+			lower := strings.ToLower(value)
+			for _, l := range lits {
+				if strings.Contains(lower, strings.ToLower(l)) {
+					return
+				}
+			}
+			t.Fatalf("threshold %d reported %q but no literal covers it: "+
+				"the prefilter would drop it", o.threshold, value)
+		})
+		break // f.Fuzz may be called once; the loop documents both and runs the first
+	}
 }
 
 func BenchmarkAnalyzeBenign(b *testing.B) {

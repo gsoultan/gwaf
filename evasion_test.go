@@ -1813,9 +1813,24 @@ func TestBenignTrafficBoundsRuleEvaluation(t *testing.T) {
 	// value is re-read under the HTML-entity interpretation, and each reading
 	// nominates independently. Both rules run and both reject.
 	//
-	// The number is a smoke alarm; TestRuleEvaluationDoesNotScaleWithRuleset is
-	// the actual invariant.
-	const maxEvaluated = 12
+	// Raised a third time, 12 to 14, when detect/xss declared "(" as a literal.
+	//
+	// That was a correctness fix rather than a new rule: SignalScriptBreakout
+	// universally requires a call, and "(" was not declared, so the signal was
+	// unreachable through the prefilter -- a working detector the automaton
+	// dropped every value before. Declaring it costs two extra candidates on
+	// benign values containing a parenthesis, no measurable latency (16.85us
+	// against 17.0us) and no false positives on either corpus.
+	//
+	// Three raises deserve a note. Each had a different and legitimate cause --
+	// URL-carrying values, then a call vocabulary, now a parenthesis -- but the
+	// trend is real: this number grows as the ruleset does, which is exactly
+	// what it cannot distinguish from a prefilter regression. It is a smoke
+	// alarm and it is getting less informative.
+	// TestRuleEvaluationDoesNotScaleWithRuleset is the invariant that does not
+	// degrade, because it measures the *shape* of the curve rather than a point
+	// on it.
+	const maxEvaluated = 14
 
 	for _, b := range benignTraffic {
 		t.Run(b.name, func(t *testing.T) {
