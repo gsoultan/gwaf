@@ -18,3 +18,4 @@ graphify-out/
 # a stray binary from `go build ./...` was staged once and must not recur.
 /proxy/proxy
 gwaf-proxy
+dist/

@@ -1,0 +1,87 @@
+# Copyright (c) 2026 Gembit Soultan Shirazi <gembit.soultan@gmail.com>. All rights reserved.
+#
+# SECURITY.md has said "Releases ship an SBOM and SLSA provenance" since it was
+# written. It was not true. v0.5.0 shipped zero assets and nothing in the tree
+# produced either artifact.
+#
+# That is the failure this project keeps finding in itself: a documented control
+# with nothing implementing it. It is worse than an absent control, because the
+# policy tells a reader the control is there — the same disease as a lint gate
+# that skips when its tool is missing (CLAUDE.md §6).
+
+name: Release artifacts
+
+on:
+  release:
+    types: [published]
+  # So a release published before this workflow existed can be backfilled
+  # without inventing a commit or re-cutting a tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to attach artifacts to (e.g. v0.5.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write     # upload release assets
+  id-token: write     # sign the provenance
+  attestations: write # record it
+
+env:
+  GO_VERSION: '1.26.5'
+  # Pinned, not @latest. Resolving a supply-chain tool to whatever was published
+  # this morning is the problem it exists to describe.
+  CYCLONEDX_VERSION: v1.9.0
+
+jobs:
+  sbom:
+    name: SBOM and provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: install cyclonedx-gomod
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${{ env.CYCLONEDX_VERSION }}
+
+      # Every module, for the same reason `make vuln` scans every module: core
+      # has no third-party dependencies by design, so an SBOM of core alone
+      # describes the one place with nothing to describe. What an adopter
+      # actually pulls in lives in the adapters — gin's SBOM has 29 components
+      # to core's zero.
+      - name: generate SBOMs
+        run: make sbom
+
+      # A single archive is what a consumer can verify in one step; the
+      # per-module files are what they actually need to read.
+      - name: bundle
+        id: bundle
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          (cd dist/sbom && tar -czf "../gwaf-${tag}-sbom.tar.gz" ./*.cdx.json)
+          (cd dist && sha256sum "gwaf-${tag}-sbom.tar.gz" > "gwaf-${tag}-sbom.tar.gz.sha256")
+          ls -l dist/
+
+      # SLSA build provenance, signed with the workflow's own OIDC identity and
+      # recorded in GitHub's attestation store. Verify with:
+      #   gh attestation verify gwaf-<tag>-sbom.tar.gz --repo gsoultan/gwaf
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/gwaf-${{ steps.bundle.outputs.tag }}-sbom.tar.gz
+
+      - name: attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.bundle.outputs.tag }}"
+          gh release upload "$tag" \
+            "dist/gwaf-${tag}-sbom.tar.gz" \
+            "dist/gwaf-${tag}-sbom.tar.gz.sha256" \
+            --clobber

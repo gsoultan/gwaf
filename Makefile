@@ -23,6 +23,11 @@ MODULES ?= . ./middleware ./examples ./schema/openapi ./schema/grpc ./seclang \
 GOBIN        := $(shell $(GO) env GOPATH)/bin
 STATICCHECK  := $(shell command -v staticcheck 2>/dev/null || echo $(GOBIN)/staticcheck)
 GOVULNCHECK  := $(shell command -v govulncheck 2>/dev/null || echo $(GOBIN)/govulncheck)
+CYCLONEDX    := $(shell command -v cyclonedx-gomod 2>/dev/null || echo $(GOBIN)/cyclonedx-gomod)
+
+# Pinned, not @latest. An SBOM generator is a supply-chain tool; resolving it to
+# whatever was published this morning is the problem it exists to describe.
+CYCLONEDX_VERSION := v1.9.0
 
 .DEFAULT_GOAL := check
 
@@ -317,3 +322,30 @@ nuclei: ## gwaf vs Coraza + CRS on real CVE exploit traffic from nuclei-template
 .PHONY: nuclei
 nuclei:
 	cd test/headtohead && go test -run TestNucleiHeadToHead -v -timeout 25m .
+
+## sbom: generate a CycloneDX SBOM for every module.
+##
+## SECURITY.md has always said "Releases ship an SBOM and SLSA provenance". It
+## was not true: v0.5.0 shipped zero assets, and nothing in the tree produced
+## either one. That is the same failure as a gate that skips when its tool is
+## missing -- a documented control that nothing implements is worse than an
+## absent one, because the policy tells a reader it is there.
+##
+## Every module, for the reason `vuln` scans every module: core has no
+## third-party dependencies by design, so an SBOM of core alone describes the
+## one place with nothing to describe. What an adopter pulls in lives in the
+## adapters.
+.PHONY: sbom
+sbom:
+	@if [ ! -x "$(CYCLONEDX)" ]; then \
+		echo "cyclonedx-gomod not found at $(CYCLONEDX)"; \
+		echo "install: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(CYCLONEDX_VERSION)"; \
+		exit 1; \
+	fi
+	@mkdir -p dist/sbom
+	@for m in $(MODULES); do \
+		name=$$(echo $$m | sed -e 's|^\./||' -e 's|^\.$$|core|' -e 's|/|-|g'); \
+		echo "sbom $$m -> dist/sbom/$$name.cdx.json"; \
+		$(CYCLONEDX) mod -licenses -json -output dist/sbom/$$name.cdx.json $$m || exit 1; \
+	done
+	@echo "SBOMs in dist/sbom/"
