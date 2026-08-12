@@ -69,14 +69,37 @@ const (
 	maxOverlap = 4 << 10
 )
 
-// overlapFor sizes the shared region for a given window.
+// overlapFor sizes the shared region for a given window, and with it the
+// guarantee Windows offers:
+//
+//	a run of at most overlapFor(window) bytes always appears intact in
+//	some window.
+//
+// That is exactly right rather than approximately right. A run of length L
+// survives iff the step is at most window-L; the step is window-overlap; so the
+// guarantee is L <= overlap and nothing more. Every detector's signals sit
+// orders of magnitude under minOverlap, which is why this is a comfortable
+// bound in practice and a precise one on paper.
+//
+// The final clamp is the part a fuzzer had to find. Without it a window smaller
+// than minOverlap produced an overlap larger than the window itself — an
+// incoherent claim, since no window can hold a run longer than it is — and the
+// step then fell through to a fallback that still advanced but guaranteed
+// nothing. Capping at half the window keeps overlap meaningful at every size and
+// keeps the step strictly positive without a fallback.
 func overlapFor(window int) int {
+	if window <= 1 {
+		return 0
+	}
 	o := window / 8
 	if o < minOverlap {
 		o = minOverlap
 	}
 	if o > maxOverlap {
 		o = maxOverlap
+	}
+	if half := window / 2; o > half {
+		o = half
 	}
 	return o
 }

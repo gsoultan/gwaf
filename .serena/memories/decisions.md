@@ -2133,3 +2133,37 @@ the mirror direction via SniffJSON and had nothing for this one).
 record. It must never fail because a detector got weaker -- the payload is a
 command injection scoring 5 against a threshold of 5 precisely so a failure
 means framing, not detection.
+
+## Fuzz the thing you just shipped, or the invariant is only a comment
+
+`SniffMultipart` and `scan.Windows` were shipped without fuzz targets in the
+same session that added them -- against CLAUDE.md's own "non-negotiable" rule
+for parsers taking attacker input.
+
+`FuzzWindowsCovers` found a real imprecision **on its first run**: `overlapFor`
+could return an overlap larger than the window itself for small windows. No
+window can hold a run longer than it is, so the claim was incoherent, and the
+step fell through to a fallback that advanced but guaranteed nothing.
+
+The fix was to state the guarantee exactly rather than loosen the test:
+**a run of at most `overlapFor(window)` bytes always appears intact in some
+window** -- provable, since a run of length L survives iff step <= window-L and
+step is window-overlap. The temptation was to skip the failing case as an
+unreasonable input; that would have left a package whose central promise was
+approximate.
+
+## Framing audit round 2: 12 of 13 held, one did not
+
+Probed: JSON duplicate keys (both orders), JSON5 comments, trailing comma,
+single quotes, deep nesting, query+body same name, chunked, duplicate
+Content-Length, nested multipart, duplicate part name. All handled.
+
+**Miss: RFC 5987 `filename*`.** `headerParam` requires `=` after the parameter
+name and `filename*` is followed by `*`, so the extended form was extracted by
+nobody. The origin percent-decodes it per the grammar; gwaf had never seen those
+bytes. Now decoded and emitted *alongside* plain `filename` -- RFC 6266 prefers
+the extended form, plenty of code reads whichever it looked for first, and both
+are attacker-supplied.
+
+`discrepancy_test.go` is now 29 framings. The hit rate on this axis across two
+rounds is 3 real bypasses; the payload corpus found none of them.

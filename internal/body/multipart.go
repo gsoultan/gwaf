@@ -33,6 +33,13 @@ type PartInfo struct {
 	// is inspected in its own right rather than treated as metadata.
 	Filename []byte
 
+	// FilenameExt is the decoded value of RFC 5987's "filename*" parameter,
+	// when one is present. It is separate from Filename rather than replacing
+	// it because a part may carry both and origins disagree about which wins:
+	// RFC 6266 prefers the extended form, and a great deal of code reads
+	// whichever it happened to look for. Both are attacker-supplied.
+	FilenameExt []byte
+
 	// ContentType is the part's declared media type, lowercased.
 	ContentType []byte
 
@@ -191,6 +198,20 @@ func (p *Parser) parsePart(part []byte, idx int, onPart EmitPart, fn Emit) error
 		}
 	}
 
+	// The extended filename is emitted as its own value under the same key, so
+	// a rule scoped to "<name>.filename" sees both readings and an exception
+	// written for one does not silently cover the other.
+	if len(info.FilenameExt) > 0 && !bytes.Equal(info.FilenameExt, info.Filename) {
+		p.path = append(append(p.path[:0], name...), ".filename"...)
+		p.fields++
+		if p.fields > p.limits.MaxFields {
+			return ErrTooManyFields
+		}
+		if !fn(p.path, info.FilenameExt, KindString) {
+			return nil
+		}
+	}
+
 	value := content
 	if len(info.Filename) > 0 && len(value) > maxFileContent {
 		value = value[:maxFileContent]
@@ -253,6 +274,19 @@ func parsePartHeaders(headers []byte, info *PartInfo) {
 			if v, ok := headerParam(value, "filename"); ok && len(info.Filename) == 0 {
 				info.Filename = v
 			}
+			// RFC 5987's extended form, "filename*=UTF-8''%2e%2e%2fetc". It is
+			// kept *alongside* the plain parameter rather than replacing it,
+			// because origins disagree about which wins -- RFC 6266 says the
+			// extended one does, and plenty of code reads whichever it looked
+			// for first. Both are attacker-supplied, so both are inspected.
+			//
+			// Without this the parameter was not read at all: headerParam
+			// requires the name to be followed by '=', and "filename*" is
+			// followed by '*'. A payload placed there reached the origin, was
+			// percent-decoded by it, and was never a value gwaf had seen.
+			if v, ok := headerParamExt(value, "filename"); ok && len(info.FilenameExt) == 0 {
+				info.FilenameExt = v
+			}
 		case equalFoldBytes(name, "content-type"):
 			ct := value
 			if i := bytes.IndexByte(ct, ';'); i >= 0 {
@@ -264,6 +298,58 @@ func parsePartHeaders(headers []byte, info *PartInfo) {
 			}
 		}
 	}
+}
+
+// headerParamExt extracts and decodes RFC 5987's extended parameter form,
+// "param*=charset'language'percent-encoded".
+//
+// The percent-decoding is done here rather than left to the transform chain
+// because it is not an ambiguity to enumerate: the grammar says the value is
+// percent-encoded, so every origin that reads the parameter at all decodes it.
+// Inspecting the encoded bytes would be inspecting something no application
+// sees, which is the same argument ParseForm makes for its own decoding.
+//
+// The charset is not honoured beyond skipping it. Decoding UTF-8 or ISO-8859-1
+// changes which bytes a detector sees, and gwaf already evaluates alternative
+// character readings in internal/interpret; duplicating that here would pick
+// one interpretation, which is the mistake this whole layer exists to avoid.
+func headerParamExt(value []byte, param string) ([]byte, bool) {
+	raw, ok := headerParam(value, param+"*")
+	if !ok || len(raw) == 0 {
+		return nil, false
+	}
+	// charset'language'value -- both delimiters are required by the grammar,
+	// and a value missing them is malformed. It is decoded anyway: a lenient
+	// origin may accept it, and the point is to see what the origin will.
+	if i := bytes.IndexByte(raw, '\''); i >= 0 {
+		rest := raw[i+1:]
+		if j := bytes.IndexByte(rest, '\''); j >= 0 {
+			raw = rest[j+1:]
+		}
+	}
+	return percentDecode(raw), true
+}
+
+// percentDecode resolves %XX escapes. Bytes that do not form a complete escape
+// are kept as written, because that is what a lenient decoder does with them.
+func percentDecode(src []byte) []byte {
+	if bytes.IndexByte(src, '%') < 0 {
+		return src
+	}
+	out := make([]byte, 0, len(src))
+	for i := 0; i < len(src); i++ {
+		if src[i] == '%' && i+2 < len(src) {
+			hi, ok1 := unhex(src[i+1])
+			lo, ok2 := unhex(src[i+2])
+			if ok1 && ok2 {
+				out = append(out, hi<<4|lo)
+				i += 2
+				continue
+			}
+		}
+		out = append(out, src[i])
+	}
+	return out
 }
 
 // headerParam extracts a parameter from a structured header value, handling

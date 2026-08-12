@@ -52,6 +52,16 @@ semver, and the four extension interfaces are frozen hard.
   on different hardware — the same benchmark measured 11.5 ms on this machine
   before the change — so it is left in place rather than silently rewritten.
 
+- **RFC 5987's `filename*` parameter was never read.** `headerParam` requires
+  the parameter name to be followed by `=`, and `filename*` is followed by `*`,
+  so `filename*=UTF-8''%3Bwhoami` was extracted by no one. The origin
+  percent-decodes it — the grammar says the value is encoded, so every origin
+  that reads the parameter at all decodes it — and gwaf had never seen those
+  bytes. It is now decoded and emitted *alongside* the plain `filename` rather
+  than replacing it, because RFC 6266 prefers the extended form while a great
+  deal of code reads whichever it looked for first, and both are
+  attacker-supplied.
+
 - **A multipart body labelled `application/x-www-form-urlencoded` was not read
   as multipart.** The WAFFLED field survey found over 90% of live sites accept
   the two interchangeably, so for most origins that request *is* multipart and
@@ -142,6 +152,22 @@ semver, and the four extension interfaces are frozen hard.
   footing.
 
 ### Added
+
+- **Fuzz targets for `SniffMultipart` and `scan.Windows`**, both shipped in this
+  same cycle without them. `SniffMultipart` parses attacker-controlled bytes to
+  derive a boundary it then hands to the multipart parser, which makes it a
+  parser taking hostile input and non-negotiably fuzzed (CLAUDE.md §4);
+  `scan.Windows` now runs over every value in every detector, where its failure
+  modes are a hang or a silent coverage hole.
+
+  `FuzzWindowsCovers` found a real imprecision on its first run. `overlapFor`
+  could return an overlap **larger than the window** for small windows, which is
+  an incoherent claim — no window holds a run longer than itself — and the step
+  then fell through to a fallback that advanced but guaranteed nothing. The
+  guarantee is now exact and stated as such: *a run of at most
+  `overlapFor(window)` bytes always appears intact in some window*, which is
+  provable (a run of length L survives iff step ≤ window−L, and step is
+  window−overlap). 27.5M executions clean afterwards; `FuzzSniffMultipart` 6.5M.
 
 - **Rule 4021, JavaScript process execution.** Found by reading misses rather
   than by imagining attacks: the head-to-head's RCE class was gwaf's largest gap

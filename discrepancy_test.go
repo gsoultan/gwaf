@@ -145,6 +145,95 @@ func TestFramingDiscrepancies(t *testing.T) {
 			why:  "the default for a form post is a form",
 		},
 
+		// ---- structured-body dialects ---------------------------------------
+		//
+		// Every one of these is a document some real parser accepts. gwaf handles
+		// them all today; they are here so that stays true, because a parser
+		// hardened against one dialect is where the next discrepancy comes from.
+		{
+			name: "json duplicate keys, payload last", method: "POST", target: "/run",
+			ctype: "application/json",
+			body:  `{"cmd":"ok","cmd":"` + discrepancyPayload + `"}`,
+			why:   "Go and Python keep the last duplicate",
+		},
+		{
+			name: "json duplicate keys, payload first", method: "POST", target: "/run",
+			ctype: "application/json",
+			body:  `{"cmd":"` + discrepancyPayload + `","cmd":"ok"}`,
+			why:   "other parsers keep the first, so both readings must be inspected",
+		},
+		{
+			name: "json with comments", method: "POST", target: "/run",
+			ctype: "application/json",
+			body:  "{\n// a note\n\"cmd\":\"" + discrepancyPayload + "\"\n}",
+			why:   "JSON5-tolerant parsers accept comments",
+		},
+		{
+			name: "json trailing comma", method: "POST", target: "/run",
+			ctype: "application/json",
+			body:  `{"cmd":"` + discrepancyPayload + `",}`,
+			why:   "a lenient parser accepts it; a strict one rejects the document",
+		},
+		{
+			name: "json single quotes", method: "POST", target: "/run",
+			ctype: "application/json",
+			body:  `{'cmd':'` + discrepancyPayload + `'}`,
+			why:   "not JSON, and accepted by several parsers anyway",
+		},
+		{
+			name: "json deeply nested", method: "POST", target: "/run",
+			ctype: "application/json",
+			body:  `{"a":{"b":{"c":{"d":{"e":"` + discrepancyPayload + `"}}}}}`,
+			why:   "depth is not a hiding place",
+		},
+
+		// ---- framing and duplication ----------------------------------------
+		{
+			name: "same name in query and body", method: "POST",
+			target: "/run?cmd=ok", ctype: "application/x-www-form-urlencoded",
+			body: "cmd=" + discrepancyEncoded,
+			why:  "frameworks differ on which source wins",
+		},
+		{
+			name: "chunked transfer-encoding declared", method: "POST", target: "/run",
+			ctype:   "application/x-www-form-urlencoded",
+			body:    "cmd=" + discrepancyEncoded,
+			headers: [][2]string{{"Transfer-Encoding", "chunked"}},
+			why:     "the framing header must not change what is inspected",
+		},
+		{
+			name: "duplicate content-length", method: "POST", target: "/run",
+			ctype:   "application/x-www-form-urlencoded",
+			body:    "cmd=" + discrepancyEncoded,
+			headers: [][2]string{{"Content-Length", "10"}, {"Content-Length", "99"}},
+			why:     "the smuggling family; neither length may be trusted",
+		},
+
+		// ---- multipart part structure ---------------------------------------
+		{
+			name: "nested multipart", method: "POST", target: "/run",
+			ctype: "multipart/form-data; boundary=OUT",
+			body: "--OUT\r\nContent-Type: multipart/mixed; boundary=IN\r\n\r\n" +
+				"--IN\r\nContent-Disposition: form-data; name=\"cmd\"\r\n\r\n" +
+				discrepancyPayload + "\r\n--IN--\r\n--OUT--\r\n",
+			why: "a part may itself be a multipart document",
+		},
+		{
+			name: "duplicate part name", method: "POST", target: "/run",
+			ctype: "multipart/form-data; boundary=B",
+			body: "--B\r\nContent-Disposition: form-data; name=\"cmd\"\r\n\r\nok\r\n" +
+				"--B\r\nContent-Disposition: form-data; name=\"cmd\"\r\n\r\n" +
+				discrepancyPayload + "\r\n--B--\r\n",
+			why: "first-wins and last-wins parsers read different parts",
+		},
+		{
+			name: "rfc 5987 extended filename", method: "POST", target: "/run",
+			ctype: "multipart/form-data; boundary=B",
+			body: "--B\r\nContent-Disposition: form-data; name=\"f\"; " +
+				"filename*=UTF-8''%3Bwhoami\r\n\r\nx\r\n--B--\r\n",
+			why: "headerParam requires '=' after the name, so filename* was never read",
+		},
+
 		// ---- charset and casing on the type itself --------------------------
 		{
 			name: "type in mixed case with parameters", method: "POST", target: "/run",
