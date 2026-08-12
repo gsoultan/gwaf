@@ -154,12 +154,66 @@ func isPrintableRun(c byte) bool {
 	return c >= 0x20 && c < 0x7f
 }
 
-// minBase64Run is the shortest run treated as encoded content.
+// minBase64Run is the shortest run treated as encoded content on length alone.
 //
 // Long enough that ordinary identifiers, tokens, and words cannot reach it by
 // accident: a 64-character unbroken run of base64 alphabet is not a word, and
 // real encoded payloads are far longer.
 const minBase64Run = 64
+
+// minBase64Text is the floor for a run whose decode is checked instead of
+// assumed.
+//
+// The 64-character floor is a proxy for "is this real content", and a red-team
+// pass found what the proxy costs: the shortest useful PHP web shell,
+// "<?php system($_GET['c']); ?>", is 28 bytes and encodes to 40 characters.
+// Every payload of that size was invisible.
+//
+// Length is a poor proxy when the decoded bytes can be examined directly. A
+// session token or an identifier of this length decodes to effectively random
+// bytes, and the chance that 18 random bytes are all printable is about one in
+// ten billion — so requiring a fully printable decode separates encoded text
+// from encoded nothing far more sharply than counting characters does.
+//
+// That matters because decoding random bytes is not merely wasted work: the
+// printable-run extraction that follows it is where a stray "$(" once produced
+// a 1.2% false-positive rate on protobuf. Refusing to decode noise is the
+// point, not a side effect.
+const minBase64Text = 24
+
+// IsBase64Text reports whether data is a short base64 run that decodes to
+// printable text, which is what distinguishes an encoded payload from an
+// encoded identifier at lengths below minBase64Run.
+//
+// dst is scratch; the decoded bytes are returned when the answer is yes.
+func IsBase64Text(dst, data []byte) ([]byte, bool) {
+	if len(data) < minBase64Text || len(data) >= minBase64Run {
+		return nil, false
+	}
+	// Encoding n bytes yields a length that is 0, 2 or 3 modulo four and never
+	// 1, so a quarter of candidates are rejected here for one instruction
+	// rather than by scanning them. This path runs on every field short enough
+	// to qualify, so the order of the checks is the cost.
+	if len(data)%4 == 1 {
+		return nil, false
+	}
+	if !isBase64Alphabet(data) {
+		return nil, false
+	}
+	decoded, ok := DecodeBase64(dst, data)
+	if !ok || len(decoded) == 0 {
+		return nil, false
+	}
+	for _, c := range decoded {
+		// Tab, CR and LF are text; everything else outside printable ASCII says
+		// this was not text to begin with.
+		if isPrintableRun(c) || c == '\t' || c == '\r' || c == '\n' {
+			continue
+		}
+		return nil, false
+	}
+	return decoded, true
+}
 
 // IsBase64 reports whether data is a single run of base64-encoded content.
 //

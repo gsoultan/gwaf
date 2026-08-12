@@ -2333,3 +2333,47 @@ shelli scored `cmd=id` correctly all along -- 5, exactly at threshold, in sink
 mode. Four corpus exploits walked through a *correct detector* that was never
 handed the value. **When a detector is right and the request still passes, look
 at scheduling before touching the detector.**
+
+## Red-team pass: composing attacks, not replaying them
+
+The evasion corpus and head-to-head replay payloads somebody else wrote. A
+session of *composing* requests -- "what would I try next" -- found four
+bypasses in 24 attempts, three real. `redteam_test.go` is now that suite.
+
+1. **base64 web shell under the decode floor.** `minBase64Run` is 64 characters
+   and `<?php system($_GET['c']); ?>` encodes to 40. Every payload of that size
+   was invisible. **Length was a proxy for "is this real content" and the
+   decoded bytes answer that directly**: 18 random bytes are all-printable
+   about one time in ten billion, so requiring a fully printable decode
+   separates encoded text from encoded identifiers far more sharply than
+   counting characters. Cost +2.0% on benign POST, measured paired, accepted.
+
+2. **`cmd[]=id`.** shelli's `isCommandSinkParam` did not strip the PHP array
+   suffix that `core.matchesParam` strips for every other sink rule. A
+   difference in notation, not in what the application does.
+
+3. **`filename="a.php\x00.jpg"`.** Rule 1005 matches `%00` *before* decoding,
+   and its reasoning is right for values in general -- a decoded NUL is
+   indistinguishable from the NULs filling binary upload content. It is wrong
+   for file names, and the encoded spelling is the one that does **not** work in
+   a multipart header, which is not percent-decoded. gwaf was catching the
+   spelling that fails and missing the one that works.
+
+   **The fix needed the right target, not just the right rule.** A file name
+   containing a NUL *is* binary by IsBinary's reckoning, so the argument view
+   arrives as "a.php" and ".jpg" -- printable runs with the evidence removed
+   between them. Only `TargetFileNames`, recorded before that split, still has
+   the byte. The compiler then caught that FILES_NAMES does not exist before the
+   body phase, by name.
+
+## OPEN: duplicate parameters are never evaluated joined
+
+`?q=1'+UNION&q=+SELECT+pw--` passes. Neither value is an attack alone; the
+injection exists only under the comma-joining ASP.NET and some other stacks
+apply to repeated names.
+
+Deliberately not built. It is a real design decision -- which separator,
+recorded where, and at what cost to the zero-allocation argument path (finding
+duplicates naively is O(n^2) in MaxArgs=1000) -- and half-building it into a
+security library is worse than tracking it. Documented in redteam_test.go's
+header rather than added as a failing case.

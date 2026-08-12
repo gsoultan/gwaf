@@ -993,9 +993,19 @@ var commandSinkParams = map[string]bool{
 }
 
 // isCommandSinkParam reports whether key names a parameter handed to a shell.
+//
+// Array-style keys arrive as "cmd[]" from PHP-shaped forms, and PHP delivers
+// them as an array whose element is the value -- the same parameter, spelled
+// the way a language that supports repeated fields spells it. A red-team pass
+// found "cmd[]=id" walking through while "cmd=id" was blocked, which is a
+// difference in notation rather than in what the application does with it.
+// core.matchesParam already strips this for the other sink rules.
 func isCommandSinkParam(key string) bool {
 	if key == "" || len(key) > 32 {
 		return false
+	}
+	if n := len(key); n > 2 && key[n-2] == '[' && key[n-1] == ']' {
+		key = key[:n-2]
 	}
 	if commandSinkParams[key] {
 		return true

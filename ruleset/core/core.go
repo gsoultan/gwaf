@@ -59,6 +59,11 @@ const (
 	IDTraversalRaw      types.RuleID = 1002
 	IDSensitiveFile     types.RuleID = 1003
 	IDNullByteInjection types.RuleID = 1005
+
+	// The raw spelling of the same attack. 1005 matches "%00" before decoding,
+	// which is the spelling that does not work in a multipart header; this is
+	// the one that does. See nulname.go.
+	IDRawNullFilename   types.RuleID = 1018
 	IDTraversalRepeated types.RuleID = 1004
 	IDExposedArtifact   types.RuleID = 1006
 	IDBackupArtifact    types.RuleID = 1008
@@ -492,6 +497,25 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "Repeated path traversal segment",
 			Tags:       []string{"traversal", "owasp-a01"},
+		},
+		{
+			ID: IDRawNullFilename,
+			// The body phase, because a file name does not exist before it. The
+			// compiler enforces this and said so by name, which is the DX
+			// contract in CLAUDE.md 2b.4 working.
+			Phase: types.PhaseRequestBody,
+			// The dedicated file-name target, not argTargets: a name carrying a
+			// NUL reads as binary, so the argument view of it has already been
+			// split into printable runs with the NUL removed.
+			Targets: []types.Target{{Kind: types.TargetFileNames}},
+			// No transforms. The finding is a byte that arrived as itself, and
+			// decoding first could only invent one.
+			Op:         rawNullInFilename(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "Null byte in an uploaded file name",
+			Tags:       []string{"upload", "traversal", "owasp-a01"},
 		},
 		{
 			ID:      IDNullByteInjection,

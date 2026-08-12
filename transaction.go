@@ -1407,6 +1407,16 @@ func (tx *Transaction) recordFieldBytes(kind types.TargetKind, key, value []byte
 // form, so that is the form worth inspecting.
 func (tx *Transaction) recordValueBytes(kind types.TargetKind, key, value []byte, inert bool) {
 	if !body.IsBase64(value) {
+		// Below the length floor, the decode decides instead of the length.
+		// A red-team pass put a base64 PHP web shell in a JSON field and it
+		// passed: "<?php system($_GET['c']); ?>" encodes to 40 characters,
+		// well under the 64 the floor requires. Both readings are recorded --
+		// the origin may decode it or may not, and which it does is not
+		// knowable from here.
+		if decoded, ok := body.IsBase64Text(tx.decodeBuf[:0], value); ok {
+			tx.decodeBuf = decoded
+			tx.recordFieldBytes(kind, key, decoded, false)
+		}
 		tx.recordFieldBytes(kind, key, value, inert)
 		return
 	}
