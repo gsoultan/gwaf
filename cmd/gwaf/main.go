@@ -55,13 +55,20 @@ func usage() {
 	fmt.Fprint(os.Stderr, `gwaf -- build-time toolchain
 
   calibrate   measure each rule's false-positive rate against a benign corpus
-  lint        report prefilter coverage and the cost of unconditional rules
+  lint        report prefilter coverage, unconditional rules, and -- given a
+              corpus -- how much benign traffic each rule's literals admit
   explain     describe a rule, or replay a request and explain the outcome
   tune        suggest the narrowest exceptions for the false positives measured
 
     gwaf explain 7002
     gwaf explain -arg 'q=1'"'"' OR 1=1--'
     gwaf tune -corpus testdata/corpus/benign.jsonl
+    gwaf lint -corpus testdata/corpus/benign.jsonl
+
+A rule is *prefiltered* when its operator declares a required literal, and
+*selective* only when that literal is absent from ordinary traffic. Those are
+different properties: "101 rules, 101 prefiltered" is true of a ruleset whose
+literals are a quote and an equals sign. lint -corpus measures the second one.
 
 All four are compile-time tools. None runs on the request path, and none
 contains detection logic -- they are drivers over the library.
@@ -169,6 +176,10 @@ func runLint(args []string) error {
 	fs := flag.NewFlagSet("lint", flag.ExitOnError)
 	maxUnconditional := fs.Int("max-unconditional", 0,
 		"fail if more than this many rules cannot be prefiltered")
+	corpusPath := fs.String("corpus", "",
+		"benign corpus to measure literal selectivity against (JSON Lines)")
+	maxSelectivity := fs.Float64("max-selectivity", 1.01,
+		"fail if a rule is nominated on more than this fraction of the corpus")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -229,9 +240,73 @@ func runLint(args []string) error {
 		}
 	}
 
+	// Measured selectivity, when a corpus is supplied.
+	//
+	// The line above -- "N rules, N prefiltered, 0 unconditional" -- is true and
+	// is not the whole answer. A rule is prefiltered if its operator declares a
+	// required literal; it is *selective* only if that literal is absent from
+	// most traffic. `detect_xss` declares `"`, which is in every JSON body, so
+	// those rules are prefiltered and evaluated on everything at once.
+	//
+	// Soundness had a fuzz harness and selectivity had nothing, so the only way
+	// to discover this was a CPU profile -- which is not something a rule author
+	// runs, and not something CI would ever fail on.
+	var overSelectivity []calibrate.RuleSelectivity
+	if *corpusPath != "" {
+		corpus, err := calibrate.LoadCorpusFile(*corpusPath)
+		if err != nil {
+			return err
+		}
+		sel, err := calibrate.Selectivity(waf, corpus)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("\nprefilter selectivity, measured against %d benign requests:\n",
+			sel.Requests)
+		fmt.Printf("  %-8s %6s  %-26s %s\n", "rule", "admits", "worst literal", "message")
+
+		shown := 0
+		for _, r := range sel.Rules {
+			// Below a twentieth of the corpus a literal is doing its job, and
+			// listing every rule buries the ones that are not.
+			if r.Rate < 0.05 && !r.Unconditional {
+				continue
+			}
+			shown++
+			worst := "(unconditional)"
+			if w, ok := r.Worst(); ok {
+				worst = fmt.Sprintf("%q %.0f%%", w.Literal, w.Rate*100)
+			}
+			fmt.Printf("  %-8d %5.1f%%  %-26s %s\n", r.ID, r.Rate*100, worst, r.Msg)
+		}
+		if shown == 0 {
+			fmt.Printf("  every rule is nominated on under 5%% of benign requests\n")
+		}
+
+		overSelectivity = sel.Above(*maxSelectivity)
+		if len(overSelectivity) > 0 {
+			fmt.Printf("\n%d rule(s) exceed the selectivity budget of %.0f%%:\n",
+				len(overSelectivity), *maxSelectivity*100)
+			for _, r := range overSelectivity {
+				fmt.Printf("  %-8d %s\n", r.ID, r.Msg)
+				if w, ok := r.Worst(); ok {
+					fmt.Printf("           %q appears in %d of %d benign requests\n",
+						w.Literal, w.Requests, r.Requests)
+					fmt.Printf("           fix: make the literal specific enough to be absent "+
+						"from ordinary traffic, or accept the cost knowingly\n")
+				}
+			}
+		}
+	}
+
 	if len(r.Unconditional) > *maxUnconditional {
 		return fmt.Errorf("%d unconditional rules exceeds the budget of %d",
 			len(r.Unconditional), *maxUnconditional)
+	}
+	if len(overSelectivity) > 0 {
+		return fmt.Errorf("%d rule(s) are nominated on more than %.0f%% of benign traffic",
+			len(overSelectivity), *maxSelectivity*100)
 	}
 	return nil
 }
