@@ -286,6 +286,7 @@ func TestSchemaDoesNotWeakenTheEvasionCorpus(t *testing.T) {
 			core.LoopbackSSRFRule(11003),
 			core.WordPressHardeningRule(1011),
 			core.SSRFParamRule(1016),
+			core.SQLSinkRule(2011),
 		})))
 
 	missed := 0

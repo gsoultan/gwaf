@@ -494,3 +494,43 @@ func TestSubqueryInjection(t *testing.T) {
 		}
 	})
 }
+
+// FuzzLiteralsAreExhaustive enforces the contract the prefilter rests on: a
+// value this detector reports must contain at least one declared literal, or
+// the automaton drops it before the detector ever runs and the rule is dead.
+//
+// shelli, ssti and nosqli each had one of these and sqli did not, which is the
+// kind of gap that only shows up when a signal is added -- as one just was, for
+// COPY ... TO PROGRAM. That signal is covered because PostgreSQL requires a
+// quoted command and both quote characters are declared, but "covered because I
+// reasoned it through" is exactly the claim this file exists to stop making.
+func FuzzLiteralsAreExhaustive(f *testing.F) {
+	for _, s := range []string{
+		"1' OR '1'='1", "1 UNION SELECT password FROM users",
+		"'; copy (SELECT '') to program 'curl x'-- -",
+		"1' AND SLEEP(5)--", "admin'--", "1/**/OR/**/1=1",
+		"hello world", "", "''", "the union selected a representative",
+		"copy the file to program files", "1", "-1'",
+	} {
+		f.Add(s)
+	}
+
+	d := New()
+	lits, _ := Operator().(*operator).Literals()
+
+	f.Fuzz(func(t *testing.T, value string) {
+		if len(value) > 4096 {
+			t.Skip()
+		}
+		if !d.Analyze([]byte(value)).Detected() {
+			return
+		}
+		lower := strings.ToLower(value)
+		for _, l := range lits {
+			if strings.Contains(lower, l) {
+				return
+			}
+		}
+		t.Fatalf("detected %q but no literal covers it: the prefilter would drop it", value)
+	})
+}

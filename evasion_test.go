@@ -229,6 +229,26 @@ var evasions = []evasion{
 	{name: "rce/bin sh", technique: "wrapper", arg: "/bin/sh -c id"},
 	{name: "rce/encoded bin sh", technique: "wrapper", arg: "%2Fbin%2Fsh%20-c%20id"},
 
+	// SQL that never breaks a quote. detect/sqli reads *injection* -- a value
+	// that starts as data and becomes SQL partway through -- and a value that is
+	// a whole statement breaks nothing, so every grammar signal is legitimately
+	// absent. optIn for the reason in sqlsink.go: a reporting tool takes SQL by
+	// design, and the benign corpus carries one.
+	{name: "sqli/statement in sql param", technique: "sql-sink", optIn: true,
+		target: "/js/hrm/getdata.jsp?sql=select+547653*865674+as+id"},
+	{name: "sqli/select star in sql param", technique: "sql-sink", optIn: true,
+		target: "/api/x?sql=SELECT * FROM users"},
+	{name: "sqli/drop in stmt param", technique: "sql-sink", optIn: true,
+		target: "/api/x?stmt=DROP TABLE users"},
+	{name: "sqli/namespaced sql param", technique: "sql-sink", optIn: true,
+		target: "/api/x?x_raw_sql=select 1"},
+	// PostgreSQL's route from injection to command execution, the COPY analogue
+	// of MySQL's INTO OUTFILE.
+	{name: "sqli/copy to program", technique: "none",
+		arg: "test'; copy (SELECT '') to program 'curl x'-- - "},
+	{name: "sqli/copy from program", technique: "none",
+		arg: "x'; copy t from program 'id'-- "},
+
 	// JavaScript reflected into a script context, where there is no HTML for
 	// detect/xss to read. These are the real corpus misses reduced to their
 	// payload; see ruleset/core/jsinject.go.
@@ -1001,6 +1021,18 @@ var benignTraffic = []benignCase{
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
 
+	// ---- SQL words that are not statements ---------------------------------
+	//
+	// The sink rule anchors at the start of the value and requires a word
+	// boundary after the verb, which is what separates these from a statement.
+	{name: "prose starting with select", arg: "please select a value"},
+	{name: "selection is not select", arg: "selection=first"},
+	{name: "withdrawal is not with", arg: "withdrawal pending"},
+	{name: "report DSL on query key", body: `{"name":"Q1","query":"select revenue where region = 'EU'"}`},
+	{name: "search box sql word", target: "/search?q=how+to+select+a+theme"},
+	{name: "copy to program files", arg: "copy the file to program files"},
+	{name: "id in a sql-named param", target: "/api/x?sql=42"},
+
 	// ---- writing about JavaScript, rather than injecting it ----------------
 	//
 	// Rule 3012 requires a call *plus* injection evidence for these. A page that
@@ -1515,6 +1547,7 @@ func TestEvasionCorpus(t *testing.T) {
 			core.LoopbackSSRFRule(11003),
 			core.WordPressHardeningRule(1011),
 			core.SSRFParamRule(1016),
+			core.SQLSinkRule(2011),
 		})))
 
 	// Both WAFs must be able to decide everything the corpus asks them.

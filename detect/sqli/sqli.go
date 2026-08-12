@@ -405,6 +405,32 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 
+		// COPY ... TO PROGRAM / FROM PROGRAM is PostgreSQL's INTO OUTFILE: the
+		// shortest path from injection to command execution, since the server
+		// runs the string as a shell command. It reached the corpus as
+		//
+		//	'; copy (SELECT '') to program 'curl …'-- -
+		//
+		// and walked through. Checked here rather than in the keyword case
+		// below, because "to" and "program" are both identifiers to this
+		// tokenizer -- only "from" is a keyword -- so a check gated on keywords
+		// would have caught the read direction and silently missed the write
+		// one, which is the direction that matters.
+		//
+		// The quoted command is required for the same reason INTO OUTFILE
+		// requires its path: PostgreSQL rejects the form without one, so
+		// demanding it costs no attack and keeps "copy the file to program
+		// files" out of the results.
+		if w := lowerWord(t.text); w == "to" || w == "from" {
+			if j, _ := skipNoise(toks, i+1); j < len(toks) &&
+				lowerWord(toks[j].text) == "program" {
+				if k, _ := skipNoise(toks, j+1); k < len(toks) &&
+					(toks[k].kind == tkString || toks[k].kind == tkUnterminated) {
+					sigs |= SignalDangerFunction
+				}
+			}
+		}
+
 		switch t.kind {
 		case tkKeyword:
 			w := lowerWord(t.text)

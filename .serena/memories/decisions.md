@@ -2208,3 +2208,43 @@ CRLFHeaderRule out of core, arrived at independently.
 showed 51% GET / 53% POST regressions and a phantom 1 B/op allocation. HEAD
 measured 926ns for benign GET earlier and 1353ns at the same moment, so the
 machine had moved, not the code. Six paired samples gave the real answer.
+
+## SQLi: two gaps, and a tokenizer trap worth remembering
+
+Reading the 18 SQLi misses gave two real gaps (the rest were harness
+URL-encoding, not detector gaps -- `union all select` and `CASE WHEN EXP` are
+both caught when sent as arguments).
+
+**1. COPY ... TO PROGRAM.** PostgreSQL's INTO OUTFILE. The trap: `from` is a
+keyword to the sqli tokenizer and `to` is **not**. A check written in the
+obvious place -- inside `case tkKeyword` -- catches `from program` and silently
+misses `to program`, which is the direction an attacker uses. Placed before the
+switch so it sees identifiers too. Added `FuzzLiteralsAreExhaustive` to sqli
+(shelli/ssti/nosqli had one, sqli did not) because adding a signal is exactly
+when that contract breaks.
+
+**2. A whole statement in a SQL-sink parameter** (`sql=select …`). detect/sqli
+looks for *injection* -- data becoming SQL partway through -- and a value that
+is a complete statement breaks nothing, so every grammar signal is legitimately
+absent. Same distinction shelli draws for a value that is a command line from
+its first byte.
+
+**Opt-in, and the corpus is the argument:** the benign set carries
+`{"query":"select revenue where region = 'EU'"}` as "a report DSL". `query`,
+`q`, `search`, `filter` are all excluded from the sink names for that reason.
+Ownership test.
+
+SQLi 65/83 -> 69/83, level with CRS. Tuned 91.4% -> 91.6%, FPs still 0/12.
+
+## RemoveWhitespace is the recurring trap for boundary-anchored rules
+
+Third time this session. decodeChain strips whitespace, so:
+
+- `xss onfocus=` becomes `xssonfocus=` (rule 3012, handler boundary destroyed)
+- `DROP TABLE users` becomes `droptableusers` (rule 2011, verb boundary destroyed)
+
+**Any rule whose signal is a word boundary cannot use decodeChain.** The fix
+both times was `[]rules.Transform{transform.URLDecode, transform.Lowercase}` on
+`{TargetArgs}` -- a prefix of decodeChain already materialised for rule 1013, so
+it costs nothing *provided the targets stay narrow*. On `argTargets` the same
+chain cost ~17% of the benign POST budget.

@@ -309,7 +309,11 @@ func TestNucleiHeadToHead(t *testing.T) {
 		// the two benign cases below that carry a foreign URL carry it in a
 		// body, so the unmirrored rule never saw them.
 		gwaf.WithRuleset(core.WithBodyPhase(
-			rules.Set{core.CRLFHeaderRule(1007), core.SSRFParamRule(1016)})),
+			rules.Set{
+				core.CRLFHeaderRule(1007),
+				core.SSRFParamRule(1016),
+				core.SQLSinkRule(2011),
+			})),
 		// The fetch half fires on webhook registration, because registering a
 		// webhook *is* handing the server a foreign URL. That is the measured
 		// reason the rule is opt-in rather than core, and it does not go away

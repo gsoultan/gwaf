@@ -8,6 +8,19 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Security
 
+- **`COPY ... TO PROGRAM` walked through.** It is PostgreSQL's `INTO OUTFILE`:
+  the shortest path from injection to command execution, since the server runs
+  the string as a shell command. `'; copy (SELECT '') to program 'curl …'-- -`
+  reached the corpus and was not detected, because `program` is an identifier
+  rather than a function call and nothing looked for the pair.
+
+  The check has to sit outside the keyword switch, which is the part worth
+  recording: `from` is a keyword to this tokenizer and `to` is not, so a check
+  written in the obvious place would have caught the read direction and silently
+  missed the write one — the direction that matters. `sqli` also gained the
+  `FuzzLiteralsAreExhaustive` target that `shelli`, `ssti` and `nosqli` already
+  had, since adding a signal is exactly when that contract can break.
+
 - **Six of seven detector classes could be bypassed by padding.** Every semantic
   detector bounded its work with a constant named `maxScan` and applied it by
   truncating — `src = src[:maxScan]`. The reasoning written beside each one is
@@ -161,6 +174,24 @@ semver, and the four extension interfaces are frozen hard.
   footing.
 
 ### Added
+
+- **`core.SQLSinkRule(id)`** — a whole SQL statement in a parameter the
+  application hands to a database. With it and the COPY fix below, SQLi goes
+  from 65/83 to **69/83**, level with Coraza + CRS, taking tuned detection to
+  **91.6%**.
+
+  `detect/sqli` looks for *injection* — a value that starts as data and becomes
+  SQL partway through — and a parameter whose entire value is a valid statement
+  breaks nothing, so every grammar signal it reads is legitimately absent. Same
+  distinction `detect/shelli` draws when it declines to read a value that is a
+  command line from its first byte.
+
+  Opt-in, because the request cannot tell the two apart and the benign corpus
+  proves it: `{"name":"Q1","query":"select revenue where region = 'EU'"}` is a
+  report DSL doing its job. Whether *this* application hands user-supplied SQL
+  to a database is the Ownership test. `query`, `q`, `search` and `filter` are
+  deliberately absent from the sink list for the same reason — each is what a
+  search box is called.
 
 - **Rule 3012, JavaScript injected into a script context** — and with it XSS goes
   from 962/1007 to **993/1007**, exactly level with Coraza + CRS, taking tuned
