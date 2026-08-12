@@ -41,7 +41,7 @@ workload. Reproduce with `make bench-publish`.
 | Workload | p50 | p99 | Allocations |
 |---|---|---|---|
 | Benign `GET`, no body | **917 ns** | 1.29 µs | **0** |
-| Benign `POST`, 1 KiB JSON | **17.8 µs** | 24.1 µs | **0** |
+| Benign `POST`, 1 KiB JSON | **17.0 µs** | 24.0 µs | **0** |
 | Attack (blocked at header phase) | **708 ns** | 958 ns | **0** |
 
 Percentiles rather than means, because a mean hides the request that took forty

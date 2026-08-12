@@ -148,7 +148,7 @@ deserves scrutiny — pays for alternatives.
 Measured: detection is 22 ns for a 57-byte clean value (2.5 GB/s), and building
 readings for an unambiguous value is 1.7 ns.
 
-Six readings, each grounded in a real disagreement rather than a theoretical
+Seven readings, each grounded in a real disagreement rather than a theoretical
 encoding:
 
 | Class | Origin behaviour it models |
@@ -159,6 +159,15 @@ encoding:
 | `overlong_utf8` | Permissive decoders resolve `%c0%ae` to `.` |
 | `utf7` | **CVE-2026-21876** — `+ADw-script+AD4-` is `<script>` |
 | `html_entity` | Value reflected into a document before use |
+| `string_concat` | A language folds `'sys'.'tem'` and `"\x73\x79..."` before it runs |
+
+`string_concat` is the newest and shows why the axis is readings rather than
+rules. A red-team round produced five payloads that build an identifier from
+pieces — `('sys'.'tem')('id')`, `window['ale'+'rt'](1)`, `"\x73\x79\x73\x74\x65\x6d"('id')`
+— and none contains the word it calls. A literal list for them is unwinnable:
+there are infinitely many spellings of `system`. Folding what the parser folds
+catches the spellings nobody enumerated, which is the difference between this
+and a signature bag.
 
 Detection is the **union over readings**, which is the safe direction: an extra
 reading costs work, never coverage. Every decision reports which reading found

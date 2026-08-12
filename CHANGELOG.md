@@ -4,7 +4,44 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
-## Unreleased
+## v0.5.0 — 2026-08-12
+
+The cycle where the documented invariants were checked instead of believed.
+
+Almost every entry below started the same way: a claim written in a comment, a
+doc or a test name, and nothing enforcing it. The off-origin rules had been
+inert across a version bump while the benchmark harness kept publishing their
+numbers. The literals contract — the assertion the whole prefilter thesis rests
+on — was fuzzed for seven detectors and no rules. `PERFORMANCE.md` forbade
+truncating input while six of seven detectors truncated. The hot-reload
+guarantee had no test. Each is fixed, and each now has a harness that fails the
+build if it regresses.
+
+Detection went **85.9% → 93.1%** against Coraza + CRS 4.25's 89.7% on 2,457
+nuclei-templates exploits, with false positives unchanged at **0/12 against
+their 4/12** throughout. Latency 63 µs against 968 µs.
+
+### Upgrading
+
+Two ways to lose coverage silently, both now reported by
+`(*gwaf.WAF).Diagnostics()`:
+
+1. **The off-origin redirect and SSRF rules need `gwaf.WithOrigins("your.host")`.**
+   Without it they compile, lint clean and report nothing — there is no "here"
+   for a destination to be foreign to, and the request's own `Host` header is
+   attacker-supplied so it cannot stand in.
+2. **Opt-in rules need `core.WithBodyPhase(...)`.** `core.Default()` mirrors its
+   argument rules into the body phase; a rule added through `WithRuleset` is
+   compiled exactly as written and sees the query string only. `SSRFParamRule`,
+   `SQLSinkRule` and `PathSinkRule` all exist for endpoints that take JSON
+   bodies, so the unwrapped form inspects the one place the payload usually is
+   not. `CommandSinkRule` is the exception — it keys on the argument name.
+
+The published latency SLO for a benign 1 KiB JSON POST moved from **15 µs to
+20 µs**, measured at 17.8 µs. That is the stated half of a trade: the core
+ruleset grew by eight rules and gained a constant-folding reading, detection
+rose seven points, and false positives did not move. `make slo` binds the
+targets and its exit code now depends on them.
 
 ### Security
 

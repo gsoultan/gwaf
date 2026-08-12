@@ -285,6 +285,24 @@ The bool means **"these literals are required — if none appear, this operator 
 my predicate cannot match.* If that's wrong, your rule silently stops firing. It is the one place
 in the API where you can lie to the engine, and it's marked as such.
 
+**The assertion is fuzzed, not trusted.** Every first-party detector carries a
+`FuzzLiteralsAreExhaustive`, and `ruleset/core` carries one over every rule: if an operator reports
+on a value containing none of its declared literals, the build fails. Write the same harness for
+your own rules — the failure it catches is invisible from every other direction, because the rule
+compiles, lints, and `gwaf explain` describes it correctly right up until you notice it has never
+fired.
+
+Three real examples from this codebase, all found by that harness or by the hand-probing it replaces:
+
+- `core.offOriginOp` declared `"://"` while its matcher accepted the protocol-relative `"//host"`.
+  Every scheme-omitted open redirect was undetectable in a shipping core rule.
+- `detect/xss` never declared `"("`, and `SignalScriptBreakout` requires a call on every path. A
+  whole signal was dropped by the automaton before the detector ran.
+- `detect/shelli` reasoned that its weak signals "never fire alone and always need a separator
+  alongside" — true at the default threshold of 5, and false at the Medium tier's 3, where one
+  weighs exactly enough. **A contract checked on one instance of a configurable thing is not
+  checked.**
+
 **The compiler reports this, and the linter enforces it:**
 
 ```
@@ -298,6 +316,67 @@ warn: unconditional rules add ~4.7µs to every request (budget: 200µs, 2.4%)
 Unconditional rules are legitimate — rate limiting and reputation checks genuinely must run every
 time. The point is that their cost is **visible at build time** rather than discovered in a p99
 graph. `gwaf lint` fails CI above a configurable unconditional budget.
+
+---
+
+## 5b. Rules that ship exported rather than enabled
+
+Some rules are right for most deployments and not all, and shipping them enabled would break a
+working integration on somebody's first deploy. They are exported instead, with the trade measured
+rather than asserted:
+
+| Rule | Why it is not on by default |
+|---|---|
+| `core.SSRFParamRule` | handing a server a foreign URL *is* webhook registration, feed import, avatar fetch |
+| `core.SQLSinkRule` | a reporting tool takes SQL by design; the benign corpus carries one |
+| `core.PathSinkRule` | a file manager navigates with `../` because navigating is the product |
+| `core.CommandSinkRule` | `cmd=` is a verb in half of all admin UIs, not always a shell |
+| `core.LoopbackSSRFRule` | `localhost` is ordinary in CI, staging and tunnelled webhooks |
+| `core.CRLFHeaderRule` | needs a transform chain no other rule shares — 8% of the latency budget |
+| `core.WordPressHardeningRule` | a minority of plugins expose endpoints under `wp-content` |
+
+Each is the **Ownership test** from CLAUDE.md §1: whether *this* application fetches user URLs,
+resolves user paths, or shells out is something the embedder knows and gwaf cannot learn from one
+request.
+
+### Two ways to lose coverage silently
+
+Both are reported by `(*gwaf.WAF).Diagnostics()`, which exists because both shipped and neither was
+visible.
+
+**An opt-in rule gets no request-body counterpart.** `core.Default()` mirrors its argument rules
+into the body phase; a rule you add through `WithRuleset` is compiled exactly as written. Declared
+at `PhaseRequestHeaders` it sees the query string and *never a JSON body* — which is where webhook
+and import endpoints put everything. Wrap them:
+
+```go
+waf, err := gwaf.New(
+    gwaf.WithOrigins("api.example.com"),
+    gwaf.WithRuleset(core.WithBodyPhase(rules.Set{
+        core.SSRFParamRule(1016),
+        core.SQLSinkRule(2011),
+        core.PathSinkRule(1017),
+    })),
+)
+```
+
+`CommandSinkRule` is the exception and needs no wrapper: it keys on the argument *name*, and the
+body phase populates the same argument collection.
+
+**The off-origin rules need to know who you are.** Without `WithOrigins` they compile, lint clean,
+and report nothing — there is no "here" for a destination to be foreign to, and the request's own
+`Host` header is attacker-supplied so it cannot stand in. That is the safe direction and a terrible
+user experience, so `gwaf.New` says so once and `Diagnostics()` returns it as data:
+
+```go
+for _, d := range waf.Diagnostics() {
+    log.Warn("coverage gap", "rule", d.ID, "reason", d.Reason, "fix", d.Fix)
+}
+```
+
+An empty result is the healthy answer. A non-empty one is not an error — you may have declined a
+capability deliberately — but every entry is coverage that is configured, believed to be active,
+and silent.
 
 ---
 

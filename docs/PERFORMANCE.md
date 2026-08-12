@@ -144,6 +144,21 @@ Speed that costs security is a bug. These are permanently off the table:
   oracle. Memoization is per-transaction and bounded, always.
 - **Truncating input to hit a latency target.** Bodies exceeding limits are *rejected*, not silently
   half-inspected. Half-inspection is indistinguishable from a bypass.
+
+  This rule was stated here and broken one layer down for most of the project's life. Every semantic
+  detector bounded its work with a constant named `maxScan` and applied it by *truncating* — and the
+  reasoning beside each was sound: signals are local to one command, one tag, one header. But
+  locality justifies a bounded **window**, not a bounded **prefix**. A payload never needed to be
+  longer than the bound; it only needed to sit past it. Measured, with the payload after N bytes of
+  ordinary text: `phpi`, `javaser` and `ldapi` (8 KiB bounds) missed at 16 KiB;
+  `shelli`, `xss` and `ssti` (64 KiB) missed at 128 KiB. Six of seven classes.
+
+  `internal/scan` walks values in overlapping windows instead, keeping the per-window bound that made
+  the detectors affordable while covering the whole value. Overlap is sized against the longest span
+  a detector can report, which is tens of bytes against a 1–4 KiB overlap. The cost is real and
+  stated: a 1 MiB body went from 11.5 ms to 18.1 ms, because roughly 99% of it was previously not
+  inspected at all. That is not an efficiency regression — it is the removal of a shortcut that was
+  a bypass.
 - **Trusting `Content-Length` or a declared charset.** Both are attacker-controlled. This is
   precisely the CVE-2026-21876 failure mode.
 - **Single-interpretation canonicalization as a fast path.** Multi-interpretation decoding is a
