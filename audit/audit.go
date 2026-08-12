@@ -100,6 +100,50 @@ type Exception struct {
 // MaxMatchedBytes bounds what a record copies out of a request.
 const MaxMatchedBytes = 256
 
+// MaxKeyBytes bounds the parameter name a record carries.
+//
+// MatchedBytes was bounded and the key was not, which made the record amplify:
+// a 1 MiB parameter name produced a 3.1 MiB record, because the name is written
+// as the key, again inside the suggested exception, and again through JSON
+// escaping. A 1 MiB *value* produced 672 bytes, correctly, which is what made
+// the omission easy to miss.
+//
+// An audit sink that a client can drive to three times its input is the sink
+// becoming the outage — the same shape as the middleware reading bodies without
+// a ceiling, one layer further out. Filling a disk or a SIEM quota is a denial
+// of service that also destroys the evidence of the attack that caused it.
+//
+// 256 is the project's own answer to "how long is a parameter name": it is
+// body.Limits.MaxKeyLen, which the body parser has always enforced. A name
+// longer than that is not a name.
+const MaxKeyBytes = 256
+
+// MaxPathBytes bounds the request path a record carries.
+//
+// Larger than MaxKeyBytes because long paths are ordinary and long parameter
+// names are not. Go's http.Server bounds the whole request line by
+// MaxHeaderBytes, which defaults to 1 MiB — a ceiling that protects the server
+// and does nothing for a log line.
+const MaxPathBytes = 2048
+
+// bound truncates an attacker-influenced string and says so when it cuts.
+//
+// The marker matters: a silently truncated value in an audit log is one an
+// operator will search for and not find, and they will conclude the log is
+// wrong rather than abbreviated.
+//
+// Every attacker-influenced string in a Record goes through this, which is the
+// actual lesson from how this was found. Bounding Key alone dropped a 1 MiB
+// name to 1.05 MiB rather than to nothing, because Target renders as
+// "ARGS:<key>" and carried the whole name back in through a field that does not
+// look like it holds attacker input. The rule is the category, not the field.
+func bound(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…(truncated)"
+}
+
 // Context is what the caller knows and gwaf does not.
 type Context struct {
 	Method   string
@@ -123,7 +167,7 @@ func NewRecord(d gwaf.Decision, ctx Context, now time.Time) Record {
 		Message:        d.Message(),
 		Interpretation: d.Interpretation(),
 		Method:         ctx.Method,
-		Path:           ctx.Path,
+		Path:           bound(ctx.Path, MaxPathBytes),
 		ClientIP:       ctx.ClientIP,
 		Route:          ctx.Route,
 	}
@@ -134,8 +178,8 @@ func NewRecord(d gwaf.Decision, ctx Context, now time.Time) Record {
 	rec.RuleID = uint32(d.RuleID())
 	rec.Severity = d.Severity().String()
 	rec.Confidence = d.Confidence().String()
-	rec.Target = d.Target().String()
-	rec.Key = d.Key()
+	rec.Target = bound(d.Target().String(), MaxKeyBytes)
+	rec.Key = bound(d.Key(), MaxKeyBytes)
 
 	e := d.Explain()
 	if b := e.MatchedBytes(); len(b) > 0 {
@@ -150,9 +194,9 @@ func NewRecord(d gwaf.Decision, ctx Context, now time.Time) Record {
 	if x, ok := e.NarrowestException(); ok {
 		rec.SuggestedException = &Exception{
 			RuleID: uint32(x.RuleID),
-			Path:   x.Path,
-			Target: x.Target.String(),
-			Key:    x.Key,
+			Path:   bound(x.Path, MaxPathBytes),
+			Target: bound(x.Target.String(), MaxKeyBytes),
+			Key:    bound(x.Key, MaxKeyBytes),
 		}
 	}
 	return rec
