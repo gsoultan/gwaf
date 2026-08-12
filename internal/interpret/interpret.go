@@ -1271,12 +1271,13 @@ func foldStringConcatInto(dst, src []byte) []byte {
 		// keeps them, because the quotes are evidence in their own right --
 		// rule 4023 reads them as the command being passed to system(, and
 		// folding "('id')" into "(id)" would delete the thing it looks for.
-		runStart, runEnd := i+1, scanQuoted(src, i)
+		runStart, runEnd, closed := i+1, 0, false
+		runEnd, closed = scanQuoted(src, i)
 		next := joinedLiteralAt(src, runEnd)
 		if next < 0 {
 			dst = append(dst, c)
-			dst = appendUnescaped(dst, src[runStart:runEnd-1])
-			if runEnd-1 < len(src) {
+			dst = appendUnescaped(dst, quotedContent(src, runStart, runEnd, closed))
+			if closed {
 				dst = append(dst, src[runEnd-1])
 			}
 			i = runEnd
@@ -1285,11 +1286,11 @@ func foldStringConcatInto(dst, src []byte) []byte {
 
 		// A concatenation: emit the pieces with no quotes and no operators, so
 		// the identifier the parser builds appears as one token.
-		dst = appendUnescaped(dst, src[runStart:runEnd-1])
+		dst = appendUnescaped(dst, quotedContent(src, runStart, runEnd, closed))
 		i = next
 		for i < len(src) {
-			end := scanQuoted(src, i)
-			dst = appendUnescaped(dst, src[i+1:end-1])
+			end, cl := scanQuoted(src, i)
+			dst = appendUnescaped(dst, quotedContent(src, i+1, end, cl))
 			i = end
 			n := joinedLiteralAt(src, i)
 			if n < 0 {
@@ -1302,22 +1303,42 @@ func foldStringConcatInto(dst, src []byte) []byte {
 }
 
 // scanQuoted returns the index just past the closing quote of the run opening
-// at i. An unterminated run ends at the value's end, which is what a lenient
-// parser does with it.
-func scanQuoted(src []byte, i int) int {
+// at i, and whether a closing quote was actually there. An unterminated run
+// ends at the value's end, which is what a lenient parser does with it.
+//
+// closed is not a convenience. Without it every caller has to strip a closing
+// quote it cannot know exists, and stripping one that does not is how this
+// panicked: for input ending in a bare quote, the run starts at i+1 == len(src)
+// and ends at len(src), so src[runStart:runEnd-1] slices backwards and the
+// runtime kills the request. A trailing quote is not an exotic input -- it is
+// what a truncated payload, a split parameter, or a scanner probing quote
+// handling looks like, which is to say it is most of the traffic this function
+// exists to read.
+func scanQuoted(src []byte, i int) (end int, closed bool) {
 	q := src[i]
 	j := i + 1
 	for j < len(src) && src[j] != q {
 		if src[j] == '\\' && j+1 < len(src) {
+			// Skipping the escaped byte can land exactly on len(src); it can
+			// never pass it, because the guard requires a byte to escape.
 			j += 2
 			continue
 		}
 		j++
 	}
 	if j < len(src) {
-		j++ // closing quote
+		return j + 1, true // past the closing quote
 	}
-	return j
+	return j, false
+}
+
+// quotedContent returns the bytes inside a quoted run: everything from start to
+// the close, excluding the closing quote only when there was one.
+func quotedContent(src []byte, start, end int, closed bool) []byte {
+	if closed {
+		return src[start : end-1]
+	}
+	return src[start:end]
 }
 
 // joinedLiteralAt returns the index of a quoted run joined to the position i by

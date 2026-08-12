@@ -407,6 +407,19 @@ func FuzzBuild(f *testing.F) {
 		"+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-",
 		"\x00\xff\xc0\xc1\xe0", strings.Repeat("%25", 100),
 		strings.Repeat("+ADw-", 50), strings.Repeat("&lt;", 50),
+
+		// String concatenation. These are here because their absence was a bug:
+		// ClassStringConcat was added to the code and not to this corpus, so the
+		// only quotes the fuzzer ever saw were ones it invented byte by byte. It
+		// eventually found that a value ending in a bare quote panicked the
+		// folder -- but it took a fuzz run in a different module, over a
+		// different entry point, to get there.
+		//
+		// A seed corpus is part of the class, not decoration for it.
+		"'", `"`, "`", "a'", "'a", `\`, `'\`, `"\\"`, `\x\\00"`,
+		"'sys'.'tem'", `"sys"+"tem"`, "('sys'.'tem')('id')",
+		"'a'.'b'.'c'.'", "'a'.", `'a'."`, "''", "''''",
+		strings.Repeat("'a'.", 100), strings.Repeat("'", 100),
 	}
 	for _, s := range seeds {
 		f.Add(s)
@@ -486,5 +499,56 @@ func BenchmarkBuildAmbiguous(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		s.Build(src, classes)
+	}
+}
+
+// TestUnterminatedQuoteDoesNotPanic pins the crash that FuzzRecordIsBounded
+// found from the audit module.
+//
+// foldStringConcatInto assumed every quoted run had a closing quote, and
+// stripped one unconditionally. For a value ending in a bare quote the run
+// starts at len(src) and ends at len(src), so excluding a closing quote that
+// was never there slices backwards -- src[7:6] -- and the runtime kills the
+// goroutine mid-request.
+//
+// The severity is the point. A WAF that panics on a crafted value is a WAF an
+// attacker can remove from the request path, and every one of these inputs is
+// something an ordinary scanner sends while probing quote handling. It is not
+// an exotic payload; it is a truncated one.
+func TestUnterminatedQuoteDoesNotPanic(t *testing.T) {
+	inputs := []string{
+		`"`, `'`, "`",
+		`x"`, `x'`, `'a`, `"ab`,
+		`\x\\00"`,         // the fuzzer's own input, verbatim
+		`'sys'.'tem`,      // concat with the tail run unterminated
+		`'sys'.'`,         // concat ending exactly on the opening quote
+		`'sys'.`,          // operator with nothing after it
+		`'sys'.'tem'.'id`, // three runs, last one open
+		`'a'."`,           // mixed quote styles, second unterminated
+		`\`, `'\`, `"\\`,  // trailing escapes, which move the scan cursor
+		`system('id`, // what a truncated attack actually looks like
+		`("sys"+"tem")("id`,
+	}
+	for _, in := range inputs {
+		t.Run(in, func(t *testing.T) {
+			b := []byte(in)
+			var s Set
+			// The panic was here; there is nothing to assert beyond surviving,
+			// and the invariants FuzzBuild checks are checked there.
+			s.Build(b, Detect(b))
+			if s.Len() < 1 {
+				t.Fatal("no readings produced")
+			}
+			if string(s.At(0).Bytes) != in {
+				t.Fatalf("first reading = %q, want the input verbatim", s.At(0).Bytes)
+			}
+			// A folded reading may not invent bytes.
+			for i := range s.Len() {
+				if r := s.At(i); len(r.Bytes) > len(b) {
+					t.Fatalf("reading %d is %d bytes from %d bytes of input",
+						i, len(r.Bytes), len(b))
+				}
+			}
+		})
 	}
 }
