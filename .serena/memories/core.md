@@ -51,3 +51,8 @@ makes multi-tenant embedding and parallel tests work; it cannot be retrofitted.
 `docs/CONCEPT.md` is the thesis (start there). `PLAN.md` = execution + kill
 criteria. `RULES.md`, `INTEGRATION.md`, `PERFORMANCE.md`, `GATEON-MIGRATION.md`.
 `CLAUDE.md` = guidelines.
+
+## Gotchas worth reading before optimizing
+[[prefilter_literal_selectivity]] — a literal set can be sound and still filter
+nothing. `detect_xss` declares `"`, so XSS evaluates on 100% of JSON traffic
+while `gwaf lint` correctly reports it as prefiltered.
