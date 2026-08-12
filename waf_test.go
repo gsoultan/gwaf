@@ -8,10 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"fmt"
 	"github.com/gsoultan/gwaf"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
 	"github.com/gsoultan/gwaf/types"
+	"sync"
+	"sync/atomic"
 )
 
 // newWAF builds a WAF for tests, failing fast on a compile error.
@@ -682,5 +685,146 @@ func TestInertOriginRulesAreAnnounced(t *testing.T) {
 	}
 	if s := buf.String(); strings.Contains(s, "WithOrigins") {
 		t.Errorf("warned despite configured origins: %q", s)
+	}
+}
+
+// TestSwapRulesetUnderLoad is the hot-reload safety claim, asserted.
+//
+// waf.go states it plainly: "ruleset is swapped atomically so a reload never
+// exposes a partially applied plan. In-flight transactions finish against the
+// plan they started with, which keeps audit logs reconstructable."
+//
+// That was a documented invariant with no test. TestConcurrentTransactions
+// hammers a *fixed* ruleset and TestSwapRuleset swaps a *quiet* one; nothing
+// swapped while requests were in flight, which is the only situation hot reload
+// exists for. Every other documented-but-unenforced invariant probed in this
+// repository turned out to be broken, so this one is measured rather than
+// believed.
+//
+// # What is actually asserted
+//
+// Two rulesets that disagree: A blocks "alpha" and ignores "beta", B the
+// reverse. A request carrying one of them must come back with one of exactly
+// two answers -- blocked by the rule that owns it, or not blocked at all --
+// and never with the *other* ruleset's rule ID, which is what a torn read
+// would produce.
+//
+// The rule IDs are what make a mixture visible. A verdict alone could not
+// distinguish "swapped between phases" from "corrupt plan"; the ID says which
+// plan answered.
+//
+// Run under -race, which `make check` does, so a torn pointer is caught even in
+// the runs where the timing does not produce a wrong answer.
+func TestSwapRulesetUnderLoad(t *testing.T) {
+	const (
+		idAlpha = 1_000_050
+		idBeta  = 1_000_051
+	)
+	mk := func(id types.RuleID, literal, msg string) rules.Set {
+		return rules.Set{{
+			ID:         id,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    []types.Target{{Kind: types.TargetArgs}},
+			Op:         op.Contains(literal),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        msg,
+		}}
+	}
+
+	w := newWAF(t, gwaf.WithoutCoreRuleset())
+	rsA, err := w.Compile(mk(idAlpha, "alpha", "blocks alpha"))
+	if err != nil {
+		t.Fatalf("Compile A: %v", err)
+	}
+	rsB, err := w.Compile(mk(idBeta, "beta", "blocks beta"))
+	if err != nil {
+		t.Fatalf("Compile B: %v", err)
+	}
+	w.SwapRuleset(rsA)
+
+	// Which rule ID is legitimate for which payload. Anything else is a plan
+	// that answered for a value it does not contain a rule for.
+	owner := map[string]types.RuleID{"alpha": idAlpha, "beta": idBeta}
+
+	const (
+		workers    = 24
+		iterations = 400
+	)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	swapped := make(chan struct{})
+	bad := make(chan string, workers*4)
+
+	// The swapper runs for the whole test, alternating as fast as it can so a
+	// transaction is overwhelmingly likely to straddle one. It is not in the
+	// worker WaitGroup: it outlives them by design and is stopped afterwards.
+	//
+	// swaps is counted and asserted below. A concurrency test that finishes
+	// before the thing it races with has started is a test that passes without
+	// exercising anything, which is worse than no test at all.
+	var swaps atomic.Int64
+	go func() {
+		defer close(swapped)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if i%2 == 0 {
+				w.SwapRuleset(rsA)
+			} else {
+				w.SwapRuleset(rsB)
+			}
+			swaps.Add(1)
+		}
+	}()
+
+	for g := range workers {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			payload := "alpha"
+			if g%2 == 1 {
+				payload = "beta"
+			}
+			want := owner[payload]
+			for range iterations {
+				tx := w.NewTransaction()
+				tx.SetRequestLine("GET", "/x", "HTTP/1.1")
+				tx.SetRemoteAddr("192.0.2.1")
+				tx.AddArgument("q", payload)
+				d := tx.ProcessRequestHeaders()
+				if d.Blocked() && d.RuleID() != want {
+					bad <- fmt.Sprintf("payload %q blocked by rule %d, "+
+						"which belongs to the other ruleset: the plan was read torn",
+						payload, d.RuleID())
+				}
+				tx.Close()
+			}
+		}(g)
+	}
+
+	// Workers first, then stop the swapper and let it drain.
+	wg.Wait()
+	close(stop)
+	<-swapped
+	close(bad)
+
+	for msg := range bad {
+		t.Error(msg)
+	}
+
+	// The premise, checked rather than assumed. Ten swaps would mean the
+	// workers barely straddled one; the number here is normally in the
+	// millions, and a sharp drop is itself worth investigating.
+	if n := swaps.Load(); n < int64(workers*iterations) {
+		t.Errorf("only %d swaps against %d transactions: the two did not "+
+			"overlap enough for this to have tested anything",
+			n, workers*iterations)
+	} else {
+		t.Logf("%d swaps across %d transactions", n, workers*iterations)
 	}
 }
