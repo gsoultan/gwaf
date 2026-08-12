@@ -2546,3 +2546,43 @@ interpretation is not.
 
 Designed and tracked rather than built, because it is a layer rather than a rule
 and deserves its own measurement.
+
+## Constant folding shipped as an interpretation, not a transform
+
+`ClassStringConcat` in internal/interpret folds adjacent string literals joined
+by "." or "+" and resolves \xNN and \NNN escapes inside quotes, producing a
+reading evaluated alongside utf7 and double-encoding.
+
+**Why an interpretation and not a transform:** chains are the expensive axis
+(12 vs 10 cost more than 90 extra literals). An interpretation is on the reading
+axis, which is bounded by MaxReadings and only produced when Detect claims the
+class.
+
+**Two design details that mattered:**
+
+1. **Only *joined* runs lose their quotes.** The first version stripped quotes
+   from every literal, so `'sys'.'tem'('id')` folded to `system(id)` and deleted
+   the quoted-argument evidence rule 4023 reads. An isolated literal keeps its
+   quotes; only a concatenation loses them.
+2. **Escapes are claimed on the backslash, not the quote.** Scanning forward
+   from each quote for an escape cost 3.5% of the benign path; a backslash is
+   already a lead byte and the check is two comparisons. An escape outside
+   quotes yields a reading identical to verbatim, which Set.Build drops.
+
+Folding exposed a new shape the rules did not cover: **indirect invocation** --
+`(system)(`, `"system"(`, `window[alert](`. Added to rule 4024. Nobody writes
+those benignly, and it is also how a payload evades a matcher looking for
+"system(" without any folding at all.
+
+Net +2% on benign POST JSON.
+
+## maxEvaluated is a fraction now, because the count was measuring the ruleset
+
+Raised three times (6 -> 10 -> 12 -> 14) and a fourth was due. **A test that has
+to be relaxed every time the product improves is measuring the product's size,
+not its behaviour.**
+
+Restated as a proportion: a benign value nominates fewer than one rule in five,
+and *that* does not grow when the ruleset does. A genuine prefilter failure --
+a benign value nominating most of the ruleset -- still trips it immediately.
+Observed worst case is about one in seven.

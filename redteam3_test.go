@@ -44,13 +44,11 @@ func rt3WAF(t *testing.T) *gwaf.WAF {
 // there are infinitely many spellings of "system" and enumerating them is a race
 // nobody wins.
 //
-// The principled answer is a **constant-folding interpretation**: fold adjacent
-// string literals joined by "." or "+", and resolve \xNN and \NNN inside
-// quotes, then evaluate that reading alongside the others exactly as utf7 and
-// double-encoding are evaluated today. It belongs in internal/interpret rather
-// than in a transform chain, because chains are the expensive axis and an
-// interpretation is not. That is designed and tracked, not built, because it is
-// a layer rather than a rule and it deserves its own measurement.
+// That was built: internal/interpret gained ClassStringConcat, which folds
+// adjacent literals joined by "." or "+" and resolves \xNN and \NNN inside
+// quotes, evaluated alongside utf7 and double-encoding. See folding_test.go.
+// The variable-function case ($f='system';$f('id')) remains open -- it needs
+// assignment tracking, which is a PHP parser's job rather than a reading's.
 func TestRedTeam3(t *testing.T) {
 	w := rt3WAF(t)
 	for _, tc := range []struct{ lang, name, arg string }{

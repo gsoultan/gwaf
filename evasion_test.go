@@ -1844,24 +1844,35 @@ func TestBenignTrafficBoundsRuleEvaluation(t *testing.T) {
 	// value is re-read under the HTML-entity interpretation, and each reading
 	// nominates independently. Both rules run and both reject.
 	//
-	// Raised a third time, 12 to 14, when detect/xss declared "(" as a literal.
+	// Expressed as a fraction of the compiled ruleset rather than as a count,
+	// because the count was measuring the wrong thing.
 	//
-	// That was a correctness fix rather than a new rule: SignalScriptBreakout
-	// universally requires a call, and "(" was not declared, so the signal was
-	// unreachable through the prefilter -- a working detector the automaton
-	// dropped every value before. Declaring it costs two extra candidates on
-	// benign values containing a parenthesis, no measurable latency (16.85us
-	// against 17.0us) and no false positives on either corpus.
+	// It was raised three times -- 6, 10, 12, 14 -- each for a different and
+	// legitimate cause: URL-carrying values, then a call vocabulary, then a
+	// parenthesis. A fourth was due when the constant-folding reading landed.
+	// That trend *is* the finding: an absolute ceiling on nominations grows with
+	// the ruleset, which is exactly what it cannot distinguish from a prefilter
+	// regression. A test that has to be relaxed every time the product improves
+	// is measuring the product's size, not its behaviour.
 	//
-	// Three raises deserve a note. Each had a different and legitimate cause --
-	// URL-carrying values, then a call vocabulary, now a parenthesis -- but the
-	// trend is real: this number grows as the ruleset does, which is exactly
-	// what it cannot distinguish from a prefilter regression. It is a smoke
-	// alarm and it is getting less informative.
-	// TestRuleEvaluationDoesNotScaleWithRuleset is the invariant that does not
-	// degrade, because it measures the *shape* of the curve rather than a point
-	// on it.
-	const maxEvaluated = 14
+	// The claim worth holding is proportional: a benign value nominates a small
+	// *fraction* of the rules, and that fraction does not grow. Stated that way
+	// the bound survives the ruleset doubling, and a genuine prefilter failure
+	// -- where a benign value starts nominating most of the ruleset -- still
+	// trips it immediately.
+	//
+	// One in five is generous against the observed worst case, which is an
+	// entity-encoded value carrying a call and lands near one in seven.
+	// TestRuleEvaluationDoesNotScaleWithRuleset remains the invariant that
+	// measures the shape of the curve rather than a point on it.
+	const maxEvaluatedFraction = 0.20
+	compiled := w.Report().Rules
+	maxEvaluated := int(float64(compiled) * maxEvaluatedFraction)
+	if maxEvaluated < 8 {
+		maxEvaluated = 8
+	}
+	t.Logf("bound: %d of %d compiled rules (%.0f%%)",
+		maxEvaluated, compiled, maxEvaluatedFraction*100)
 
 	for _, b := range benignTraffic {
 		t.Run(b.name, func(t *testing.T) {

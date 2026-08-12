@@ -119,6 +119,28 @@ const (
 	// left exactly as they are — a WAF that rewrote them would be inventing text
 	// nobody sent, and half of Asia types them daily.
 	ClassBestFit
+
+	// ClassStringConcat marks adjacent string literals joined by "." or "+",
+	// and hex escapes inside a quoted run: the pieces a language assembles into
+	// an identifier before it runs.
+	//
+	// A red-team round of language-specific evasions produced five payloads of
+	// exactly one shape:
+	//
+	//	('sys'.'tem')('id')                 PHP concatenation
+	//	window['ale'+'rt'](1)               JavaScript concatenation
+	//	"\x73\x79\x73\x74\x65\x6d"('id')   PHP hex escapes
+	//
+	// None contains the word it calls. A literal list for them is the regex bag
+	// this project is defined against -- there are infinitely many spellings of
+	// "system" -- so the answer is the same one this package gives everywhere
+	// else: the origin performs a reading, so evaluate that reading.
+	//
+	// Only *quoted* pieces fold. An unquoted identifier beside a dot is property
+	// access far more often than it is concatenation, and folding "user.name"
+	// into "username" would invent text nobody sent -- the mistake ClassBestFit
+	// avoids by folding only punctuation.
+	ClassStringConcat
 )
 
 // MaxReadings bounds the interpretations produced for one value, including the
@@ -174,6 +196,9 @@ func (c Class) String() string {
 	if c.Has(ClassPercentU) {
 		appendName("percent_u")
 	}
+	if c.Has(ClassStringConcat) {
+		appendName("string_concat")
+	}
 	if c.Has(ClassBestFit) {
 		appendName("best_fit")
 	}
@@ -198,7 +223,10 @@ var ambiguityLead = func() (t [256]bool) {
 	// characters that fold onto ASCII punctuation: U+02BC, the U+20xx marks, and
 	// the fullwidth forms. They are common leads, so Detect only pays a table
 	// lookup for them and claims the class when the rune is actually in it.
-	for _, c := range []byte{'%', '\\', 0x00, 0xc0, 0xc1, '+', '&', 0xca, 0xe2, 0xef} {
+	// The quotes lead ClassStringConcat. They are common bytes, so Detect only
+	// claims the class after confirming the shape -- a quote closing, an
+	// operator, and a quote opening -- which no ordinary quoted text contains.
+	for _, c := range []byte{'%', '\\', 0x00, 0xc0, 0xc1, '+', '&', 0xca, 0xe2, 0xef, '\'', '"'} {
 		t[c] = true
 	}
 	return
@@ -212,6 +240,23 @@ func Detect(src []byte) Class {
 			continue
 		}
 		switch src[i] {
+		case '\'', '"':
+			// A closing quote, an operator, an opening quote. Whitespace is
+			// allowed between because the languages allow it.
+			j := i + 1
+			for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+				j++
+			}
+			if j < len(src) && (src[j] == '.' || src[j] == '+') {
+				j++
+				for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+					j++
+				}
+				if j < len(src) && (src[j] == '\'' || src[j] == '"') {
+					c |= ClassStringConcat
+				}
+			}
+
 		case '%':
 			// "%25" re-encodes a percent sign, so decoding twice differs from
 			// decoding once.
@@ -287,6 +332,25 @@ func Detect(src []byte) Class {
 			}
 		case '\\':
 			c |= ClassSeparator
+			// A hex or octal escape. PHP and C both read "\x73" and "\163" as
+			// 's', so a value carrying one has a reading where the escapes are
+			// resolved.
+			//
+			// Claimed here rather than from the quote, and the difference is
+			// cost: a quote is a common byte and scanning forward from each one
+			// for an escape was 3.5% of the benign path. A backslash is already
+			// a lead, the check is two comparisons, and an escape outside quotes
+			// merely produces a reading identical to the verbatim one -- which
+			// Set.Build drops.
+			if i+1 < len(src) {
+				n := src[i+1]
+				if (n == 'x' || n == 'X') && i+3 < len(src) &&
+					isHexDigit(src[i+2]) && isHexDigit(src[i+3]) {
+					c |= ClassStringConcat
+				} else if n >= '0' && n <= '7' {
+					c |= ClassStringConcat
+				}
+			}
 		case 0x00:
 			c |= ClassNullTruncate
 		case 0xc0, 0xc1:
@@ -395,6 +459,9 @@ func (s *Set) Build(src []byte, classes Class) {
 	}
 	if classes.Has(ClassPercentU) {
 		s.addDecoded(src, ClassPercentU, decodePercentUInto)
+	}
+	if classes.Has(ClassStringConcat) {
+		s.addDecoded(src, ClassStringConcat, foldStringConcatInto)
 	}
 	if classes.Has(ClassBestFit) {
 		s.addDecoded(src, ClassBestFit, foldBestFitInto)
@@ -1162,5 +1229,174 @@ func utf7Value(c byte) (byte, bool) {
 		return 63, true
 	default:
 		return 0, false
+	}
+}
+
+// isHexDigit reports whether c is an ASCII hex digit.
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+// foldStringConcatInto writes the reading a language parser produces: adjacent
+// string literals joined into one, and hex escapes inside them resolved.
+//
+// # What is folded, and what is left alone
+//
+// Only quoted pieces, and only across "." or "+". Everything outside a quoted
+// run is copied verbatim, so "('sys'.'tem')('id')" becomes "(system)(id)" --
+// the parentheses stay, because they are what makes the result a call rather
+// than a word, and the detectors read that structure.
+//
+// The quotes themselves are dropped, which is the whole point: "sys" and "tem"
+// are two tokens to a byte matcher and one identifier to a parser.
+//
+// Escapes are resolved inside a quoted run only. "\x73" outside quotes is not a
+// PHP escape, it is four characters, and resolving it there would invent bytes.
+// \n, \t and \\ are resolved for the same reason a language does; an unknown
+// escape keeps its backslash, matching what a lenient parser does with it.
+//
+// Output is never longer than input: quotes and operators are removed and an
+// escape shrinks. So MaxOutputLen is srcLen and the buffer never grows twice.
+func foldStringConcatInto(dst, src []byte) []byte {
+	for i := 0; i < len(src); {
+		c := src[i]
+		if c != '\'' && c != '"' && c != '`' {
+			dst = append(dst, c)
+			i++
+			continue
+		}
+
+		// Find the extent of this run and whether an operator joins it to
+		// another. Only a *joined* run loses its quotes: an isolated literal
+		// keeps them, because the quotes are evidence in their own right --
+		// rule 4023 reads them as the command being passed to system(, and
+		// folding "('id')" into "(id)" would delete the thing it looks for.
+		runStart, runEnd := i+1, scanQuoted(src, i)
+		next := joinedLiteralAt(src, runEnd)
+		if next < 0 {
+			dst = append(dst, c)
+			dst = appendUnescaped(dst, src[runStart:runEnd-1])
+			if runEnd-1 < len(src) {
+				dst = append(dst, src[runEnd-1])
+			}
+			i = runEnd
+			continue
+		}
+
+		// A concatenation: emit the pieces with no quotes and no operators, so
+		// the identifier the parser builds appears as one token.
+		dst = appendUnescaped(dst, src[runStart:runEnd-1])
+		i = next
+		for i < len(src) {
+			end := scanQuoted(src, i)
+			dst = appendUnescaped(dst, src[i+1:end-1])
+			i = end
+			n := joinedLiteralAt(src, i)
+			if n < 0 {
+				break
+			}
+			i = n
+		}
+	}
+	return dst
+}
+
+// scanQuoted returns the index just past the closing quote of the run opening
+// at i. An unterminated run ends at the value's end, which is what a lenient
+// parser does with it.
+func scanQuoted(src []byte, i int) int {
+	q := src[i]
+	j := i + 1
+	for j < len(src) && src[j] != q {
+		if src[j] == '\\' && j+1 < len(src) {
+			j += 2
+			continue
+		}
+		j++
+	}
+	if j < len(src) {
+		j++ // closing quote
+	}
+	return j
+}
+
+// joinedLiteralAt returns the index of a quoted run joined to the position i by
+// "." or "+", or -1 when there is none.
+func joinedLiteralAt(src []byte, i int) int {
+	j := i
+	for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+		j++
+	}
+	if j >= len(src) || (src[j] != '.' && src[j] != '+') {
+		return -1
+	}
+	j++
+	for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+		j++
+	}
+	if j >= len(src) || (src[j] != '\'' && src[j] != '"' && src[j] != '`') {
+		return -1
+	}
+	return j
+}
+
+// appendUnescaped copies a quoted run's contents, resolving the escapes a
+// language resolves. An escape this does not understand keeps its backslash,
+// matching what a lenient parser does.
+func appendUnescaped(dst, run []byte) []byte {
+	for i := 0; i < len(run); {
+		if run[i] == '\\' && i+1 < len(run) {
+			if n, adv := unescapeAt(run[i:]); adv > 0 {
+				dst = append(dst, n...)
+				i += adv
+				continue
+			}
+		}
+		dst = append(dst, run[i])
+		i++
+	}
+	return dst
+}
+
+// unescapeAt resolves one escape sequence at the start of s, returning the
+// bytes it produces and how far to advance. adv is 0 when s does not open an
+// escape this understands, so the caller copies the backslash verbatim.
+func unescapeAt(s []byte) (out []byte, adv int) {
+	if len(s) < 2 || s[0] != '\\' {
+		return nil, 0
+	}
+	switch s[1] {
+	case 'x', 'X':
+		if len(s) >= 4 && isHexDigit(s[2]) && isHexDigit(s[3]) {
+			return []byte{hexVal(s[2])<<4 | hexVal(s[3])}, 4
+		}
+	case 'n':
+		return []byte{'\n'}, 2
+	case 't':
+		return []byte{'\t'}, 2
+	case 'r':
+		return []byte{'\r'}, 2
+	case '0', '1', '2', '3', '4', '5', '6', '7':
+		// Octal, up to three digits, as PHP and C both read it.
+		v, n := 0, 0
+		for n < 3 && 1+n < len(s) && s[1+n] >= '0' && s[1+n] <= '7' {
+			v = v*8 + int(s[1+n]-'0')
+			n++
+		}
+		if n > 0 && v < 256 {
+			return []byte{byte(v)}, 1 + n
+		}
+	}
+	return nil, 0
+}
+
+func hexVal(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10
+	default:
+		return c - 'A' + 10
 	}
 }

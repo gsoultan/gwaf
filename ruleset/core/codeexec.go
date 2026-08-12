@@ -88,7 +88,40 @@ func stringToCode() rules.Operator {
 		"'assert'", `"assert"`, "'eval'", `"eval"`,
 	}
 
+	// Indirect invocation: a dangerous name wrapped in parentheses, brackets or
+	// quotes and then called. This is the shape the constant-folding reading
+	// produces from a concatenated identifier -- "('sys'.'tem')('id')" folds to
+	// "(system)('id')" -- and it is also how a payload written directly evades a
+	// matcher looking for "system(".
+	//
+	// Nobody writes "(system)(" or "window[alert](" by accident. The wrapper is
+	// what makes it a finding: bare "system" is a word, and "(system)(" is a
+	// call through an expression.
+	indirect := []string{
+		"system", "exec", "passthru", "shell_exec", "popen", "proc_open",
+		"eval", "assert", "alert", "confirm", "prompt", "require", "include",
+	}
+
 	return op.Func("string_to_code", func(v []byte) bool {
+		for _, name := range indirect {
+			for _, open := range []string{"(", "[", `"`, "'", "`"} {
+				k := indexOfFold(v, open+name)
+				if k < 0 {
+					continue
+				}
+				rest := v[k+len(open)+len(name):]
+				// The closing wrapper, then the call.
+				if len(rest) < 2 {
+					continue
+				}
+				if !isCloserFor(open[0], rest[0]) {
+					continue
+				}
+				if rest[1] == '(' {
+					return true
+				}
+			}
+		}
 		for _, s := range escapes {
 			if indexOfFold(v, s) >= 0 {
 				return true
@@ -126,7 +159,17 @@ func stringToCode() rules.Operator {
 		// branch needs an invoker *and* a name, so listing the invokers alone
 		// would already be sufficient -- the names are listed too because the
 		// prefilter only has to nominate, and a value carrying neither cannot
-		// match.
+		// match. The indirect-invocation branch needs a wrapped name, and the
+		// wrapped spellings are enumerated for the same reason.
+		"(system", "[system", `"system`, "'system", "(exec", "[exec",
+		"(eval", "[eval", `"eval`, "'eval", "(assert", "(alert", "[alert",
+		"(passthru", "(shell_exec", "(popen", "(proc_open", "(require",
+		"(include", "(confirm", "(prompt", "[confirm", "[prompt",
+		`"exec`, "'exec", `"passthru`, "'passthru", `"shell_exec`, "'shell_exec",
+		`"popen`, "'popen", `"proc_open`, "'proc_open", `"assert`, "'assert",
+		`"alert`, "'alert", `"confirm`, "'confirm", `"prompt`, "'prompt",
+		`"require`, "'require", `"include`, "'include", "[passthru",
+		"[shell_exec", "[popen", "[proc_open", "[assert", "[require", "[include",
 		"constructor.constructor", "['constructor']", `["constructor"]`,
 		"globalthis[", "globalthis.eval", "self['eval']", "window['eval']",
 		"function('", `function("`, "function(`",
@@ -138,4 +181,17 @@ func stringToCode() rules.Operator {
 		"array_filter(", "preg_replace_callback(", "register_shutdown_function(",
 		"array_walk(", "forward_static_call",
 	)
+}
+
+// isCloserFor reports whether c closes the wrapper opened by o.
+func isCloserFor(o, c byte) bool {
+	switch o {
+	case '(':
+		return c == ')'
+	case '[':
+		return c == ']'
+	case '"', '\'', '`':
+		return c == o
+	}
+	return false
 }
