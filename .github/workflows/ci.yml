@@ -144,6 +144,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - run: go run ./cmd/gwaf calibrate
       - run: go run ./cmd/gwaf lint
+      # Selectivity is measured, not gated. A literal that admits most benign
+      # traffic is usually the cost of tolerant matching rather than a mistake
+      # (.serena/memories/rejected_literal_hints.md), so this reports and a human
+      # reads it. Gating it would invite exactly the "tightening" that is a
+      # bypass.
+      - run: go run ./cmd/gwaf lint -corpus testdata/corpus/benign.jsonl
 
   # The SLOs in CLAUDE.md §2 — zero allocations, zero rules evaluated on benign
   # traffic, sub-linear ruleset scaling, bounded fuel — are asserted as tests so
@@ -159,6 +165,44 @@ jobs:
       - run: go test -run 'TestSLO' -v .
       - name: benchmark smoke run
         run: go test -run=XXX -bench=. -benchmem -benchtime=10000x ./...
+
+  # A linux/amd64 run, because every number gwaf publishes was taken on one
+  # laptop (docs/BENCHMARKS.md §5 says so).
+  #
+  # Deliberately *not* a gate, and deliberately not run with
+  # GWAF_LATENCY_STRICT. A GitHub-hosted runner is shared, virtualised and
+  # noisy; a p50 asserted there would fail for reasons that have nothing to do
+  # with this repository, and a gate that flaps is a gate people learn to
+  # re-run until it passes. What it produces is a second architecture's numbers
+  # with their provenance attached, which is what "reproducible benchmarks"
+  # requires and what publishing one machine's figures cannot give.
+  bench-linux:
+    name: benchmarks (linux/amd64, indicative)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: provenance
+        run: |
+          echo "commit:  ${{ github.sha }}"
+          echo "runner:  ${{ runner.os }} ${{ runner.arch }} (GitHub-hosted, shared)"
+          go version
+          echo "cpu:     $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs)"
+          echo "cores:   $(nproc)"
+          echo "mem:     $(free -h | awk '/^Mem:/{print $2}')"
+      - name: latency distribution
+        run: go test -run 'TestLatencyDistribution|TestSLO' -v . 2>&1 | tee latency-linux-amd64.txt
+      - name: benchmark suite
+        run: go test -run=XXX -bench=. -benchmem -count=6 ./... 2>&1 | tee bench-linux-amd64.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-linux-amd64
+          path: |
+            bench-linux-amd64.txt
+            latency-linux-amd64.txt
 
   coverage:
     name: coverage
