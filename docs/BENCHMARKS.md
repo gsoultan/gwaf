@@ -91,6 +91,49 @@ works over `[]byte` views into the original buffer.
 
 ---
 
+## 2b. Second architecture: `linux/amd64`
+
+GitHub-hosted runner: AMD EPYC 7763, 4 vCPU of a 64-core part, 15 GiB,
+Go 1.26.5, core ruleset, 200,000 samples per workload. Produced by the `bench-linux` job in `.github/workflows/ci.yml`
+(`gh workflow run CI`), which prints its own provenance and uploads the raw
+output as an artifact.
+
+**Advisory, not binding.** A GitHub runner is shared, virtualised, and four
+cores against the laptop's fifteen. `GWAF_LATENCY_STRICT` is deliberately not
+set: a p50 asserted there fails for reasons that have nothing to do with this
+repository, and a gate that flaps is one people learn to re-run until it passes.
+
+| workload | p50 | p90 | p99 | p99.9 | max |
+|---|---|---|---|---|---|
+| benign GET, no body | 2.485 µs | 2.505 µs | 2.565 µs | 11.031 µs | 34.514 µs |
+| benign GET with query arguments | 9.528 µs | 9.598 µs | 18.354 µs | 21.600 µs | 57.988 µs |
+| benign POST, 1 KiB JSON | 42.700 µs | 43.130 µs | 53.370 µs | 81.623 µs | 154.309 µs |
+| blocked SQL injection | 2.084 µs | 2.114 µs | 2.304 µs | 11.171 µs | 30.287 µs |
+
+**Two of the published SLOs are not met on this hardware**, and the honest way
+to report that is first rather than in a footnote: benign GET p50 is 2.485 µs
+against a target of < 2 µs, and benign POST 1 KiB JSON is 42.7 µs against
+< 20 µs. Every workload is roughly 2.2–2.4× the `darwin/arm64` figure, which is
+about what four shared vCPUs against fifteen dedicated ones predicts.
+
+The SLO table in CLAUDE.md §2 is stated for reference hardware and this is not
+reference hardware. What the run is for is the shape, and the shape holds: the
+ordering of the workloads is identical, p99 stays inside 2.5× of p50 on the
+fast paths, and a blocked request is still cheaper than the benign GET it
+displaces.
+
+**The claim that does survive unchanged is the stronger one.** Allocations are
+architecture-independent, and they are identical on both:
+
+```
+BenchmarkBenignGET-4        2175 ns/op     0 B/op    0 allocs/op
+BenchmarkBenignPOSTJSON-4  42859 ns/op     1 B/op    0 allocs/op
+```
+
+Zero allocations on the benign path, on both architectures, with the same
+ruleset. That is a property of the code rather than of the machine it ran on,
+which is why it is the number worth quoting.
+
 ## 3. How to reproduce
 
 ```
@@ -134,9 +177,9 @@ something can do nothing.
 
 Stated plainly, because a benchmark page that only flatters is not evidence.
 
-- **One machine, one architecture.** Everything here is `darwin/arm64` on a
-  laptop. No `linux/amd64` figures, no cloud instance, no cross-architecture
-  comparison. Absolute values will differ; the shapes should not.
+- **Two architectures now, but only one of them is reference hardware.** §2b
+  adds `linux/amd64`, taken on a shared GitHub runner. It is a second data point,
+  not a second set of SLOs, and it does not meet them — see below.
 - **The corpus is synthetic.** 10,386 requests modelled on real API surfaces,
   with plausible rather than captured values. It can falsify a performance or
   false-positive claim; it cannot confirm one against production traffic.
