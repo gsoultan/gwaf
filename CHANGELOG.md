@@ -175,7 +175,32 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Added
 
-- **`core.SQLSinkRule(id)`** — a whole SQL statement in a parameter the
+- **`core.PathSinkRule(id)`** — a traversal segment or a local-file scheme in a
+  parameter the application resolves as a path. LFI goes from 629/674 to
+  **647/674**, past Coraza + CRS's 643, and tuned detection to **92.4%**.
+
+  The core traversal rules require *two* levels, because one is genuinely
+  ambiguous in a value — relative references are everywhere. Eighteen of the 45
+  LFI misses were a single level, and every one of them was in a parameter whose
+  name said the value was a path: `filePath=../conf/db.properties`,
+  `fpath=../ecology/WEB-INF/web.xml`, `lang=../`. One `../` is ambiguous in a
+  value and is not ambiguous in a parameter called `filePath`, so this reads
+  `ctx.Key` like SSRFParamRule and SQLSinkRule do.
+
+  **`file://` moves here from the SSRF scheme rule's exclusion list.** Rule 11002
+  left it out on the reasoning that "the local-file case is already covered by
+  the traversal and sensitive-file rules"; the corpus falsifies that —
+  `"source":"file:///etc/"` carries no traversal and names no sensitive file, and
+  walked through three times. The original false-positive concern was real and is
+  answered by scoping rather than by dropping it: the benign corpus holds three
+  `jar:file:///opt/build/app.jar!/META-INF/MANIFEST.MF` values under an
+  `artifact` key, which is not a path sink, so this rule never sees them.
+
+  Opt-in, because a file manager navigates with `../` as its product.
+  `page`, `target`, `name` and `id` are excluded from the sink names — each is
+  what an ordinary form calls something that is not a path.
+
+- **`core.SQLSinkRule(id)` — a whole SQL statement in a parameter the
   application hands to a database. With it and the COPY fix below, SQLi goes
   from 65/83 to **69/83**, level with Coraza + CRS, taking tuned detection to
   **91.6%**.

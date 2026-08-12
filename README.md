@@ -146,16 +146,16 @@ the same origin.
 
 | | gwaf | gwaf tuned | Coraza + CRS 4.25 |
 |---|---|---|---|
-| Detection | 88.8% | **91.6%** | 89.7% |
+| Detection | 88.8% | **92.4%** | 89.7% |
 | False positives (ordinary traffic) | 2/12 | **0/12** | 4/12 |
 | Latency | 61 µs | **58 µs** | 973 µs |
 
 **Ahead on all three columns** — detection, false positives, and roughly a
-sixteenth of the latency. CRS still leads on RCE and LFI; **XSS and SQLi are now
-ties** at 993/1007 and 69/83; gwaf leads on redirect (55/60 against 3/60), SSRF
-(44/63 against 14/63), file upload and SSTI, and wins outright on encoded
-payloads — 100% against 85.4% on a corpus of the same attacks re-encoded eight
-ways.
+sixteenth of the latency. CRS leads on RCE alone now; **XSS and SQLi are ties**
+at 993/1007 and 69/83; gwaf leads on redirect (55/60 against 3/60), SSRF (44/63
+against 14/63), LFI (647/674 against 643), file upload and SSTI, and wins
+outright on encoded payloads — 100% against 85.4% on a corpus of the same
+attacks re-encoded eight ways.
 
 The detection margin is thin and the false-positive one is not. An engine that
 blocks four legitimate requests in twelve can always find another point of

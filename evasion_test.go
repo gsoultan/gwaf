@@ -229,6 +229,25 @@ var evasions = []evasion{
 	{name: "rce/bin sh", technique: "wrapper", arg: "/bin/sh -c id"},
 	{name: "rce/encoded bin sh", technique: "wrapper", arg: "%2Fbin%2Fsh%20-c%20id"},
 
+	// One level of traversal in a parameter the application resolves as a path.
+	// The core rules require two, because one is ambiguous in a value -- and not
+	// in a parameter called filePath. optIn for the reason in pathsink.go: a
+	// file manager navigates with "../" because navigating is the product.
+	{name: "lfi/single level in path param", technique: "path-sink", optIn: true,
+		target: "/backup/auto.php?path=../backup/auto.php"},
+	{name: "lfi/single level filePath", technique: "path-sink", optIn: true,
+		target: "/webmail.do?filePath=../conf/datasourceCtp.properties"},
+	{name: "lfi/bare dotdot", technique: "path-sink", optIn: true,
+		target: "/download.jsp?path=..&FileName=web.xml"},
+	{name: "lfi/backslash single level", technique: "path-sink", optIn: true,
+		target: `/include/thumb.php?dir=http\..\admin\login_check.php`},
+	// file:// carries no traversal and names no sensitive file, which is why the
+	// scheme rule's stated justification for omitting it did not hold.
+	{name: "lfi/file scheme in source", technique: "path-sink", optIn: true,
+		body: `{"name":"x","source":"file:///etc/"}`},
+	{name: "lfi/file scheme url", technique: "path-sink", optIn: true,
+		target: "/solr/debug/dump?param=ContentStreams&src=file://X"},
+
 	// SQL that never breaks a quote. detect/sqli reads *injection* -- a value
 	// that starts as data and becomes SQL partway through -- and a value that is
 	// a whole statement breaks nothing, so every grammar signal is legitimately
@@ -1021,6 +1040,14 @@ var benignTraffic = []benignCase{
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
 
+	// ---- paths that do not leave the directory -----------------------------
+	{name: "ordinary relative path", target: "/api/files?path=reports/2026/q1.pdf"},
+	{name: "theme editor file", target: "/wp-admin/theme-editor.php?file=functions.php"},
+	{name: "git revision range", target: "/api/diff?file=v1.2..v1.3"},
+	{name: "double dot in a filename", target: "/api/files?filename=report..final.pdf"},
+	{name: "jar artifact is not a path sink", body: `{"artifact":"jar:file:///opt/build/app.jar!/META-INF/MANIFEST.MF"}`},
+	{name: "dotdot in prose, not a path param", target: "/comments?comment=wait...+what"},
+
 	// ---- SQL words that are not statements ---------------------------------
 	//
 	// The sink rule anchors at the start of the value and requires a word
@@ -1548,6 +1575,7 @@ func TestEvasionCorpus(t *testing.T) {
 			core.WordPressHardeningRule(1011),
 			core.SSRFParamRule(1016),
 			core.SQLSinkRule(2011),
+			core.PathSinkRule(1017),
 		})))
 
 	// Both WAFs must be able to decide everything the corpus asks them.

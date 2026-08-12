@@ -2248,3 +2248,43 @@ both times was `[]rules.Transform{transform.URLDecode, transform.Lowercase}` on
 `{TargetArgs}` -- a prefix of decodeChain already materialised for rule 1013, so
 it costs nothing *provided the targets stay narrow*. On `argTargets` the same
 chain cost ~17% of the benign POST budget.
+
+## LFI: the key-anchored pattern, third application
+
+Same shape as SSRFParamRule and SQLSinkRule, and by now clearly the most
+productive rule design in the codebase: **the parameter name carries half the
+evidence.**
+
+Core traversal rules require *two* levels (`../..`) because one is genuinely
+ambiguous in a value. Eighteen of the 45 LFI misses were a single level, and
+every one was in a parameter whose *name* said "path" -- `filePath=../conf/…`,
+`fpath=…`, `lang=../`. One `../` is ambiguous in a value and is not in a
+parameter called filePath.
+
+LFI 629/674 -> **647/674, past CRS's 643**. Tuned 91.6% -> 92.4%.
+
+**`file://` moved out of the SSRF scheme rule's exclusion list.** 11002 omitted
+it saying "the local-file case is already covered by the traversal and
+sensitive-file rules" -- and `"source":"file:///etc/"` has no traversal and
+names no sensitive file. It walked through three times. **A justification that
+names another rule as the cover should be checked against the corpus; this one
+was wrong for four years of nobody looking.**
+
+The FP concern behind the original exclusion was real and is answered by
+*scoping*, not by dropping the check: the benign corpus holds three
+`jar:file:///opt/build/app.jar!/META-INF/MANIFEST.MF` under an `artifact` key,
+which is not a path sink.
+
+## The scoreboard, and what the loop has been worth
+
+Reading miss lists (GWAF_DUMP_MISSES) across four classes:
+
+    rce   287 -> 297     rule 4021 (Node.js)
+    xss   962 -> 993     rule 3012 (JS context)     -- ties CRS
+    sqli   65 -> 69      COPY TO PROGRAM + 2011     -- ties CRS
+    lfi   629 -> 647     rule 1017 (path sink)      -- beats CRS
+
+Tuned detection 85.9% -> 92.4% against CRS's 89.7%, FPs unchanged at 0/12
+against 4/12 throughout. **Every one of these came from reading the misses
+rather than imagining attacks**, and in each case the fix was a payload class
+that stayed inside one language or one parameter shape no detector was reading.

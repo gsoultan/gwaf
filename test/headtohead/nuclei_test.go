@@ -313,6 +313,7 @@ func TestNucleiHeadToHead(t *testing.T) {
 				core.CRLFHeaderRule(1007),
 				core.SSRFParamRule(1016),
 				core.SQLSinkRule(2011),
+				core.PathSinkRule(1017),
 			})),
 		// The fetch half fires on webhook registration, because registering a
 		// webhook *is* handing the server a foreign URL. That is the measured
