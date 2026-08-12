@@ -71,6 +71,7 @@ const latencySamples = 200_000
 //     zero allocations, sub-linear ruleset scaling, fuel bounds — are asserted
 //     everywhere, on every runner, and they pass. Those are the real contract and
 //     they live in bench_test.go as TestSLO*.
+//
 //   - The wall-clock numbers are asserted strictly when the caller states this is
 //     reference hardware, via GWAF_LATENCY_STRICT=1. `make slo` sets it, and its
 //     exit code depends on the result.
@@ -83,6 +84,7 @@ const latencySamples = 200_000
 //     is the same shape as the staticcheck skip in CLAUDE.md section 6, arrived
 //     at from the opposite direction: not a check that opts out, but a check
 //     whose verdict nothing consumed.
+//
 //   - Everywhere else they are measured, reported, and held to a coarse ceiling
 //     that still catches a catastrophic regression without flaking on a shared
 //     host.

@@ -31,6 +31,7 @@ package calibrate
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/gsoultan/gwaf"
 	"github.com/gsoultan/gwaf/types"
@@ -86,6 +87,11 @@ func (r RuleResult) Suggested() types.Confidence {
 type Sample struct {
 	// Name identifies the corpus entry.
 	Name string
+
+	// Path is the request path the match occurred on, with any query removed.
+	// It is what an exception is scoped to, so that suppressing a false
+	// positive on one endpoint does not suppress the rule everywhere.
+	Path string
 
 	// Target and Key locate the value that matched.
 	Target string
@@ -234,6 +240,25 @@ func Run(waf *gwaf.WAF, corpus []Request) (Report, error) {
 	return rep, nil
 }
 
+// requestPath strips the query from a corpus entry's target.
+//
+// The path is what an exception is scoped to, and the query is what varies
+// between two requests to the same endpoint — so keeping it would produce a
+// suggestion that matches one request and nothing else, which is the opposite
+// of useful.
+func requestPath(target string) string {
+	if target == "" {
+		return "/"
+	}
+	if i := strings.IndexByte(target, '?'); i >= 0 {
+		target = target[:i]
+	}
+	if target == "" {
+		return "/"
+	}
+	return target
+}
+
 // ruleAcc accumulates one rule's measurements across the corpus.
 type ruleAcc struct {
 	hits    int
@@ -257,6 +282,7 @@ func collect(tx *gwaf.Transaction, req *Request, seen map[types.RuleID]*ruleAcc,
 		if len(a.samples) < SampleLimit {
 			a.samples = append(a.samples, Sample{
 				Name:           req.Name,
+				Path:           requestPath(req.Target),
 				Target:         m.Target.String(),
 				Key:            m.Key,
 				Interpretation: m.Interpretation,

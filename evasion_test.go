@@ -229,6 +229,33 @@ var evasions = []evasion{
 	{name: "rce/bin sh", technique: "wrapper", arg: "/bin/sh -c id"},
 	{name: "rce/encoded bin sh", technique: "wrapper", arg: "%2Fbin%2Fsh%20-c%20id"},
 
+	// Node.js code injection. A JavaScript payload stays inside JavaScript
+	// syntax, so it carries no shell grammar for shelli, no template syntax for
+	// ssti and no PHP for phpi -- it was outside every detector until rule 4021.
+	// These are the real corpus misses, reduced to their payload.
+	{name: "rce/node jsonpath execsync", technique: "body",
+		body: `{"path":"$..[?(p=\"require('child_process').execSync('curl x')\")]"}`},
+	{name: "rce/node where exec", technique: "body",
+		body: `{"q":"global.process.mainModule.constructor._load('child_process').exec('id')"}`},
+	{name: "rce/node spawn", technique: "none",
+		arg: "require('child_process').spawn('sh',['-c','id'])"},
+	{name: "rce/node constructor escape", technique: "none",
+		arg: "this.constructor.constructor('return process')()"},
+	{name: "rce/node process binding", technique: "none",
+		arg: "process.binding('spawn_sync')"},
+
+	// Query-separator readings. These must arrive through target, because the
+	// bypass was in how the *query string* was split into arguments and an arg
+	// handed straight to AddArgument never goes through that code at all --
+	// which is exactly why it survived: every hand-written test bypassed the
+	// bypass. See TestQuerySeparatorIsMultiInterpretation.
+	{name: "rce/bare semicolon in query", technique: "arg-separator",
+		target: "/ping?cmd=;whoami"},
+	{name: "rce/semicolon after a pair", technique: "arg-separator",
+		target: "/ping?host=1.1.1.1&cmd=;id"},
+	{name: "rce/semicolon mid-value", technique: "arg-separator",
+		target: "/ping?host=1.1.1.1;cat /etc/passwd"},
+
 	// ---- sensitive file access ---------------------------------------------
 	{name: "lfi/ssh key", technique: "sensitive", arg: "../../../home/user/.ssh/id_rsa"},
 	{name: "lfi/aws creds", technique: "sensitive", arg: "../../.aws/credentials"},
@@ -952,6 +979,20 @@ var benignTraffic = []benignCase{
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
 
+	// ---- writing about Node, rather than calling it ------------------------
+	//
+	// The pairing in rule 4021 exists for these. A site that discusses Node --
+	// a tutorial, an issue tracker, a code review -- names the module
+	// constantly, and a rule that matched the name would block the people
+	// fixing the bug it defends against. Same reasoning as IDScriptURI and
+	// "javascript:".
+	{name: "prose about child_process", arg: "we shell out with child_process here"},
+	{name: "issue title naming the module", arg: "child_process spawn fails on windows"},
+	{name: "import line", body: `{"code":"const cp = require('child_process')"}`},
+	{name: "docs link", arg: "https://nodejs.org/api/child_process.html"},
+	{name: "exec without the module", arg: "db.exec(query)"},
+	{name: "spawn without the module", arg: "worker.spawn(task)"},
+
 	// ---- destinations that are not off-origin ------------------------------
 	//
 	// The other half of the redirect and offssrf cases. A detector that blocks
@@ -996,6 +1037,185 @@ func sortedKeys[V any](m map[string]V) []string {
 // {"password":{"$ne":null}} passed. Value-position payloads still matched
 // against the raw body, which is precisely why nothing failed — the corpus had
 // no key-position attack in it until NoSQL detection arrived.
+// TestPayloadPaddingIsNotABypass pins the answer to the 2026 blind spot.
+//
+// The technique is to bury the payload past the point the WAF stops looking.
+// It works against most of the market because most of the market truncates:
+// AWS inspects the first 8-64 KiB depending on the resource, F5 the first 64,
+// and what lies beyond is forwarded uninspected. The attacker does not need to
+// defeat a detector, only to out-run one.
+//
+// gwaf does not truncate. A body over MaxBodySize is a decision -- ReasonLimit,
+// blocked under the default FailClosed -- because a body that was only partly
+// parsed has not been shown to be anything. That is a property of the design
+// rather than of a rule, and it had no test until this one, which is how a
+// property quietly becomes a regression.
+//
+// The FailOpen half is asserted too. It is a real choice an embedder can make
+// and gwaf documents what it costs; asserting it here means the cost stays
+// visible rather than being discovered in production.
+func TestPayloadPaddingIsNotABypass(t *testing.T) {
+	const payload = `{"cmd":"; cat /etc/passwd"}`
+
+	// Comfortably past the 1 MiB default, with the payload last so that any
+	// prefix-limited inspection reaches the end of its window first.
+	padded := make([]byte, 0, (2<<20)+len(payload))
+	padded = append(padded, `{"pad":"`...)
+	for len(padded) < 2<<20 {
+		padded = append(padded, 'A')
+	}
+	padded = append(padded, `","next":`...)
+	padded = append(padded, payload...)
+	padded = append(padded, '}')
+
+	run := func(t *testing.T, w *gwaf.WAF) gwaf.Decision {
+		t.Helper()
+		tx := w.NewTransaction()
+		t.Cleanup(tx.Close)
+		tx.SetRequestLine("POST", "/api/run", "HTTP/1.1")
+		tx.SetRemoteAddr("192.0.2.1")
+		tx.AddRequestHeader("Content-Type", "application/json")
+		if d := tx.ProcessRequestHeaders(); d.Blocked() {
+			return d
+		}
+		tx.SetRequestBody(padded)
+		return tx.ProcessRequestBody()
+	}
+
+	t.Run("default fails closed", func(t *testing.T) {
+		d := run(t, newWAF(t))
+		if !d.Blocked() {
+			t.Fatal("an oversize body was allowed through uninspected; " +
+				"this is the payload-padding bypass")
+		}
+		if d.Reason() != gwaf.ReasonLimit {
+			t.Errorf("Reason() = %v, want ReasonLimit — the block must say it is a "+
+				"limit rather than a detection, or an operator cannot tell that "+
+				"the body was never read", d.Reason())
+		}
+	})
+
+	// Opting out is allowed and is not silent: the request is still reported as
+	// undecided, so an embedder choosing availability over inspection can see
+	// how often it happens.
+	t.Run("FailOpen admits it and says so", func(t *testing.T) {
+		d := run(t, newWAF(t, gwaf.WithFailMode(gwaf.FailOpen)))
+		if d.Blocked() {
+			t.Error("FailOpen blocked; the mode exists to admit the request")
+		}
+		if d.Reason() != gwaf.ReasonLimit {
+			t.Errorf("Reason() = %v, want ReasonLimit even when admitted", d.Reason())
+		}
+	})
+
+	// Within the limit there is no window at all: depth is not a hiding place.
+	t.Run("deep but inside the limit is still inspected", func(t *testing.T) {
+		deep := make([]byte, 0, 600<<10)
+		deep = append(deep, `{"pad":"`...)
+		for len(deep) < 500<<10 {
+			deep = append(deep, 'A')
+		}
+		deep = append(deep, `","next":`...)
+		deep = append(deep, payload...)
+		deep = append(deep, '}')
+
+		w := newWAF(t)
+		tx := w.NewTransaction()
+		defer tx.Close()
+		tx.SetRequestLine("POST", "/api/run", "HTTP/1.1")
+		tx.SetRemoteAddr("192.0.2.1")
+		tx.AddRequestHeader("Content-Type", "application/json")
+		tx.ProcessRequestHeaders()
+		tx.SetRequestBody(deep)
+		d := tx.ProcessRequestBody()
+		if !d.Blocked() {
+			t.Fatal("payload at 500 KiB depth not detected; inspection is " +
+				"prefix-limited after all")
+		}
+		if d.Reason() == gwaf.ReasonLimit {
+			t.Error("blocked as a limit rather than detected; the body fits and " +
+				"should have been read")
+		}
+	})
+}
+
+// TestQuerySeparatorIsMultiInterpretation covers a bypass that was live.
+//
+// gwaf split query pairs on ';' as well as '&'. Some origins do accept ';', so
+// honouring it is right — but honouring it *instead of* '&'-only threw away the
+// reading most origins actually use. Go's net/url has rejected ';' since 1.17
+// and PHP defaults to '&' alone, so for the common origin gwaf split where the
+// origin did not: "?cmd=;whoami" became "cmd=" plus a stray "whoami", the value
+// ";whoami" never existed, and the shell detector never saw it.
+//
+// The same payload was blocked in a form body, in a JSON body, and with the
+// semicolon percent-encoded. Only the rawest, most obvious spelling got through,
+// which is what made it invisible: every test anyone would write by hand passed.
+func TestQuerySeparatorIsMultiInterpretation(t *testing.T) {
+	w := newWAF(t)
+
+	// Every one of these is an attack under at least one origin's parse.
+	for _, tc := range []struct{ name, target string }{
+		{"bare semicolon command", "/x?cmd=;whoami"},
+		{"semicolon then space", "/x?cmd=; whoami"},
+		{"semicolon mid-value", "/x?host=1.1.1.1;whoami"},
+		{"semicolon after ampersand pair", "/x?a=1&cmd=;id"},
+		{"encoded semicolon", "/x?cmd=%3Bwhoami"},
+		{"semicolon with sensitive path", "/x?f=;cat /etc/passwd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine("GET", tc.target, "HTTP/1.1")
+			tx.SetRemoteAddr("192.0.2.1")
+			if d := tx.ProcessRequestHeaders(); !d.Blocked() {
+				t.Errorf("not blocked: %s", tc.target)
+			}
+		})
+	}
+
+	// The ';' reading is not dropped in the process. An origin that does split
+	// on ';' puts an attacker-chosen *name* on the right-hand side, and the
+	// name-anchored rules (NoSQL key position) only see it under that reading.
+	t.Run("semicolon reading still recorded", func(t *testing.T) {
+		tx := w.NewTransaction()
+		defer tx.Close()
+		tx.SetRequestLine("GET", "/x?a=1;password[$ne]=1", "HTTP/1.1")
+		tx.SetRemoteAddr("192.0.2.1")
+		if d := tx.ProcessRequestHeaders(); !d.Blocked() {
+			t.Error("key-position NoSQL behind ';' not blocked; the ';' reading was lost")
+		}
+	})
+}
+
+// TestQuerySeparatorDoesNotInventArguments is the false-positive half.
+//
+// Recording both readings doubles nothing for ordinary traffic and must not
+// turn a semicolon in a legitimate value into an attack.
+func TestQuerySeparatorDoesNotInventArguments(t *testing.T) {
+	w := newWAF(t)
+
+	for _, tc := range []struct{ name, target string }{
+		{"list value", "/x?tags=red;green;blue"},
+		{"matrix-ish path param", "/x?filter=size:large;color:blue"},
+		{"prose with semicolons", "/search?q=first;+second;+third"},
+		{"css in a value", "/x?style=color:red;font-weight:bold"},
+		{"cookie-shaped value", "/x?c=a=1;+b=2"},
+		{"encoded semicolon list", "/x?tags=red%3Bgreen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine("GET", tc.target, "HTTP/1.1")
+			tx.SetRemoteAddr("192.0.2.1")
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Errorf("FALSE POSITIVE on %s: rule=%d msg=%q",
+					tc.target, d.RuleID(), d.Message())
+			}
+		})
+	}
+}
+
 func TestContentTypeIsNotTrusted(t *testing.T) {
 	w := newWAF(t)
 

@@ -139,6 +139,33 @@ type engineResult struct {
 	elapsed time.Duration
 	byClass map[string][2]int
 	fps     []string
+
+	// misses are the requests this engine let through, kept so the gap can be
+	// read rather than guessed at.
+	//
+	// A per-class score says RCE is 287/378 and stops there, which is enough to
+	// know a gap exists and not enough to close one. Every detection improvement
+	// after that point is a guess about which 91 requests those are -- and the
+	// corpus is right here, so guessing is a choice. GWAF_DUMP_MISSES=<class>
+	// prints them, or "all" for every class.
+	misses map[string][]nucleiCase
+}
+
+// dumpMissesFor reports which classes the caller asked to see missed requests
+// for. Empty means none, which is the default: 322 requests is not something to
+// print on every run.
+func dumpMissesFor() map[string]bool {
+	spec := os.Getenv("GWAF_DUMP_MISSES")
+	if spec == "" {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, c := range strings.Split(spec, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			out[c] = true
+		}
+	}
+	return out
 }
 
 // nucleiHost is the hostname every replayed request is addressed to.
@@ -149,9 +176,23 @@ type engineResult struct {
 // without the other silently disarms those rules.
 const nucleiHost = "target.local"
 
+// bodyPreview renders a body for the miss report, bounded so one templated
+// upload does not fill the log.
+func bodyPreview(b string) string {
+	if b == "" {
+		return ""
+	}
+	b = strings.ReplaceAll(strings.ReplaceAll(b, "\n", `\n`), "\r", `\r`)
+	const max = 160
+	if len(b) > max {
+		b = b[:max] + "..."
+	}
+	return "  body=" + b
+}
+
 func replayNuclei(srv *httptest.Server, cases []nucleiCase) engineResult {
 	client := &http.Client{Timeout: 30 * time.Second}
-	r := engineResult{byClass: map[string][2]int{}}
+	r := engineResult{byClass: map[string][2]int{}, misses: map[string][]nucleiCase{}}
 	start := time.Now()
 	for _, c := range cases {
 		method := c.Method
@@ -187,6 +228,8 @@ func replayNuclei(srv *httptest.Server, cases []nucleiCase) engineResult {
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable {
 			r.blocked++
 			n[0]++
+		} else {
+			r.misses[c.Class] = append(r.misses[c.Class], c)
 		}
 		r.byClass[c.Class] = n
 	}
@@ -350,6 +393,35 @@ func TestNucleiHeadToHead(t *testing.T) {
 			line += fmt.Sprintf(" %s %3d/%-4d", r.name, n[0], n[1])
 		}
 		t.Log(line)
+	}
+
+	// Which requests were missed, for the classes the caller asked about.
+	//
+	// Off by default because 322 requests is not a thing to print every run, and
+	// on by name because closing a gap starts with reading it. The template ID
+	// is included so the miss can be traced back to the upstream template and
+	// the payload seen in full.
+	if want := dumpMissesFor(); len(want) > 0 {
+		t.Log("=== missed requests (GWAF_DUMP_MISSES) ===")
+		for _, r := range results {
+			for _, cl := range ck {
+				if !want[cl] && !want["all"] {
+					continue
+				}
+				ms := r.misses[cl]
+				if len(ms) == 0 {
+					continue
+				}
+				t.Logf("  --- %s / %s: %d missed ---", r.name, cl, len(ms))
+				for _, m := range ms {
+					method := m.Method
+					if method == "" {
+						method = "GET"
+					}
+					t.Logf("      [%s] %s %s%s", m.ID, method, m.Path, bodyPreview(m.Body))
+				}
+			}
+		}
 	}
 
 	t.Log("=== false positives on ordinary traffic ===")

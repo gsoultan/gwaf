@@ -8,6 +8,7 @@
 //
 //	gwaf calibrate [-corpus FILE] [-v]   measure each rule's false-positive rate
 //	gwaf lint                            report prefilter coverage and cost
+//	gwaf tune [-corpus FILE]             suggest narrow exceptions for measured FPs
 package main
 
 import (
@@ -33,6 +34,8 @@ func main() {
 		err = runLint(os.Args[2:])
 	case "explain":
 		err = runExplain(os.Args[2:])
+	case "tune":
+		err = runTune(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -54,12 +57,18 @@ func usage() {
   calibrate   measure each rule's false-positive rate against a benign corpus
   lint        report prefilter coverage and the cost of unconditional rules
   explain     describe a rule, or replay a request and explain the outcome
+  tune        suggest the narrowest exceptions for the false positives measured
 
     gwaf explain 7002
     gwaf explain -arg 'q=1'"'"' OR 1=1--'
+    gwaf tune -corpus testdata/corpus/benign.jsonl
 
-All three are compile-time tools. None runs on the request path, and none
+All four are compile-time tools. None runs on the request path, and none
 contains detection logic -- they are drivers over the library.
+
+tune prints Go for a human to read and paste; it never edits configuration.
+An exception is a hole in a firewall, and one punched automatically during a
+build is a hole nobody reviewed.
 `)
 }
 

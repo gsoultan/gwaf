@@ -145,6 +145,12 @@ const (
 	IDJavaSemantic types.RuleID = 4018
 	IDPHPSemantic  types.RuleID = 4019
 
+	// JavaScript that reaches the process. Its own rule because a Node payload
+	// stays inside JavaScript syntax and so carries no shell grammar for
+	// detect/shelli, no template syntax for detect/ssti, and no PHP for
+	// detect/phpi. Found by dumping the corpus's RCE misses; see nodei.go.
+	IDNodeCodeInjection types.RuleID = 4021
+
 	// The Medium tier, in its own 5xxx band so an exception written against a
 	// default-tier rule can never accidentally silence the opt-in one, and so a
 	// reader of an audit log can tell at a glance which bar a finding cleared.
@@ -1321,6 +1327,22 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "Protocol-smuggling URL scheme in request value",
 			Tags:       []string{"ssrf", "owasp-a10"},
+		},
+		{
+			ID:         IDNodeCodeInjection,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Requires the capability *and* the sink, so that writing about
+			// child_process stays possible and calling it does not. The sandbox
+			// escapes are self-evidencing and need no pairing. See nodei.go for
+			// why the module name alone was rejected as the signal.
+			Op:         nodeCodeInjection(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "JavaScript process execution in request value",
+			Tags:       []string{"rce", "nodejs", "owasp-a03"},
 		},
 		{
 			ID:         IDXMLEntity,

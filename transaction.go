@@ -351,13 +351,36 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 // committing to one; decoding here would pick a single interpretation and throw
 // the others away, which is the shape of CVE-2026-21876.
 //
-// ';' separates pairs alongside '&' because several server-side parsers still
-// accept it, and a payload hidden behind a separator the origin honours is one
-// gwaf must honour too.
+// Separators are multi-interpretation for the same reason decodings are.
+//
+// This used to split on ';' alongside '&', reasoning that some server-side
+// parsers accept it and a payload hidden behind a separator the origin honours
+// is one gwaf must honour too. That half is true. The half it missed is that
+// committing to the ';' reading *discards* the other one, and the other one is
+// what most origins actually do: Go's net/url has rejected ';' as a separator
+// since 1.17, and PHP's arg_separator.input defaults to '&' alone.
+//
+// So for the common origin, gwaf split where the origin did not.
+// "?cmd=;whoami" became the pair "cmd=" plus a stray "whoami", the value
+// ";whoami" never existed, and the shell detector -- which scores it 5 against
+// a threshold of 5, and blocks it in a form body, in a JSON body, and when the
+// semicolon is percent-encoded -- was never handed it. A command injection in
+// the single most obvious place it can appear walked through.
+//
+// That is the shape of CVE-2026-21876 one layer up from where this function
+// already guards against it: the comment above says decoding here "would pick a
+// single interpretation and throw the others away", and splitting was doing
+// exactly that.
+//
+// Both readings are recorded, so a payload is caught whichever separator the
+// origin honours. The '&' reading is emitted first because it is the one most
+// origins use, which matters when MaxArgs is reached and later arguments are
+// dropped. A query with no ';' costs one extra byte scan per pair and produces
+// no extra arguments at all.
 func (tx *Transaction) addQueryArguments(query string) {
 	for len(query) > 0 {
 		pair := query
-		if i := indexAny(query, '&', ';'); i >= 0 {
+		if i := indexByte(query, '&'); i >= 0 {
 			pair, query = query[:i], query[i+1:]
 		} else {
 			query = ""
@@ -366,22 +389,40 @@ func (tx *Transaction) addQueryArguments(query string) {
 			continue
 		}
 
-		name, value := pair, ""
-		if i := indexByte(pair, '='); i >= 0 {
-			name, value = pair[:i], pair[i+1:]
+		// Reading 1: '&' is the only separator. The whole pair is one argument,
+		// semicolons and all.
+		tx.addQueryPair(pair)
+
+		// Reading 2: ';' separates too. Only reachable when one is present, so
+		// ordinary traffic pays a single IndexByte and nothing else.
+		if indexByte(pair, ';') < 0 {
+			continue
 		}
-		tx.AddArgument(name, value)
+		for len(pair) > 0 {
+			sub := pair
+			if i := indexByte(pair, ';'); i >= 0 {
+				sub, pair = pair[:i], pair[i+1:]
+			} else {
+				pair = ""
+			}
+			if sub != "" {
+				tx.addQueryPair(sub)
+			}
+		}
 	}
 }
 
-// indexAny returns the first index of either byte, or -1.
-func indexAny(s string, a, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == a || s[i] == b {
-			return i
-		}
+// addQueryPair splits one "name=value" pair and records it.
+//
+// A pair with no '=' is recorded with an empty value rather than dropped:
+// origins differ on whether "?debug" sets a flag, and a name an attacker chose
+// is worth inspecting either way. This mirrors body.ParseForm.
+func (tx *Transaction) addQueryPair(pair string) {
+	name, value := pair, ""
+	if i := indexByte(pair, '='); i >= 0 {
+		name, value = pair[:i], pair[i+1:]
 	}
-	return -1
+	tx.AddArgument(name, value)
 }
 
 // SetRemoteAddr records the client address.

@@ -2026,3 +2026,63 @@ origins *and* body coverage it blocks webhook registration on the benign corpus
 -- the original measurement was right, and declaring origins does not rescue it,
 because `hooks.example.com` is genuinely somewhere else. The head-to-head models
 the real answer: a scoped exception on the one route.
+
+## Splitting is multi-interpretation too (the ';' query bypass)
+
+`?cmd=;whoami` was not detected. `addQueryArguments` split pairs on ';' as well
+as '&', so the value ";whoami" never existed. shelli scores it 5 against a
+threshold of 5 and blocks the identical payload in a form body, in a JSON body,
+and percent-encoded -- **only the rawest spelling got through, which is why
+every hand-written test passed.** Found by research-directed probing (WAFFLED,
+arXiv 2503.10846, on WAF/origin parser discrepancies), not by the corpus.
+
+Splitting on ';' was deliberate and half right. The half it missed: committing
+to that reading *discards* the '&'-only reading, which is what Go's net/url
+(rejects ';' since 1.17) and PHP (arg_separator.input defaults to '&') actually
+do. gwaf split where the origin did not.
+
+**The invariant is broader than it was written.** "Canonicalization is
+multi-interpretation" was applied to decoding and not to *deciding what the
+values are*. Both readings are recorded now; a query with no ';' costs one
+IndexByte per pair and produces no extra arguments.
+
+Note the body parser (`internal/body/form.go`) splits on '&' only, so gwaf was
+internally inconsistent -- the query used the minority reading and the body the
+majority one.
+
+## Read the misses; do not imagine them
+
+RCE was the largest gap against CRS (287/378 vs 316/378). Adding
+`GWAF_DUMP_MISSES=<class>` to the head-to-head and reading the 88 requests made
+the shape obvious in one run: nine were Node.js, and **no detector could have
+caught any of them** -- a JavaScript payload stays in JavaScript syntax, so it
+carries no shell grammar for shelli, no template syntax for ssti, no PHP for
+phpi. Rule 4021 came straight out of that, worth +10 RCE and taking tuned
+detection to 90.0% against CRS's 89.7%, FPs unchanged at 0/12 vs 4/12.
+
+The general lesson: a per-class score tells you a gap exists and nothing about
+what it is. Every improvement made without reading the misses is a guess, and
+the corpus is right there.
+
+## Confirmed still-correct rejections (do not "fix" these)
+
+- **Bare backtick `` `whoami` `` scores 0 and must.** Probing found it and it
+  looked like a gap; it is `TestBacktickLimitIsDeliberate` plus a recorded
+  measurement -- the concatenation heuristic false-positived on 9/9 realistic
+  benign values, because "localhost`id`" and a JS tagged template are the same
+  shape. Checked before changing anything, which is the only reason a week was
+  not spent on it.
+- **`SSRFParamRule` stays opt-in** even with origins *and* body coverage: it
+  blocks webhook registration on the benign corpus, exactly as first measured.
+
+## gwaf is immune to payload padding, and now says so
+
+The 2026 literature's loudest technique is burying the payload past the
+inspection window; it works because AWS (8-64 KiB), F5 (64 KiB) and others
+truncate and forward. gwaf returns `ReasonLimit` on an oversize body and blocks
+under the default `FailClosed`. True by construction, untested until
+`TestPayloadPaddingIsNotABypass` -- which also pins that a payload at 500 KiB
+depth is still *detected*, so depth is not a hiding place either.
+
+**A differentiator that rests on a property rather than a rule still needs a
+test, or it is one refactor from being a regression nobody notices.**

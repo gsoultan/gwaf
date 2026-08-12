@@ -8,6 +8,38 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Security
 
+- **A command injection in the most obvious place it can appear walked through.**
+  `?cmd=;whoami` was not detected. The query parser split pairs on `;` as well as
+  `&`, so the pair became `cmd=` plus a stray `whoami` and the value `;whoami`
+  never existed for the shell detector to score — which it does, at 5 against a
+  threshold of 5. The same payload was blocked in a form body, in a JSON body,
+  and with the semicolon percent-encoded. Only the rawest spelling got through,
+  which is why every hand-written test passed.
+
+  Splitting on `;` was deliberate and half right: some origins do accept it. The
+  half it missed is that committing to that reading **discards the other one**,
+  and the other one is what most origins do — Go's `net/url` has rejected `;`
+  since 1.17 and PHP's `arg_separator.input` defaults to `&` alone. So for the
+  common origin gwaf split where the origin did not.
+
+  Both readings are now recorded. This is the CVE-2026-21876 shape one layer up
+  from where the same function already guarded against it: its own comment says
+  decoding here "would pick a single interpretation and throw the others away",
+  and splitting was doing exactly that. **Canonicalization is
+  multi-interpretation includes deciding what the values are, not only what they
+  decode to.**
+
+- **Payload padding is not a bypass, and now there is a test that says so.**
+  Burying a payload past the inspection window is the technique the 2026
+  literature is loudest about, and it works against most of the market because
+  most of the market truncates — AWS inspects the first 8–64 KiB depending on
+  the resource, F5 the first 64, and forwards the rest uninspected. gwaf does
+  not truncate: an oversize body is `ReasonLimit`, blocked under the default
+  `FailClosed`. That was already true by construction and had no test, which is
+  how a property becomes a regression. `TestPayloadPaddingIsNotABypass` pins all
+  three halves, including that a payload at 500 KiB depth is still detected and
+  that `FailOpen` admits the request while still reporting `ReasonLimit`.
+
 - **The off-origin rules could not match a protocol-relative destination.**
   `offOriginOp.Literals` returned `"://"` and the colon-prefixed backslash
   forms, while its own doc comment said the invariant was "two adjacent
@@ -34,8 +66,10 @@ semver, and the four extension interfaces are frozen hard.
   printing the warning into the test log both times; nothing read it.
 
   Re-measured against nuclei-templates with origins declared: **redirect 13/60 →
-  55/60** (Coraza + CRS: 3/60), **SSRF 5/63 → 44/63** (14/63), overall tuned
-  **85.9% → 89.5%**. README and the numbers below are updated. The evasion
+  55/60** (Coraza + CRS: 3/60), **SSRF 5/63 → 44/63** (14/63). With the
+  separator fix and rule 4021 alongside it, tuned detection goes **85.9% →
+  90.0%**, ahead of Coraza + CRS's 89.7% for the first time, with false
+  positives unchanged at 0/12 against their 4/12. README is updated. The evasion
   corpus now declares a `redirect` and an `offssrf` class with 18 attack cases
   and 11 benign counterparts, so this cannot go quiet again.
 
@@ -54,6 +88,41 @@ semver, and the four extension interfaces are frozen hard.
   footing.
 
 ### Added
+
+- **Rule 4021, JavaScript process execution.** Found by reading misses rather
+  than by imagining attacks: the head-to-head's RCE class was gwaf's largest gap
+  against CRS, and dumping the missed requests showed nine of them were Node.js
+  and that no detector could have caught any. `detect/shelli` reads shell
+  grammar and there is none in
+  `require('child_process').execSync('curl …')` — no separator, no command in
+  command position, just a JavaScript call whose argument happens to be a shell
+  string. `ssti` reads template syntax, `phpi` reads PHP. A payload that never
+  leaves JavaScript was outside all of them.
+
+  The module name alone is **not** the signal. "child_process" is ordinary
+  content on any site that discusses Node, so the rule requires the capability
+  *and* an execution sink — the same narrowing that keeps `IDScriptURI` from
+  blocking every article about XSS. Sandbox escapes (`constructor._load`,
+  `process.binding(`) are self-evidencing and need no pairing. Six benign cases
+  covering prose, imports, issue titles and docs links are in the corpus.
+
+- **`gwaf tune`** — reads a benign corpus and prints the *narrowest* exceptions
+  that would have prevented each measured false positive, as compile-checked Go.
+
+  Everyone tunes a WAF by hand, and doing it by hand is why tuning goes wrong:
+  the path of least resistance from a blocked legitimate request is to disable
+  the rule, because that is one line and always works. The output is Go for a
+  human to paste, never applied automatically — an exception is a hole in a
+  firewall, and one punched during a build is a hole nobody reviewed. It refuses
+  to widen: when the samples disagree on a path or key, no single scope is
+  correct, and it says so rather than emitting a rule-wide exception that would
+  be indistinguishable from switching the rule off. `calibrate.Sample` gained
+  `Path` to make the scoping possible.
+
+- **`GWAF_DUMP_MISSES=<class|all>`** in the head-to-head harness. A per-class
+  score says RCE is 287/378 and stops; every improvement after that is a guess
+  about which 91 requests those are, when the corpus is right there. Rule 4021
+  came directly out of the first run of this.
 
 - **`(*gwaf.WAF).Diagnostics() []Diagnostic`** — the rules that compiled, linted
   clean, and still cannot decide anything: an off-origin rule with no origins,
