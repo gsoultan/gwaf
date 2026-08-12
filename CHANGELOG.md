@@ -338,6 +338,30 @@ targets and its exit code now depends on them.
   deliberately absent from the sink list for the same reason — each is what a
   search box is called.
 
+- **`(*gwaf.WAF).Limits()`** — the configured bounds, exported so an integration
+  can bound what it reads. The middleware could not size its buffer without
+  knowing the ceiling the engine would apply, which is how it came to apply none
+  at all.
+
+- **Preflight and gRPC framing are pinned as passing** (`middleware`). A CORS or
+  gRPC-Web preflight is a method, a path and a few headers with no body and no
+  arguments, and gwaf's rules are almost entirely anchored on argument values —
+  so it passes on both the default and the fully tuned configuration, including
+  from a foreign `Origin`. **gwaf does not do CORS policy**: whether `evil.tld`
+  may call your API is a question about identity, which the embedder owns.
+
+  Pinned because it is what a future rule breaks by accident. A rule matching on
+  `Access-Control-Request-Headers` or on an `OPTIONS` request line would break
+  every browser client of every adopter at once — and would look like a CORS bug,
+  since a 403 carries no `Access-Control-Allow-Origin` and the browser reports
+  the missing header rather than the block.
+
+  The one configuration where preflight *is* rejected is pinned too:
+  `Schema.Closed()` treats a request matching no operation as a route that does
+  not exist, and OpenAPI documents routinely omit `OPTIONS`. Confirmed at 403,
+  with declaring the operation as the in-band fix — though running the CORS
+  middleware ahead of gwaf is usually better.
+
 - **The transform-chain inventory is pinned** (`TestTransformChainInventory`).
   Chains are the expensive axis — each is materialised once per value per phase,
   and `decisions.md` records that going from ten to twelve once cost more than
