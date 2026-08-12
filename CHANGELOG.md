@@ -268,6 +268,52 @@ targets and its exit code now depends on them.
   **Literals are the one place where being more specific is a bypass rather than
   an optimisation.** Three corpus cases fail without this fix.
 
+### Performance
+
+Every SLO in CLAUDE.md §2 passes in strict mode on darwin/arm64, 200,000 samples
+per workload: benign GET p50 **1.125 µs** (target < 2 µs), benign POST 1 KiB JSON
+p50 **18.25 µs** (< 20 µs), worst p99 **22.79 µs** (< 100 µs), heap growth over
+20,000 transactions **−7,720 bytes** (target 0), per-transaction footprint
+**2.4 B**. Allocations on the benign path are **0/op**, unchanged from v0.4.2
+despite eleven new rules, a new reading class, and windowing across seven
+detectors.
+
+- **Large bodies got slower, and that is the fix working.** `BenignLargeBody`
+  (1 MiB JSON) went from 88 MB/s to 51 MB/s against v0.4.2. The cause is not a
+  regression: v0.4.2's detectors truncated at `maxScan = 8192` and read the first
+  8 KiB of a 1 MiB body, so **99.2% of it was never inspected**. That truncation
+  *was* the padding bypass this release closes with `internal/scan.Windows`. The
+  cost buys 128× the coverage, at the same allocation count. Reverting it
+  reopens the bypass.
+
+- **The XSS detector folded and hashed every word of every document.** Profiling
+  the above put `detect/xss` at 47% of samples on a body containing no `<` at
+  all. The sink lookup walked, case-folded, hashed and map-probed every word —
+  `mapaccess1_faststr` plus `aeshashbody` were 13% of the profile — and
+  `matchesScheme` ran the tolerant entity-decoding matcher once per executing
+  scheme for every `j`, `v`, `l`, `m` and `d` byte. Gating the sink lookup on a
+  lead byte derived from the sinks table, moving `callFollows` ahead of the map
+  probe, and dispatching schemes on their lead byte gives **−9.83%** on
+  `BenignLargeBody` (p=0.000, n=12, paired and interleaved) and one allocation
+  fewer. Detection is unchanged and `Attack` latency is unchanged (p=0.53) —
+  benign throughput was not bought with detection latency.
+
+- **Structurally, eleven new rules cost one new plan group.** 90 → 101 rules,
+  all 101 prefilterable, still **0 unconditional**. The only new target×chain
+  group is the empty transform chain on `FILES_NAMES`, which costs nothing on a
+  request that is not a multipart upload. Literals grew 837 → 973 and the
+  automaton 9,068 → 11,120 states.
+
+- **Known, not fixed: `detect_xss` declares `"` as a required literal.** Every
+  JSON body contains a quote, so the XSS prefilter never filters JSON traffic and
+  those rules evaluate on all of it — while `gwaf lint` correctly reports them as
+  prefiltered, because they are. The quote is load-bearing (attribute injection
+  such as `" onmouseover=…` carries no `<` and no `(`), so it cannot simply be
+  dropped. The two real fixes — reporting to the operator *which* literals hit,
+  and not re-scanning a body that was already parsed structurally — change the
+  `Operator` interface or the body pipeline, and neither belongs in a patch
+  cycle. Recorded in `.serena/memories/prefilter_literal_selectivity.md`.
+
 ### Fixed
 
 - **`stages.apply` wrote two parallel arrays per transform step.** `val[i]` and
