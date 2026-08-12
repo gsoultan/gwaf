@@ -45,6 +45,33 @@ targets and its exit code now depends on them.
 
 ### Security
 
+- **`seclang` parsed without bounds, and without a stated trust boundary.**
+  Those are the same gap. A test comment called it "a build-time tool", but
+  `Parse` is exported from a module anyone may import, and the first adopter
+  stores user-authored SecLang in a rule database — a parse of somebody else's
+  bytes at runtime, in a shared process.
+
+  The measurement decided the shape of the fix. A ceiling on total source would
+  not have helped, because the cost is driven by a *single operator argument*:
+
+  | input | rules | before | after |
+  |---|---|---|---|
+  | real CRS, 27 files, 711 KB | 250 | 55 MB | 55 MB |
+  | one 1 MB `@rx` pattern | 0 | **264 MB** | 12 MB |
+  | one 10 MB `@pm` line | 0 | **423 MB** | 118 MB |
+
+  A megabyte of input is nothing; a megabyte in one pattern is a quarter of a
+  gigabyte of compiled program. `Options.MaxPatternBytes` bounds the argument
+  before it is compiled, defaulting to 64 KiB — about seven times CRS's longest
+  operator argument of 8,504 bytes, so no honest ruleset comes near it.
+  `MaxSourceBytes` (32 MiB) and `MaxRules` (100,000) bound bulk. Zero means the
+  default and a negative value means none, so a build step compiling its own
+  rules can opt out while a caller who never read this still gets the bound.
+
+  RE2 already refuses the classic program-size bombs — `(a{1000}){1000}` and a
+  two-thousand-deep alternation are both rejected during compilation — so those
+  are pinned as controls rather than fixed. CRS conformance still passes.
+
 - **The middleware read request bodies without a bound, so the firewall was the
   denial of service.** `captureBody` called `io.ReadAll` on a client-controlled
   stream. The engine rejects a body over `MaxBodySize` — 1 MiB by default — but

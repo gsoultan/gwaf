@@ -2734,3 +2734,33 @@ knowing the ceiling the engine applies, which is how it came to apply none.
 on the core module, and the worst bug of the cycle was one `io.ReadAll` in the
 integration layer nobody had looked at. Coverage of *attention* is a thing to
 audit, the same way coverage of tests is.
+
+## seclang: no bounds and no trust boundary are the same gap
+
+A test comment called it "a build-time tool". `Parse` is exported from a module
+anyone may import, and gateon stores user-authored SecLang in a rule DB -- a
+parse of someone else's bytes at runtime, in a shared process. Nothing in the
+package doc said which, and there were no limits at all.
+
+**The measurement decided the fix.** A total-source ceiling would have missed
+it entirely, because the cost is driven by a *single operator argument*:
+
+    real CRS, 711 KB   -> 250 rules,  55 MB
+    one 1 MB @rx        ->   1 rule, 264 MB
+    one 10 MB @pm line  ->   1 rule, 423 MB
+
+A megabyte of input is nothing; a megabyte in one pattern is a quarter of a
+gigabyte. So the bound is `MaxPatternBytes`, applied *before* compilation,
+defaulting to 64 KiB against CRS's longest argument of **8,504 bytes** -- about
+7x headroom, so no honest ruleset comes near it. MaxSourceBytes (32 MiB) and
+MaxRules (100k) bound bulk. Zero = default, negative = none.
+
+RE2 already refuses `(a{1000}){1000}` and a 2000-deep alternation, so those are
+pinned as *controls* rather than fixed -- a change of engine cannot quietly
+reintroduce a class this package is immune to.
+
+**Sizing a limit against the largest real input is what makes it shippable.**
+Guessing would have produced either a limit that breaks CRS or one that does not
+bound anything -- and my first attempt was the latter: 32 MiB source and 100k
+rules left every measured case untouched, because neither is the axis that
+amplifies.

@@ -313,6 +313,25 @@ func anyDecodedCollection(targets []types.Target) bool {
 
 // operator maps a SecLang operator onto a gwaf one.
 func (c *compiler) operator(name, arg string, negated bool) (rules.Operator, string) {
+	// A pattern bounded before it is compiled.
+	//
+	// Compiling a regex amplifies: a 1 MiB @rx argument built a program costing
+	// 264 MiB, against the 55 MiB a whole Core Rule Set costs. RE2 already
+	// refuses the classic program-size bombs -- "(a{1000}){1000}" and a
+	// two-thousand-deep alternation are both rejected -- so what is left is
+	// bulk, and bulk needs a ceiling rather than a cleverer engine.
+	//
+	// The bound is on the argument because that is what drives the cost. A
+	// limit on total source misses this entirely: one megabyte of input is
+	// nothing, and one megabyte in a single pattern is a quarter of a gigabyte.
+	//
+	// Sized against the largest pattern in the largest real ruleset: CRS's
+	// longest operator argument is 8,504 bytes, and the default here is 64 KiB.
+	if limit := c.opts.patternLimit(); limit >= 0 && len(arg) > limit {
+		return nil, fmt.Sprintf("@%s argument is %d bytes, over the %d byte limit; "+
+			"set Options.MaxPatternBytes to raise it, or a negative value for none",
+			name, len(arg), limit)
+	}
 	// A macro that survives into the operator argument would be matched as
 	// literal text, and "%{tx.allowed_methods}" appears in no request ever sent.
 	// That is not a weakened rule, it is a dead one, and the operator would be

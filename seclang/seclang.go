@@ -54,6 +54,7 @@
 package seclang
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -84,6 +85,55 @@ type Options struct {
 	// third-party engine implements and stopping at the first one imports
 	// nothing. Everything skipped is in Report.
 	SkipUntranslatable bool
+
+	// MaxSourceBytes and MaxRules bound what one parse may cost.
+	//
+	// # Why a parser needs these at all
+	//
+	// This package had no bounds and no stated trust boundary, and those two
+	// gaps are the same gap. A test comment called it "a build-time tool", but
+	// Parse is exported from a module anyone may import, and the first adopter
+	// stores user-authored SecLang in a rule database — which is a parse of
+	// somebody else's bytes at runtime, in a shared process.
+	//
+	// Measured, the amplification is what makes that matter:
+	//
+	//	real CRS, 27 files      711 KB source   →  250 rules,  55 MB,  37 ms
+	//	one 1 MB @rx pattern      1 MB source   →    1 rule,  264 MB,  59 ms
+	//	one 10 MB @pm line       10 MB source   →    1 rule,  423 MB, 109 ms
+	//
+	// A megabyte of hostile SecLang costs a quarter-gigabyte. RE2 already
+	// refuses the classic program-size bombs — `(a{1000}){1000}` and a
+	// two-thousand-deep alternation are both rejected during compilation — so
+	// what is left is bulk, and bulk is what a ceiling is for.
+	//
+	// # Why these numbers
+	//
+	// The Core Rule Set is the largest body of SecLang in existence and it is
+	// 711 KB producing 250 rules. The defaults are 32 MiB and 100,000 rules:
+	// roughly 45× and 400× the largest real ruleset, so no honest input has
+	// ever come near them, and a pathological one stops before it costs a
+	// gigabyte.
+	//
+	// Set either to a negative value for no limit, which is the right choice
+	// for a build step compiling rules you wrote yourself. Zero means the
+	// default, so a caller who never heard of these still gets them — safe by
+	// construction rather than safe if you read the docs (CLAUDE.md §2b.8).
+	MaxSourceBytes int
+	MaxRules       int
+
+	// MaxPatternBytes bounds one operator argument, which is the thing that
+	// actually amplifies. A limit on total source does not catch it: a megabyte
+	// of input is nothing, and a megabyte in a single @rx is a quarter of a
+	// gigabyte of compiled program.
+	//
+	// The largest operator argument in the Core Rule Set is 8,504 bytes. The
+	// default is 64 KiB — about seven times that — and a pattern over it is
+	// reported as untranslatable rather than compiled, so the ruleset still
+	// loads and the operator is told which rule was dropped and why.
+	//
+	// Negative for no limit; zero means the default.
+	MaxPatternBytes int
 
 	// DataFiles resolves the phrase lists @pmFromFile and @pmf refer to, so
 	// their rules can be imported with the phrases inlined.
@@ -210,13 +260,81 @@ func ParseSources(srcs []Source, opts Options) (rules.Set, Report, error) {
 	}
 	opts.SkipUntranslatable = true
 
+	if err := checkSize(srcs, opts); err != nil {
+		return nil, Report{}, err
+	}
 	directives, err := parseAll(srcs)
 	if err != nil {
 		return nil, Report{}, err
 	}
 	c := &compiler{opts: opts}
 	set := c.run(directives)
+	if err := checkRules(len(set), opts); err != nil {
+		return nil, Report{}, err
+	}
 	return set, c.report, nil
+}
+
+// Default bounds for one parse. See Options.MaxSourceBytes for why these
+// numbers: the largest real ruleset in existence is 711 KB and 250 rules.
+const (
+	defaultMaxSourceBytes = 32 << 20
+	defaultMaxRules       = 100_000
+	defaultMaxPattern     = 64 << 10
+)
+
+// patternLimit resolves MaxPatternBytes, where zero means the default and a
+// negative value means none.
+func (o Options) patternLimit() int {
+	if o.MaxPatternBytes == 0 {
+		return defaultMaxPattern
+	}
+	return o.MaxPatternBytes
+}
+
+// ErrTooLarge reports a parse that exceeded Options.MaxSourceBytes or MaxRules.
+//
+// A refusal rather than a truncation, for the same reason the engine refuses an
+// oversize body: half a ruleset is not a ruleset, and importing a prefix of
+// somebody's rules silently drops the ones at the end.
+var ErrTooLarge = errors.New("seclang: input exceeds the configured bounds")
+
+// checkSize enforces MaxSourceBytes across every source in one parse.
+func checkSize(srcs []Source, opts Options) error {
+	limit := opts.MaxSourceBytes
+	if limit == 0 {
+		limit = defaultMaxSourceBytes
+	}
+	if limit < 0 {
+		return nil
+	}
+	total := 0
+	for _, s := range srcs {
+		total += len(s.Data)
+		if total > limit {
+			return fmt.Errorf("%w: %d bytes of source against a %d byte limit; "+
+				"set Options.MaxSourceBytes to raise it, or a negative value for none",
+				ErrTooLarge, total, limit)
+		}
+	}
+	return nil
+}
+
+// checkRules enforces MaxRules on the compiled set.
+func checkRules(n int, opts Options) error {
+	limit := opts.MaxRules
+	if limit == 0 {
+		limit = defaultMaxRules
+	}
+	if limit < 0 {
+		return nil
+	}
+	if n > limit {
+		return fmt.Errorf("%w: %d rules against a %d rule limit; "+
+			"set Options.MaxRules to raise it, or a negative value for none",
+			ErrTooLarge, n, limit)
+	}
+	return nil
 }
 
 func parseAll(srcs []Source) ([]directive, error) {
@@ -247,12 +365,18 @@ func ParseSourcesStrict(srcs []Source, opts Options) (rules.Set, Report, error) 
 	}
 	opts.SkipUntranslatable = false
 
+	if err := checkSize(srcs, opts); err != nil {
+		return nil, Report{}, err
+	}
 	directives, err := parseAll(srcs)
 	if err != nil {
 		return nil, Report{}, err
 	}
 	c := &compiler{opts: opts}
 	set := c.run(directives)
+	if err := checkRules(len(set), opts); err != nil {
+		return nil, Report{}, err
+	}
 	if len(c.report.Skipped) > 0 {
 		return nil, c.report, fmt.Errorf("%w: %s", ErrUntranslatable, c.report.Skipped[0])
 	}
