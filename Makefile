@@ -171,6 +171,26 @@ bench-guard:
 bench: bench-guard
 	$(GO) test -run=XXX -bench=. -benchmem ./...
 
+## slo: hold the published latency targets, and fail when they are not met.
+##
+## This is the only target whose exit code depends on the wall-clock SLOs in
+## CLAUDE.md section 2, and it exists because until now nothing's did.
+## TestLatencyDistribution has always measured the right workloads and asserted
+## the right numbers, but it runs at a 10x advisory ceiling unless
+## GWAF_LATENCY_STRICT is set -- a deliberate and correct choice, since a shared
+## CI runner cannot support a p50 assertion (see the reasoning in
+## latency_test.go). The gap was that the one target which did set it,
+## bench-publish, piped through `|| true` for its formatting and therefore could
+## not fail, and the code comment pointed at `make bench`, which does not set it
+## and does not even run the test.
+##
+## So the strict claim was reachable only by a human reading output. Run this on
+## reference hardware; bench-guard refuses a busy machine, because a p50 taken
+## next to a running scanner is not evidence either way.
+.PHONY: slo
+slo: bench-guard
+	GWAF_LATENCY_STRICT=1 $(GO) test -run='TestLatencyDistribution|TestSLO' -v .
+
 ## bench-publish: everything docs/BENCHMARKS.md reports, with provenance.
 ##
 ## Prints the hardware and toolchain first, because a benchmark without them is
