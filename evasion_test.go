@@ -302,6 +302,24 @@ var evasions = []evasion{
 		body:   "<script>alert(document.domain)</script>",
 		header: [2]string{"Content-Type", "application/x-www-form-urlencoded"}},
 
+	// A call to a process-spawning API, in whatever language. Java was read
+	// structurally by detect/javaser and Node had rule 4021; PHP, Python, R and
+	// Groovy had nothing, and four of these are live corpus exploits.
+	// "system('ver')" is deliberately absent: it is Medium by a decision this
+	// repository already made and tested (TestMediumTierIsOptInAndReachable),
+	// because an executing call with no surrounding PHP is also a shape
+	// ordinary data takes. Rule 5015 catches it once the dial is turned; the
+	// default tier declines, and this corpus measures the default tier.
+	{name: "rce/php passthru", technique: "none", arg: "passthru('id')"},
+	{name: "rce/php shell_exec", technique: "none", arg: "shell_exec('id')"},
+	{name: "rce/php proc_open", technique: "none", arg: "proc_open('id',$d,$p)"},
+	{name: "rce/python os.system", technique: "none", arg: "os.system('id')"},
+	{name: "rce/python subprocess", technique: "none", arg: "subprocess.check_output(['id'])"},
+	// R's spelling is Medium for the same reason -- the capability is named by
+	// "system(", which is the word rather than the API. Rule 5015 reads the
+	// nested call as the argument; the default tier declines.
+	{name: "rce/groovy execute", technique: "none", arg: `"id".execute()`},
+
 	// Node.js code injection. A JavaScript payload stays inside JavaScript
 	// syntax, so it carries no shell grammar for shelli, no template syntax for
 	// ssti and no PHP for phpi -- it was outside every detector until rule 4021.
@@ -1051,6 +1069,19 @@ var benignTraffic = []benignCase{
 	{name: "regex with dollar", arg: "^[a-z]+$"},
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
+
+	// ---- writing about running a process, rather than running one ----------
+	//
+	// "system(" and "exec(" are ordinary words -- a SQL keyword, a make
+	// directive, and what every article about this attack contains -- so rule
+	// 4023 pairs them with the quoted command or the nested call that a real
+	// invocation carries.
+	{name: "prose about system()", arg: "call system() to run a command"},
+	{name: "prose about exec", arg: "the exec method spawns a process"},
+	{name: "sql exec keyword", arg: "EXEC sp_helpdb"},
+	{name: "identifier argument", arg: "the system(config) initializes early"},
+	{name: "empty call", arg: "system()"},
+	{name: "docs link about subprocess", arg: "https://docs.python.org/3/library/subprocess.html"},
 
 	// ---- admin verbs in a parameter called cmd -----------------------------
 	//

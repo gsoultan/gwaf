@@ -156,12 +156,18 @@ const (
 	// detect/phpi. Found by dumping the corpus's RCE misses; see nodei.go.
 	IDNodeCodeInjection types.RuleID = 4021
 
+	// A call to a process-spawning API in any language. Java is read
+	// structurally by detect/javaser and Node has 4021; PHP, Python, R and
+	// Groovy had nothing. See procspawn.go.
+	IDProcessSpawn types.RuleID = 4023
+
 	// The Medium tier, in its own 5xxx band so an exception written against a
 	// default-tier rule can never accidentally silence the opt-in one, and so a
 	// reader of an audit log can tell at a glance which bar a finding cleared.
 	IDSQLiSuspicious   types.RuleID = 5010
 	IDXSSSuspicious    types.RuleID = 5011
 	IDShelliSuspicious types.RuleID = 5012
+	IDProcessSpawnWeak types.RuleID = 5015
 	IDPHPSuspicious    types.RuleID = 5013
 	IDJavaSuspicious   types.RuleID = 5014
 
@@ -1392,6 +1398,37 @@ func requestRules() rules.Set {
 			Confidence: types.High,
 			Msg:        "JavaScript injected into a script context",
 			Tags:       []string{"xss", "javascript", "owasp-a03"},
+		},
+		{
+			ID:         IDProcessSpawnWeak,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Medium: "system(" and "exec(" name the capability and are also
+			// ordinary words. TestMediumTierIsOptInAndReachable already fixed
+			// where that line sits, and this rule follows it rather than
+			// relitigating it.
+			Op:         processSpawnSuspicious(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.Medium,
+			Msg:        "Process-spawning call (suspicious structure)",
+			Tags:       []string{"rce", "owasp-a03", "medium"},
+		},
+		{
+			ID:         IDProcessSpawn,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// Two tiers: the APIs that name one thing carry the verdict alone,
+			// and "system(" / "exec(" need the quoted command beside them,
+			// because those two words are ordinary. See procspawn.go.
+			Op:         processSpawn(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "Process-spawning call in request value",
+			Tags:       []string{"rce", "owasp-a03"},
 		},
 		{
 			ID:         IDNodeCodeInjection,

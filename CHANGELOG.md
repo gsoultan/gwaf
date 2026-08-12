@@ -189,7 +189,33 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Added
 
-- **`core.CommandSinkRule(id)` and `shelli.SinkOperator()`** — a command line in
+- **Rules 4023 and 5015, process-spawning calls in any language.** RCE
+  302/378 → **306/378**, tuned detection **92.7%**.
+
+  Java was already read structurally by `detect/javaser` and Node got rule 4021;
+  every other language was open. Probing each in turn found PHP `system(`,
+  `passthru(`, `shell_exec(`, `popen(`; Python `os.system(` and `subprocess`;
+  R `system(paste(...))`; and Groovy `.execute()` all undetected — four of them
+  live corpus exploits, and none an encoding or scheduling problem. The payload
+  is a plain call to a documented API and nothing was looking for it.
+
+  `detect/phpi` declines these deliberately: it requires a danger call to be
+  attached to surrounding PHP, which is right for a detector reading PHP
+  structure. This rule asks a different question — "does this value name a way
+  to start a process" — which is about the API rather than the language wrapped
+  around it.
+
+  **Split across two tiers along a line this repository had already drawn.**
+  The first draft blocked `system('id')` at High and
+  `TestMediumTierIsOptInAndReachable` caught it: that test names the payload as
+  "an executing call with no surrounding PHP… a shape ordinary data takes, which
+  is exactly why the default declines to block it". So an API naming one thing
+  (`passthru(`, `os.system(`) is High and ships enabled, while a word that also
+  means something else (`system(`, `exec(`, `spawn(`) is Medium and reachable
+  through `WithMinConfidence` — paired there with the quoted command or nested
+  call a real invocation carries.
+
+- **`core.CommandSinkRule(id)` and `shelli.SinkOperator()` — a command line in
   a parameter whose *name* says the application hands it to a shell.
 
   **Nothing in the detector was broken.** `detect/shelli` scores `id` at exactly

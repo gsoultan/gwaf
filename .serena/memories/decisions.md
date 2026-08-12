@@ -2462,3 +2462,40 @@ a different legitimate cause. The trend is the finding: that number grows with
 the ruleset, which is exactly what it cannot distinguish from a prefilter
 regression. `TestRuleEvaluationDoesNotScaleWithRuleset` measures the shape of
 the curve rather than a point on it and does not degrade; prefer it.
+
+## Plan item "RCE is encoding work" was wrong, and measuring said so
+
+The prediction was that the remaining RCE misses were an encoding layer: XML
+field extraction and `\uXXXX` outside JSON. **Both already worked.** Probing
+found XML element text, XML attributes and SOAP envelopes all extracted and
+inspected (5/5), and `<script>` in a query and `UN...`
+in a form body both blocked.
+
+The real gap was a whole class with no detector: **process-spawning APIs.**
+Java was read structurally by javaser and Node had 4021; PHP, Python, R and
+Groovy had nothing. `system('ver')`, `passthru('id')`, `os.system('id')`,
+`subprocess.check_output(...)`, `system(paste('id'))` and `"id".execute()` were
+all undetected, four of them live corpus exploits.
+
+**Probe before building, even when the plan is your own.** The encoding work
+would have been a week spent on something that already worked.
+
+## The tier line was already drawn, and a test held it
+
+Rule 4023's first draft blocked `system('id')` at High.
+`TestMediumTierIsOptInAndReachable` failed, naming the payload as "an executing
+call with no surrounding PHP... a shape ordinary data takes, which is exactly
+why the default declines to block it".
+
+That decision was already made and measured, so the rule was split along it
+rather than relitigated: an API naming one thing (`passthru(`, `os.system(`,
+`subprocess.run(`) is High and default; a word that also means something else
+(`system(`, `exec(`, `spawn(`) is Medium behind WithMinConfidence, paired with
+the quoted command or nested call a real invocation carries.
+
+**A module name is never the signal -- again.** The first draft listed
+`subprocess.` and `child_process` in the *self-evidencing* tier, which matched a
+Python docs link and a sentence about shelling out. Rule 4021's own
+documentation says exactly this, and the benign cases written *for 4021* are
+what caught it. The subprocess API is listed by call now; child_process is left
+to 4021, which pairs it properly.
