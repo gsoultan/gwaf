@@ -121,6 +121,15 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **A urlencoded body with no `=` was shown to value-reading rules as empty.**
+  `ParseForm`'s own comment said such a token is "worth inspecting either way"
+  and the code then emitted it with an empty value, so only rules targeting
+  `ARGS_NAMES` ever saw it. `POST /` with `<script>alert(1)</script>` — one
+  nameless parameter — was therefore invisible to the XSS rules, while the same
+  bytes with *no* `Content-Type` were caught, because that path falls back to
+  inspecting the raw body. The token is now emitted as both name and value,
+  since which of the two it is depends on a parser gwaf does not run.
+
 - **Every corpus measurement in the repository ran with the off-origin redirect
   and SSRF rules inert.** v0.4.1 correctly made them require `WithOrigins` —
   the fix for a bypass that read the attacker-supplied `Host` header — and no
@@ -152,6 +161,40 @@ semver, and the four extension interfaces are frozen hard.
   footing.
 
 ### Added
+
+- **Rule 3012, JavaScript injected into a script context** — and with it XSS goes
+  from 962/1007 to **993/1007**, exactly level with Coraza + CRS, taking tuned
+  detection to **91.4%** against their 89.7%.
+
+  Found the same way rule 4021 was: by dumping the 45 XSS misses and reading
+  them. Two thirds were a payload reflected *inside a script*, where there is no
+  HTML for `detect/xss` to read — the attacker does not need a tag, only to end
+  the statement they landed in and start their own:
+
+      min=1026553;alert(document.domain)//772    break out of a numeric literal
+      x=};alert(1)//                             close a block
+      p=";alert(document.domain);"               close a string
+      loginMode=alert(document.domain)           land in an expression already
+      backurl=1 onmouseover=alert(1) y=          assign a handler, no tag at all
+
+  A call alone is **not** the signal: "alert(" is in every article about XSS, and
+  matching it blocks the people fixing the bug. The call needs injection
+  evidence beside it — a handler assignment, a terminator (`;`, `}`, `)`)
+  immediately before, or a call on `document.domain`/`document.cookie`.
+
+  Two narrowings came from measurement rather than caution. Quotes were in the
+  terminator set and had to leave: a bare quote before a call opens a string
+  rather than escaping one, so `&quot;alert(1)&quot; is the classic payload`
+  matched under the HTML-entity reading. And a `;` closing a character reference
+  is not a statement terminator — `&lt;script&gt;alert(1)` tripped the rule for
+  the right verdict by the wrong reading, which also cost the correct
+  `Interpretation()`.
+
+  Scoped to `TargetArgs` rather than `argTargets`, and that is a latency
+  decision: the chain it needs over every collection added a (chain × target)
+  combination worth ~17% of the benign POST budget. Scoped, it shares rule
+  1013's existing combination and costs 2.1% with zero allocations. This is the
+  measurement that moved `CRLFHeaderRule` out of core, rediscovered.
 
 - **Fuzz targets for `SniffMultipart` and `scan.Windows`**, both shipped in this
   same cycle without them. `SniffMultipart` parses attacker-controlled bytes to

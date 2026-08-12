@@ -229,6 +229,28 @@ var evasions = []evasion{
 	{name: "rce/bin sh", technique: "wrapper", arg: "/bin/sh -c id"},
 	{name: "rce/encoded bin sh", technique: "wrapper", arg: "%2Fbin%2Fsh%20-c%20id"},
 
+	// JavaScript reflected into a script context, where there is no HTML for
+	// detect/xss to read. These are the real corpus misses reduced to their
+	// payload; see ruleset/core/jsinject.go.
+	{name: "xss/js breakout semicolon", technique: "js-context",
+		target: "/shop?min=1026553;alert(document.domain)//772"},
+	{name: "xss/js breakout block", technique: "js-context", target: "/x?p=};alert(1)//"},
+	{name: "xss/js breakout string", technique: "js-context",
+		target: `/x?p=";alert(document.domain);"`},
+	{name: "xss/js breakout call", technique: "js-context",
+		target: "/x?itemid=1); alert(document.domain);/*x"},
+	{name: "xss/js bare call on identity", technique: "js-context",
+		target: "/x?loginMode=alert(document.domain)"},
+	{name: "xss/handler unquoted attribute", technique: "js-context",
+		target: "/x?backurl=1 onmouseover=alert(document.domain) y="},
+	{name: "xss/handler autofocus", technique: "js-context",
+		target: "/x?back=xss onfocus=alert(document.domain) autofocus= xss"},
+	{name: "xss/handler onload", technique: "js-context",
+		target: "/x?xmlcontrol=body onload=alert(document.domain)"},
+	{name: "xss/nameless form body", technique: "body",
+		body:   "<script>alert(document.domain)</script>",
+		header: [2]string{"Content-Type", "application/x-www-form-urlencoded"}},
+
 	// Node.js code injection. A JavaScript payload stays inside JavaScript
 	// syntax, so it carries no shell grammar for shelli, no template syntax for
 	// ssti and no PHP for phpi -- it was outside every detector until rule 4021.
@@ -979,6 +1001,26 @@ var benignTraffic = []benignCase{
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
 
+	// ---- writing about JavaScript, rather than injecting it ----------------
+	//
+	// Rule 3012 requires a call *plus* injection evidence for these. A page that
+	// documents XSS names alert() constantly, and the corpus already carries one
+	// accepted false positive of exactly that shape.
+	{name: "prose about alert", arg: "call alert() to show a message"},
+	{name: "tutorial line", arg: "use alert(msg) for a quick debug"},
+	{name: "escaped quote before call", arg: "&quot;alert(1)&quot; is the classic payload"},
+	// Deliberately absent: "&lt;script&gt; tags are stripped". Under the
+	// HTML-entity interpretation that decodes to a live script tag, and an
+	// origin that decodes and reflects it is vulnerable -- so rule 3010 blocking
+	// it is the documented trade, not a regression. It is the same accepted
+	// false positive the head-to-head corpus already carries as "a security blog
+	// post quoting a payload". Asserting it passes here would quietly reverse a
+	// decision made elsewhere.
+	{name: "function named onchange", arg: "the onchange handler fires on blur"},
+	{name: "word ending in on", arg: "button=submit&reason=alert fatigue"},
+	{name: "css transition", arg: "transition=all 0.3s ease-in-out"},
+	{name: "json with alert key", body: `{"alert":"disk usage high","level":3}`},
+
 	// ---- writing about Node, rather than calling it ------------------------
 	//
 	// The pairing in rule 4021 exists for these. A site that discusses Node --
@@ -1672,9 +1714,25 @@ func TestBenignTrafficBoundsRuleEvaluation(t *testing.T) {
 	// absolute URL contains "://" too, so it was always a candidate. The bound
 	// had simply never been exercised against a value carrying a URL.
 	//
+	// Raised again, 10 to 12, when rule 3012 landed and the corpus gained
+	// "&quot;alert(1)&quot; is the classic payload" -- prose about XSS, chosen
+	// to be as adversarial as a benign value gets.
+	//
+	// Attributed rather than assumed, since the raise arrives with the rule that
+	// caused it. Measured on this WAF:
+	//
+	//	"call alert() to show a message"                 2   (3012 and its mirror)
+	//	"the onchange handler fires on blur"             0
+	//	"&quot;alert(1)&quot; is the classic payload"   12
+	//
+	// So the rule's own literal costs exactly two candidates, which is the floor
+	// for a rule plus its body counterpart. The 12 is the entity encoding: that
+	// value is re-read under the HTML-entity interpretation, and each reading
+	// nominates independently. Both rules run and both reject.
+	//
 	// The number is a smoke alarm; TestRuleEvaluationDoesNotScaleWithRuleset is
 	// the actual invariant.
-	const maxEvaluated = 10
+	const maxEvaluated = 12
 
 	for _, b := range benignTraffic {
 		t.Run(b.name, func(t *testing.T) {

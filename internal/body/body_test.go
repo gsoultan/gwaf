@@ -233,7 +233,12 @@ func TestParseForm(t *testing.T) {
 		{"percent decode", "q=hello%20world", map[string]string{"q": "hello world"}},
 		{"encoded name", "a%2Eb=1", map[string]string{"a.b": "1"}},
 		{"empty value", "a=&b=2", map[string]string{"a": "", "b": "2"}},
-		{"no equals", "debug&b=2", map[string]string{"debug": "", "b": "2"}},
+		// A token with no '=' is emitted as both name and value, because which
+		// of the two it is depends on a parser gwaf does not run. Asserted as
+		// "" until a POST body of "<script>alert(1)</script>" -- one nameless
+		// parameter -- was shown to the value-reading XSS rules as an empty
+		// string and passed.
+		{"no equals", "debug&b=2", map[string]string{"debug": "debug", "b": "2"}},
 		{"encoded payload", "c=%3Cscript%3E", map[string]string{"c": "<script>"}},
 		{"email", "e=user%40example.com", map[string]string{"e": "user@example.com"}},
 		{"repeated key", "a=1&a=2", map[string]string{"a": "2"}},

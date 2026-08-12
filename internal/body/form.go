@@ -35,7 +35,19 @@ func (p *Parser) ParseForm(src []byte, fn Emit) error {
 		if i := bytes.IndexByte(pair, '='); i >= 0 {
 			rawName, rawValue = pair[:i], pair[i+1:]
 		} else {
-			rawName = pair
+			// No '=' at all: the token is emitted as both the name and the
+			// value, because which of the two it is depends on a parser gwaf
+			// does not run.
+			//
+			// The comment above already said such a token is "worth inspecting
+			// either way" and the code then handed it over with an empty value,
+			// so only rules targeting ARGS_NAMES ever saw it. That is most of a
+			// body when the body has no '=' in it at all: POST / with
+			// "<script>alert(1)</script>" became one nameless parameter, and the
+			// XSS rules — which read values — were shown an empty string. The
+			// same bytes with no Content-Type were caught, because that path
+			// falls back to inspecting the raw body.
+			rawName, rawValue = pair, pair
 		}
 
 		if len(rawName) > p.limits.MaxKeyLen {

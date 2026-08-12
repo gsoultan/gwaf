@@ -418,7 +418,7 @@ func (tx *Transaction) addQueryArguments(query string) {
 // origins differ on whether "?debug" sets a flag, and a name an attacker chose
 // is worth inspecting either way. This mirrors body.ParseForm.
 func (tx *Transaction) addQueryPair(pair string) {
-	name, value := pair, ""
+	name, value := pair, pair
 	if i := indexByte(pair, '='); i >= 0 {
 		name, value = pair[:i], pair[i+1:]
 	}

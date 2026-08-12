@@ -169,9 +169,14 @@ const (
 	IDDoubleExtension     types.RuleID = 4017
 	IDHeaderCRLF          types.RuleID = 1012
 	IDScriptURI           types.RuleID = 3011
-	IDSQLiSemantic        types.RuleID = 2010
-	IDXSSSemantic         types.RuleID = 3010
-	IDScannerUserAgent    types.RuleID = 5001
+
+	// JavaScript reflected into a script context, where there is no HTML for
+	// detect/xss to read. Found by dumping the corpus's XSS misses; see
+	// jsinject.go.
+	IDJSContextInjection types.RuleID = 3012
+	IDSQLiSemantic       types.RuleID = 2010
+	IDXSSSemantic        types.RuleID = 3010
+	IDScannerUserAgent   types.RuleID = 5001
 
 	// 6,000-6,999: response-phase leak detection.
 	IDLeakPrivateKey types.RuleID = 6001
@@ -1327,6 +1332,42 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "Protocol-smuggling URL scheme in request value",
 			Tags:       []string{"ssrf", "owasp-a10"},
+		},
+		{
+			ID:    IDJSContextInjection,
+			Phase: types.PhaseRequestHeaders,
+			// Arguments only, and that is a latency decision rather than a
+			// coverage one. This chain over the whole of argTargets adds a
+			// (chain x target) combination for every collection rule 1013 does
+			// not already cover, and every value gets materialised again under
+			// it -- benign GET went 927ns to 1,405ns and benign POST JSON
+			// 16.5us to 25.2us when it was written that way. That is the same
+			// measurement that moved CRLFHeaderRule out of core: a rule may not
+			// spend that much of the budget on requests it cannot match.
+			//
+			// Scoped to TargetArgs the combination already exists for rule 1013
+			// and costs nothing, and nothing is lost: every payload of this
+			// shape arrives as an argument value, including the ones written
+			// with no '=' at all, which are recorded as both name and value.
+			Targets: []types.Target{{Kind: types.TargetArgs}},
+			// Deliberately not decodeChain. RemoveWhitespace welds the token
+			// before a handler onto its name -- "xss onfocus=" becomes
+			// "xssonfocus=" -- and the boundary before "on" is exactly what
+			// separates a handler from a word that happens to end in one.
+			// This chain is a prefix of decodeChain and is already materialised
+			// for rules 1013 and 4015, so sharing it costs nothing: stages
+			// resumes a chain from the longest prefix it already computed.
+			Transforms: []rules.Transform{transform.URLDecode, transform.Lowercase},
+			// A call plus evidence of injection: a handler assignment, a
+			// breakout into the call, or a call on the document identity. The
+			// call alone is what every article about XSS contains, so it is
+			// never sufficient on its own. See jsinject.go.
+			Op:         jsContextInjection(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityError,
+			Confidence: types.High,
+			Msg:        "JavaScript injected into a script context",
+			Tags:       []string{"xss", "javascript", "owasp-a03"},
 		},
 		{
 			ID:         IDNodeCodeInjection,

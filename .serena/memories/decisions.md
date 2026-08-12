@@ -2167,3 +2167,44 @@ are attacker-supplied.
 
 `discrepancy_test.go` is now 29 framings. The hit rate on this axis across two
 rounds is 3 real bypasses; the payload corpus found none of them.
+
+## Reading the XSS misses closed a 31-request gap in one pass
+
+Dumping the 45 XSS misses showed two thirds were **JavaScript reflected into a
+script context** -- no HTML at all, so detect/xss (which reads tags, attributes,
+schemes) could not see any of them. Same shape as the Node.js finding: a payload
+that stays inside one language no detector reads is outside all of them.
+
+Rule 3012. XSS went 962/1007 -> **993/1007**, exactly level with CRS; tuned
+detection 90.0% -> 91.4%. Zero false positives on the 10,473-request calibration
+corpus.
+
+**Three narrowings, all from measurement:**
+
+1. A call alone is not the signal. "alert(" is in every article about XSS. It
+   needs injection evidence beside it: a handler assignment, a terminator
+   (`;`, `}`, `)`) immediately before, or a call on document.domain/cookie.
+2. **Quotes are not terminators.** A bare quote before a call *opens* a string
+   rather than escaping one, so `&quot;alert(1)&quot; is the classic payload`
+   matched under the HTML-entity reading. Removed `'`, `"`, `{`, `,`, `+`;
+   nothing the corpus carries needed them.
+3. **A `;` closing a character reference is not a statement terminator.**
+   `&lt;script&gt;alert(1)` matched -- right verdict, wrong reading -- and it
+   also destroyed the correct `Interpretation()`, which is how it was caught.
+
+## Chain x target is the expensive axis, rediscovered the hard way
+
+Rule 3012 needs a chain that keeps whitespace (RemoveWhitespace welds
+"xss onfocus=" into "xssonfocus=" and the boundary before "on" is the whole
+signal). Written with `Targets: argTargets` that cost **~17% of the benign POST
+budget** -- a new (chain x target) combination for every collection, every value
+materialised again.
+
+Scoped to `{TargetArgs}` it shares rule 1013's existing combination and costs
+**2.1%, zero allocations**. This is the same measurement that moved
+CRLFHeaderRule out of core, arrived at independently.
+
+**Also: benchmark on a settled machine or measure paired.** Mid-session readings
+showed 51% GET / 53% POST regressions and a phantom 1 B/op allocation. HEAD
+measured 926ns for benign GET earlier and 1353ns at the same moment, so the
+machine had moved, not the code. Six paired samples gave the real answer.
