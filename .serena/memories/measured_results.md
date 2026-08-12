@@ -374,3 +374,41 @@ that actually ships, not only at the data structure behind it.
 
 ## Quality
 Coverage 83.6%. staticcheck + govulncheck clean. Race clean. Zero deps.
+
+## Fuzz corpus blindness sweep — 2026-08-13
+
+Run after the fold panic, whose root cause was a *corpus* gap rather than a code
+one: `FuzzBuild` had covered `foldStringConcatInto` since the day it was written
+and not one of its seeds contained a quote, so it took a fuzz run in another
+module to reach the crash. The question this answers is whether any other target
+is blind to a class it nominally handles.
+
+Method: run each target for a fixed 25s and count `new interesting`. A corpus
+that already covers its input classes finds few; one blind to a class finds
+hundreds. `FuzzBuild` found **433** in 40s once quote seeds were added, which is
+the reference for what blindness looks like.
+
+Fifteen targets across `internal/body`, `internal/prefilter`, `rules/transform`,
+`rules/op`, `detect/*`, `seclang`, `schema/openapi`:
+
+| target | new (25s) | verdict |
+|---|---|---|
+| `schema/openapi` FuzzParseDocument | 126 | large input space |
+| `seclang` FuzzParse | 55 | large input space |
+| `internal/body` FuzzSniffMultipart | 33 | fine |
+| `detect/sqli` FuzzAnalyze | 12 | fine |
+| everything else | 0–7 | fine |
+
+**No crashes, and no target shows blindness.** The two high counts converge under
+longer runs, which is the distinguishing test: `schema/openapi` found 126 in the
+first 25s and only 27 more in the next 65s; `seclang` went 55 → 103 over 3.6x the
+time. Front-loaded and flattening is a fuzzer exploring a wide grammar. Blindness
+looks different — a sustained rate, because a whole class is being discovered
+from scratch.
+
+Two entries came back CRASH in the first sweep and both were false positives: the
+script grepped for "FAIL" in output that legitimately contains it. If this is
+re-run, match on `panic:` or on the `Failing input written` line instead.
+
+Worth re-running when a detector gains a new input class, which is the event that
+created the gap the first time. Not worth re-running on a schedule.
