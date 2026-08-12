@@ -1,44 +1,649 @@
-# gwaf benchmark baseline
-#
-# Hardware: Apple M-series (darwin/arm64, 15 usable cores), Go 1.26.5.
-# Re-run with: make bench-save
-#
-# These are means from `go test -bench`, not p50s. A mean at or below a p50
-# target is the stronger claim, so meeting the SLO here means meeting it.
-# Published, reproducible benchmarks with full methodology remain a separate
-# deliverable (PLAN.md M5.2).
-#
-# EVERY SLO IN CLAUDE.md §2 IS MET.
-#
-#   Benign GET, no body        target p50 < 2us,  0 allocs   -> 0.74us, 0 allocs
-#   Benign POST, 1 KiB JSON    target p50 < 15us, < 4 KB     -> 13.0us, 0 B
-#   Ruleset scaling 10 -> 10k  target sub-linear             -> flat, ~240ns
-#   Benign traffic             target 0 rules evaluated      -> 0
-#   Heap growth under load     target 0                      -> 0 allocs
-#
-# The POST JSON figure had never met its target before: this file previously
-# recorded 30.3us without flagging it, and the measurement before plan pruning
-# was 16.4us. It was closed by evaluating fewer rules rather than making each
-# one cheaper --
-#
-#   transform-prefix reuse  (internal/engine/stages.go)   -11%
-#   phase pruning           (mirrors-only body phase)      -7%
-#   target pruning          (ChainGroup.Reads)            -20%
-#
-# Target pruning is the largest and the simplest: a chain group records which
-# target kinds its rules read, and a value whose kind no rule names is skipped
-# before the transform and the automaton scan rather than after the operator.
-
-BenchmarkBenignGET-15            	 1622575	       734.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignPOSTJSON-15       	   93204	     12831 ns/op	       0 B/op	       0 allocs/op
-BenchmarkBenignLargeBody-15      	     153	   7766325 ns/op	 135.01 MB/s	 2177107 B/op	       4 allocs/op
-BenchmarkAttack-15               	 1323690	       910.0 ns/op	      64 B/op	       4 allocs/op
-BenchmarkManyArgs-15             	   17097	     67453 ns/op	       8 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10-15         	 5122070	       233.1 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=100-15        	 5150806	       237.9 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=1000-15       	 5008819	       237.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRulesetScaling/rules=10000-15      	 5059477	       237.0 ns/op	       0 B/op	       0 allocs/op
-BenchmarkPrefilterOnly-15                   	 2193981	       549.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkConcurrent-15                      	29158975	        40.56 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSchemaSpecialized/with_schema-15   	 1303435	       920.5 ns/op	       0 B/op	       0 allocs/op
-BenchmarkSchemaSpecialized/without_schema-15         	  801301	      1544 ns/op	       0 B/op	       0 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf
+cpu: Apple M5 Pro
+BenchmarkBenignGET-15              	 1241335	       963.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1237024	       971.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1233579	       972.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1229446	       975.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1230948	       977.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1213963	       986.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1223302	       979.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1215154	       987.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1203688	       998.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignGET-15              	 1202462	       997.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   65799	     18303 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   64945	     18456 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   65738	     18472 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   64905	     18236 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   65882	     18239 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   66540	     18091 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   66307	     18336 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   65266	     18319 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   66200	     18125 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignPOSTJSON-15         	   66444	     18147 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBenignLargeBody-15        	      56	  20698153 ns/op	  50.66 MB/s	 2235363 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      57	  20464021 ns/op	  51.24 MB/s	 2233944 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      57	  20567915 ns/op	  50.98 MB/s	 2233944 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      56	  20479331 ns/op	  51.20 MB/s	 2235326 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      57	  20283791 ns/op	  51.69 MB/s	 2233944 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      57	  20181999 ns/op	  51.95 MB/s	 2233944 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      56	  20156691 ns/op	  52.02 MB/s	 2235326 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      57	  20206159 ns/op	  51.89 MB/s	 2233944 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      55	  20366975 ns/op	  51.48 MB/s	 2236796 B/op	       5 allocs/op
+BenchmarkBenignLargeBody-15        	      57	  20396814 ns/op	  51.41 MB/s	 2233944 B/op	       5 allocs/op
+BenchmarkAttack-15                 	 1000000	      1061 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1062 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1052 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1073 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1061 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1053 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1046 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1064 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1040 ns/op	      64 B/op	       4 allocs/op
+BenchmarkAttack-15                 	 1000000	      1137 ns/op	      64 B/op	       4 allocs/op
+BenchmarkManyArgs-15               	   12086	     99176 ns/op	      14 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12344	     96922 ns/op	      14 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12247	     97609 ns/op	      14 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12699	     94640 ns/op	      13 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12488	     95921 ns/op	      14 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12426	     96436 ns/op	      14 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12494	     95889 ns/op	      14 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12517	     95593 ns/op	      14 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12615	     95021 ns/op	      13 B/op	       0 allocs/op
+BenchmarkManyArgs-15               	   12644	     95048 ns/op	      13 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4752676	       253.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4718751	       253.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4757004	       251.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4736288	       253.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4748498	       253.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4720753	       254.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4744107	       253.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4701476	       254.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4740475	       251.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10-15         	 4800877	       250.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4753623	       251.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4783988	       251.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4794577	       248.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4828314	       248.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4844287	       248.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4858480	       248.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4878256	       247.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4807238	       251.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4777750	       254.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=100-15        	 4728655	       252.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4823935	       250.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4752440	       252.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4692442	       254.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4826743	       248.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4819422	       248.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4918414	       244.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4867491	       246.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4897106	       246.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4866471	       246.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=1000-15       	 4907334	       245.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4901755	       245.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4882780	       246.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4881969	       245.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4881694	       246.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4813878	       249.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4806741	       249.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4784391	       249.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4842273	       247.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4869589	       248.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRulesetScaling/rules=10000-15      	 4835646	       249.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1341456	       892.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1356126	       884.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1347891	       890.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1347643	       888.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1358031	       883.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1351100	       886.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1347550	       891.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1310965	       911.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1340839	       898.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPrefilterOnly-15                   	 1328352	       899.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	21537073	        57.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	23081398	        54.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	20963612	        51.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	19910746	        61.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	21706131	        51.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	20926734	        53.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	18200902	        58.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	22588233	        73.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	15870530	        73.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConcurrent-15                      	15513061	        86.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1156 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1142 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1128 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1128 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1149 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1142 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1150 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1135 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1131 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/with_schema-15   	 1000000	      1141 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  595922	      2035 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  579001	      2048 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  585668	      2039 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  586503	      2068 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  578535	      2058 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  576457	      2059 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  585986	      2051 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  591729	      2046 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  579012	      2050 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSchemaSpecialized/without_schema-15         	  587714	      2039 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStrixBenignGET-15                           	  422216	      2831 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  426434	      2839 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  422402	      2831 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  422060	      2827 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  420157	      2840 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  423050	      2864 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  420100	      2916 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  411360	      2827 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  423810	      2819 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignGET-15                           	  424459	      2819 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   95306	     12506 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   95090	     12577 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   95731	     12555 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   95695	     12588 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   94998	     12573 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   94110	     12707 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   92902	     12611 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   95912	     12535 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   95984	     12539 ns/op	      16 B/op	       2 allocs/op
+BenchmarkStrixBenignPOSTJSON-15                      	   95725	     12458 ns/op	      16 B/op	       2 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf	180.034s
+PASS
+ok  	github.com/gsoultan/gwaf/audit	0.542s
+PASS
+ok  	github.com/gsoultan/gwaf/calibrate	0.436s
+PASS
+ok  	github.com/gsoultan/gwaf/cmd/gwaf	0.437s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/graphql
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	 2209522	       538.8 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2236581	       537.0 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2228359	       537.3 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2246070	       533.5 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2248048	       534.1 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2239058	       533.1 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2258665	       531.3 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2257388	       532.1 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2251375	       532.7 ns/op	     808 B/op	      16 allocs/op
+BenchmarkAnalyzeBenign-15    	 2254188	       531.5 ns/op	     808 B/op	      16 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/graphql	12.490s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/javaser
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	 3068582	       378.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3242210	       370.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3231331	       371.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3236116	       371.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3241035	       370.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3234456	       370.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3240134	       371.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3234658	       370.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3242516	       370.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3212690	       371.2 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/javaser	12.461s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/ldapi
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	32015254	        37.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	32261533	        36.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	33723850	        36.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	32526458	        36.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	34155516	        36.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	32368423	        36.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	34103745	        35.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	34131148	        35.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	34041667	        36.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	34241852	        36.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	55369600	        21.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	55439414	        21.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	54234836	        21.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	55502023	        21.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	55721838	        21.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	55094204	        21.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	55014429	        21.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	54673128	        22.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	55620465	        22.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	54836148	        22.21 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/ldapi	24.710s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/nosqli
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	147319890	         8.047 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	151800415	         7.905 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	152577397	         7.881 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	150880742	         7.924 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	151459135	         7.934 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	151349167	         7.922 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	152255731	         7.870 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	152196254	         7.891 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	150657872	         7.952 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	151304512	         7.945 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	63434025	        18.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	65496076	        17.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	66295898	        17.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	67954818	        17.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	65163825	        17.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	66566354	        18.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	65843924	        18.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	66708358	        18.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	66685189	        18.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	64130538	        17.99 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/nosqli	24.329s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/phpi
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	 1172422	      1014 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1203168	       997.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1203019	       999.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1000000	      1003 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1000000	      1004 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1000000	      1006 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1000000	      1008 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1000000	      1005 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1000000	      1011 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 1000000	      1009 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/phpi	11.200s
+PASS
+ok  	github.com/gsoultan/gwaf/detect/promptinjection	0.426s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/shelli
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	 4247240	       282.8 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 3881007	       295.9 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4255632	       288.2 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4293877	       278.8 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4306732	       278.5 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4301990	       278.2 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4330681	       277.8 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4340088	       277.4 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4292503	       281.2 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeBenign-15    	 4287651	       279.0 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6840648	       177.4 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6804572	       175.7 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6876556	       175.7 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6822385	       176.1 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6848426	       176.0 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6826311	       175.3 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6826804	       176.1 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6871564	       175.4 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6910671	       174.8 ns/op	       3 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 6833751	       175.4 ns/op	       3 B/op	       1 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/shelli	25.024s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/sqli
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	 2242076	       531.2 ns/op	 109.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2291967	       517.2 ns/op	 112.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2268867	       531.1 ns/op	 109.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2239620	       533.7 ns/op	 108.67 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2283048	       531.9 ns/op	 109.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2216019	       562.1 ns/op	 103.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2180940	       561.6 ns/op	 103.28 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2069312	       560.7 ns/op	 103.44 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2178549	       540.7 ns/op	 107.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2288803	       524.2 ns/op	 110.63 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1591767	       752.7 ns/op	  70.41 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1597182	       749.4 ns/op	  70.72 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1581775	       759.0 ns/op	  69.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1591701	       758.7 ns/op	  69.86 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1567132	       759.4 ns/op	  69.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1540809	       775.8 ns/op	  68.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1561780	       765.5 ns/op	  69.23 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1593733	       749.3 ns/op	  70.73 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1592301	       755.9 ns/op	  70.11 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1580676	       753.4 ns/op	  70.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1378878	       870.1 ns/op	  67.81 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1355894	       924.2 ns/op	  63.84 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1387376	       864.1 ns/op	  68.28 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1397791	       857.8 ns/op	  68.78 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1407645	       853.4 ns/op	  69.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1393945	       871.4 ns/op	  67.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1280030	       921.7 ns/op	  64.01 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1400272	       856.2 ns/op	  68.91 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1411390	       852.0 ns/op	  69.25 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeJSON-15      	 1379536	       868.0 ns/op	  67.97 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/sqli	36.469s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/ssti
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	 3534676	       334.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3607844	       333.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3590520	       334.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3604444	       332.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3597792	       332.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3590823	       332.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3599005	       334.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3581078	       333.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3572190	       333.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 3613501	       332.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 1456971	       822.5 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1459040	       821.8 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1464506	       819.7 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1461478	       821.9 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1457422	       822.6 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1453600	       824.8 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1460989	       820.6 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1458410	       822.3 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1458766	       824.4 ns/op	       8 B/op	       1 allocs/op
+BenchmarkAnalyzeAttack-15    	 1450797	       827.2 ns/op	       8 B/op	       1 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/ssti	24.448s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/detect/xss
+cpu: Apple M5 Pro
+BenchmarkAnalyzeBenign-15    	 2632916	       469.4 ns/op	 123.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2620008	       455.9 ns/op	 127.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2636031	       454.6 ns/op	 127.60 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2635945	       453.2 ns/op	 127.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2540872	       472.0 ns/op	 122.88 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2591349	       459.0 ns/op	 126.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2632216	       459.1 ns/op	 126.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2597298	       458.8 ns/op	 126.40 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2607297	       459.2 ns/op	 126.30 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeBenign-15    	 2610781	       459.4 ns/op	 126.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2028254	       597.6 ns/op	 107.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2057892	       586.1 ns/op	 109.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2030881	       588.4 ns/op	 108.77 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2034859	       611.7 ns/op	 104.63 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 1998464	       780.7 ns/op	  81.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2040454	       586.3 ns/op	 109.16 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2031514	       588.8 ns/op	 108.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2049013	       586.6 ns/op	 109.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2061565	       582.7 ns/op	 109.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeMarkup-15    	 2073583	       581.7 ns/op	 110.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3468321	       348.5 ns/op	 126.26 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3465153	       341.6 ns/op	 128.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3534430	       348.1 ns/op	 126.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3428614	       344.8 ns/op	 127.60 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3418335	       348.4 ns/op	 126.28 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3425007	       349.3 ns/op	 125.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3477320	       343.0 ns/op	 128.29 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3545246	       338.8 ns/op	 129.88 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3539407	       341.9 ns/op	 128.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkAnalyzeAttack-15    	 3538059	       340.5 ns/op	 129.20 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/detect/xss	36.896s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/internal/bitset
+cpu: Apple M5 Pro
+BenchmarkResetSparse-15    	260050969	         4.845 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	263841558	         4.600 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	256649677	         4.546 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	267190483	         4.330 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	317631037	         4.085 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	242428160	         4.773 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	247494504	         4.816 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	268072982	         4.173 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	300257094	         3.990 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResetSparse-15    	316551800	         3.887 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/internal/bitset	12.423s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/internal/body
+cpu: Apple M5 Pro
+BenchmarkParseJSON-15           	 7031868	       162.6 ns/op	 842.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7464852	       161.6 ns/op	 847.88 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7419184	       160.3 ns/op	 854.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7557176	       158.4 ns/op	 864.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7499868	       158.9 ns/op	 862.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7153251	       165.3 ns/op	 828.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7422626	       161.7 ns/op	 847.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7388799	       162.6 ns/op	 842.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7520930	       160.9 ns/op	 851.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSON-15           	 7495466	       161.6 ns/op	 847.60 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	30456304	        38.87 ns/op	1157.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	31283775	        38.56 ns/op	1166.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	31408609	        38.28 ns/op	1175.53 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	31218326	        39.32 ns/op	1144.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	30432007	        39.20 ns/op	1148.05 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	30675956	        38.88 ns/op	1157.38 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	31341002	        38.39 ns/op	1172.31 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	31591209	        40.06 ns/op	1123.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	28085284	        39.37 ns/op	1142.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseJSONEscaped-15    	30177037	        39.23 ns/op	1147.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	12588787	        87.34 ns/op	 801.51 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	13384005	        86.39 ns/op	 810.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	13513360	        87.76 ns/op	 797.62 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	13623546	        83.75 ns/op	 835.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	14324943	        83.47 ns/op	 838.66 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	13884154	        84.10 ns/op	 832.30 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	14238963	        91.38 ns/op	 766.04 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	12690595	        94.44 ns/op	 741.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	12711644	        87.98 ns/op	 795.65 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseForm-15           	13077540	        89.76 ns/op	 779.89 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3849620	       311.4 ns/op	3422.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3526393	       317.2 ns/op	3360.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3900493	       308.8 ns/op	3452.21 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3962337	       306.0 ns/op	3484.08 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3815193	       317.2 ns/op	3360.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3897535	       307.7 ns/op	3464.04 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3886120	       309.4 ns/op	3444.85 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3882475	       310.1 ns/op	3438.09 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3832092	       310.4 ns/op	3433.84 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseMultipart-15      	 3874885	       305.9 ns/op	3485.23 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4071452	       300.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4154737	       306.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 3899892	       299.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4035524	       301.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 3972477	       312.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4065852	       290.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4101358	       291.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4146913	       290.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4131553	       291.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseProtobuf-15       	 4081370	       293.3 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/internal/body	60.125s
+PASS
+ok  	github.com/gsoultan/gwaf/internal/budget	0.435s
+?   	github.com/gsoultan/gwaf/internal/engine	[no test files]
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/internal/interpret
+cpu: Apple M5 Pro
+BenchmarkDetectClean-15       	78125443	        14.90 ns/op	3824.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	83680794	        14.49 ns/op	3934.52 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	83375066	        14.47 ns/op	3938.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	83881135	        14.44 ns/op	3948.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	83072048	        14.49 ns/op	3934.30 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	83018887	        14.45 ns/op	3945.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	83100817	        14.40 ns/op	3959.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	81005138	        14.64 ns/op	3893.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	82601961	        14.87 ns/op	3834.23 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDetectClean-15       	81528889	        14.75 ns/op	3864.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	703345480	         1.713 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	700873854	         1.710 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	705669788	         1.707 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	699162846	         1.717 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	700094220	         1.723 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	701276275	         1.706 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	701644453	         1.714 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	668860282	         1.740 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	700337156	         1.711 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildClean-15        	701142936	         1.708 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBuildAmbiguous-15    	 3363244	       356.5 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3375172	       357.9 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3357308	       358.7 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3304927	       360.8 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3284752	       360.5 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3447823	       351.4 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3393489	       356.1 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3301011	       362.8 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3353386	       352.0 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildAmbiguous-15    	 3505401	       341.6 ns/op	      48 B/op	       1 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/internal/interpret	36.421s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/internal/memz
+cpu: Apple M5 Pro
+BenchmarkAppendReset-15    	18312444	        62.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	20079271	        61.27 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19817594	        59.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19808490	        59.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	20499562	        60.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19822723	        60.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19514362	        61.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19558971	        61.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19279017	        60.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAppendReset-15    	19510198	        60.71 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/internal/memz	12.468s
+PASS
+ok  	github.com/gsoultan/gwaf/internal/prefilter	0.487s
+PASS
+ok  	github.com/gsoultan/gwaf/internal/scan	0.423s
+PASS
+ok  	github.com/gsoultan/gwaf/rules	0.786s
+PASS
+ok  	github.com/gsoultan/gwaf/rules/op	0.911s
+PASS
+ok  	github.com/gsoultan/gwaf/rules/op/rx	0.464s
+PASS
+ok  	github.com/gsoultan/gwaf/rules/transform	0.501s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/ruleset/core
+cpu: Apple M5 Pro
+BenchmarkSplitPathEval-15          	 6761196	       180.8 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6613291	       180.0 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6761815	       183.4 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6343413	       182.8 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6642024	       179.6 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6591724	       188.1 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6131214	       193.1 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6276786	       199.7 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6262023	       188.0 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEval-15          	 6463666	       186.4 ns/op	     512 B/op	       1 allocs/op
+BenchmarkSplitPathEvalBenign-15    	56347286	        20.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	57618898	        20.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	58036084	        20.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	57627313	        20.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	58296171	        20.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	57884442	        20.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	54672400	        21.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	57522919	        21.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	57823776	        20.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitPathEvalBenign-15    	49204610	        27.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	35019710	        32.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	39432607	        29.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	38480294	        30.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	38059543	        29.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	41104160	        29.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	41113372	        29.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	41906940	        29.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	39268299	        30.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	39404066	        31.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOffOriginEval-15          	36159644	        31.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	28818212	        40.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	29452369	        40.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	30084769	        40.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	30207487	        40.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	29239023	        40.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	29516089	        40.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	29112139	        42.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	25217412	        43.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	29114053	        41.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTypeMarkerEval-15         	29138413	        40.92 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/ruleset/core	48.469s
+PASS
+ok  	github.com/gsoultan/gwaf/ruleset/profiles	0.457s
+goos: darwin
+goarch: arm64
+pkg: github.com/gsoultan/gwaf/schema
+cpu: Apple M5 Pro
+BenchmarkValidateInteger-15    	206529427	         5.824 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	210549463	         5.719 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	210471020	         5.759 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	211038700	         5.665 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	211170988	         5.686 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	212334244	         5.642 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	213002169	         5.899 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	190091970	         6.117 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	205706600	         5.866 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateInteger-15    	206895793	         5.798 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	44024378	        26.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	45088062	        26.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	45695500	        27.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	45432675	        26.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	45545550	        26.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	45625207	        26.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	44808163	        26.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	45125647	        26.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	44660301	        27.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateUUID-15       	44746342	        26.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	85567341	        14.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	79922299	        14.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	80348174	        14.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	71752812	        14.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	88288851	        14.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	69969314	        14.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	89634454	        14.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	71232291	        14.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	89507431	        14.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	90975716	        14.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	19642545	        59.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20191242	        59.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	19590210	        61.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20036733	        60.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	19906742	        61.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20279318	        62.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	18774334	        61.27 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	18453482	        61.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	19968715	        62.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20247668	        60.22 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/schema	48.363s
+PASS
+ok  	github.com/gsoultan/gwaf/telemetry	0.426s
+?   	github.com/gsoultan/gwaf/types	[no test files]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  BenchmarkLookupLiteral-15      	87262413	        15.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	82669064	        13.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	85815424	        13.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	82778601	        13.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	82531180	        13.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	82332760	        13.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	84544998	        13.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	86369769	        13.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	86471940	        13.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupLiteral-15      	85451065	        14.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	19937611	        59.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20255414	        59.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	19837128	        60.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	19925403	        60.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20438185	        59.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20204740	        59.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20566491	        59.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20590930	        59.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20122677	        59.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLookupTemplated-15    	20419000	        59.08 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/gsoultan/gwaf/schema	48.363s
+PASS
+ok  	github.com/gsoultan/gwaf/telemetry	0.439s
+?   	github.com/gsoultan/gwaf/types	[no test files]

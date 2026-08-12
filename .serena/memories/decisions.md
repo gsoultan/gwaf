@@ -2790,3 +2790,37 @@ pinning RE2's program-size refusal in seclang.
 unbounded resource consumption; the two schema parsers were already right. A
 clean audit is a result -- it converts "probably fine" into "measured, and a
 harness says so".
+
+## gwaf lint reports diagnostics, and deliberately does not fail on them
+
+`Diagnostics()` was named in two plans and built into the library, but never
+surfaced in the toolchain -- so a coverage gap was visible at construction (a log
+line) and invisible at build time, which is where a developer looks.
+
+`gwaf lint` now prints which rules need configuration before they decide
+anything, with the fix beside each.
+
+**Reported rather than failed, and that is the judgement.** lint builds the
+default ruleset with *no embedder configuration*, so the off-origin entry is
+always present and always will be. Making it an error would be a gate that is
+red every day -- and this cycle already established what that costs: `make slo`
+was red for a whole session and got ignored until the target was restated
+honestly. A gate that is always red is one nobody reads.
+
+## Benchmarks must be quiet, and recording a baseline is what proved they were not
+
+`make bench-save` on a quiet machine came back with **193 log lines interleaved
+among 319 benchmark results**, against zero in the previously committed
+baseline. `gwaf.New` reports an inert rule through `slog.Default` -- correct in
+production, wrong in a benchmark, because `go test` echoes it to stdout and a
+benchmark run constructs thousands of WAFs.
+
+Fixed with a `TestMain` that silences the *default* logger for the package
+rather than threading a logger through every call site. The two tests that
+assert on the diagnostic message pass their own logger and a buffer, so they are
+unaffected.
+
+Also worth recording: the committed baseline read 7.8 ms where this machine
+measures 11.5 ms for the same workload, so **bench-compare had been comparing
+against hardware nobody has**. A stale baseline is not a conservative baseline;
+it is a gate that cannot fire.

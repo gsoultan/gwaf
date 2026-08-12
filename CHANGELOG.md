@@ -365,6 +365,32 @@ targets and its exit code now depends on them.
   deliberately absent from the sink list for the same reason — each is what a
   search box is called.
 
+- **The benchmark baseline is re-recorded on the release machine**, and the
+  benchmarks are quiet now. The committed baseline read 7.8 ms where this
+  machine measures 11.5 ms for the same workload, so `bench-compare` had been
+  meaningless — a comparison against hardware nobody has.
+
+  Recording it surfaced a second problem: `gwaf.New` reports an inert rule
+  through `slog.Default`, which is right in production and wrong in a
+  benchmark. `go test` echoes it to stdout and a benchmark run constructs
+  thousands of WAFs, so the first attempt came back with **193 log lines
+  interleaved among 319 results**, against zero in the previous baseline. A
+  `TestMain` silences the default logger for the package; the two tests that
+  assert on the diagnostic supply their own logger and are unaffected.
+
+  The new baseline is 519 results across all ten modules, ten runs each, taken
+  at a load average of 2.1 with `bench-guard` satisfied.
+
+- **`gwaf lint` reports the diagnostics** — which rules need configuration before
+  they decide anything, with the fix beside each. Same list
+  `(*gwaf.WAF).Diagnostics()` returns at construction, surfaced where a
+  developer looks at build time.
+
+  Reported rather than failed, deliberately. `lint` builds the default ruleset
+  with no embedder configuration, so the off-origin entry is always present and
+  always will be — making it an error would be a gate that is red every day, and
+  a gate that is always red is one nobody reads.
+
 - **`(*gwaf.WAF).Limits()`** — the configured bounds, exported so an integration
   can bound what it reads. The middleware could not size its buffer without
   knowing the ceiling the engine would apply, which is how it came to apply none

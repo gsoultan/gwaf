@@ -194,6 +194,28 @@ func runLint(args []string) error {
 		}
 	}
 
+	// Rules that compiled and cannot decide anything.
+	//
+	// This is the same list (*gwaf.WAF).Diagnostics returns at construction, and
+	// it belongs here for the reason the API exists at all: a rule that reports
+	// nothing until the embedder supplies configuration is invisible from every
+	// direction except this one. It compiles, it lints clean, `gwaf explain`
+	// describes it correctly, and it never fires.
+	//
+	// Reported rather than failed. lint builds the default ruleset with no
+	// embedder configuration, so the off-origin entry is *always* present here
+	// and always will be — making it an error would be a gate that is red every
+	// day, which is a gate nobody reads. What it is instead is the answer to
+	// "which of these rules needs something from me before it does anything".
+	if diags := waf.Diagnostics(); len(diags) > 0 {
+		fmt.Println("\nrules that need configuration before they decide anything:")
+		for _, d := range diags {
+			fmt.Printf("  %-8d %s\n", d.ID, d.Msg)
+			fmt.Printf("           %s\n", d.Reason)
+			fmt.Printf("           fix: %s\n", d.Fix)
+		}
+	}
+
 	byTier := map[types.Confidence]int{}
 	for _, cr := range waf.Ruleset().All() {
 		byTier[cr.Rule.Confidence]++
