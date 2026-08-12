@@ -449,6 +449,26 @@ targets and its exit code now depends on them.
   1013's existing combination and costs 2.1% with zero allocations. This is the
   measurement that moved `CRLFHeaderRule` out of core, rediscovered.
 
+- **Fuzz targets for the two schema parsers**, which had none.
+  `schema/grpc` reads protobuf wire format and `schema/openapi` reads YAML —
+  both are parsers taking input somebody else wrote, which CLAUDE.md §4 makes
+  non-negotiably fuzzed. A spec is usually a build artefact, but both `Parse`
+  functions are exported and `docs/PERFORMANCE.md` says never to trust a
+  runtime-supplied schema: a control plane loading a tenant's spec is parsing
+  somebody else's bytes.
+
+  Both held. 8.9M executions on the descriptor parser and 366k on the YAML one,
+  with seeds for the failures a wire-format parser has — a varint whose
+  continuation bits never end, a length prefix past the buffer, arithmetic that
+  wraps, nesting deep enough to exhaust the stack — and no panic, hang or
+  missing-error among them.
+
+  The YAML expansion bomb is pinned as a **control** rather than a finding:
+  `yaml.v3` refuses a 396-byte document that would expand to ~387 million nodes,
+  in no measurable time or memory. That protection lives in a dependency, so a
+  version bump or a library swap could remove it silently and nothing else here
+  would notice.
+
 - **Fuzz targets for `SniffMultipart` and `scan.Windows`**, both shipped in this
   same cycle without them. `SniffMultipart` parses attacker-controlled bytes to
   derive a boundary it then hands to the multipart parser, which makes it a

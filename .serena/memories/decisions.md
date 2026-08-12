@@ -2764,3 +2764,29 @@ Guessing would have produced either a limit that breaks CRS or one that does not
 bound anything -- and my first attempt was the latter: 32 MiB source and 100k
 rules left every measured case untouched, because neither is the axis that
 amplifies.
+
+## The two schema parsers held, and that is worth recording too
+
+`schema/grpc` (protobuf wire) and `schema/openapi` (YAML) had **zero fuzz
+targets** between them despite both being parsers taking input somebody else
+wrote. Added, seeded with the failures each format actually has.
+
+**Both held.** 8.9M executions on the descriptor parser, 366k on the YAML one.
+No panic, no hang, no missing error. The grpc path delegates to
+`google.golang.org/protobuf` and the YAML path to `yaml.v3`, and both are
+hardened -- a varint with endless continuation bits, a length prefix past the
+buffer, wrapping arithmetic and 4096-deep nesting are all handled.
+
+`schema/grpc` already had `MaxDepth` (default 6) for nested message expansion,
+so the recursion bound the other modules were missing was present here.
+
+**The YAML bomb is pinned as a control, not a finding.** yaml.v3 refuses a
+396-byte document expanding to ~387M nodes, in no measurable time or memory.
+That protection lives in a *dependency*: a version bump or a library swap
+removes it silently and nothing else in the repo would notice. Same reasoning as
+pinning RE2's program-size refusal in seclang.
+
+**Four modules opened, two findings.** middleware and seclang were both
+unbounded resource consumption; the two schema parsers were already right. A
+clean audit is a result -- it converts "probably fine" into "measured, and a
+harness says so".
