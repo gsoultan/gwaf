@@ -50,13 +50,31 @@ jobs:
       - name: install cyclonedx-gomod
         run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${{ env.CYCLONEDX_VERSION }}
 
+      # Modules are discovered from the tree rather than read from the Makefile.
+      #
+      # The first backfill attempt ran `make sbom` and failed: this workflow
+      # checks out the *tag*, and v0.5.0 was cut before the sbom target existed.
+      # Any workflow that can be pointed at an old tag has to be self-contained,
+      # or it only ever works for tags cut after it was written — which is
+      # exactly the tags that need it least.
+      #
       # Every module, for the same reason `make vuln` scans every module: core
       # has no third-party dependencies by design, so an SBOM of core alone
       # describes the one place with nothing to describe. What an adopter
       # actually pulls in lives in the adapters — gin's SBOM has 29 components
       # to core's zero.
       - name: generate SBOMs
-        run: make sbom
+        run: |
+          set -euo pipefail
+          mkdir -p dist/sbom
+          find . -name go.mod -not -path '*/.git/*' -print0 |
+          while IFS= read -r -d "" f; do
+            m=$(dirname "$f")
+            name=$(printf '%s' "$m" | sed -e 's|^\./||' -e 's|^\.$|core|' -e 's|/|-|g')
+            echo "sbom $m -> dist/sbom/$name.cdx.json"
+            cyclonedx-gomod mod -licenses -json -output "dist/sbom/$name.cdx.json" "$m"
+          done
+          ls -l dist/sbom/
 
       # A single archive is what a consumer can verify in one step; the
       # per-module files are what they actually need to read.

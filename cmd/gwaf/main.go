@@ -293,8 +293,16 @@ func runLint(args []string) error {
 				if w, ok := r.Worst(); ok {
 					fmt.Printf("           %q appears in %d of %d benign requests\n",
 						w.Literal, w.Requests, r.Requests)
-					fmt.Printf("           fix: make the literal specific enough to be absent "+
-						"from ordinary traffic, or accept the cost knowingly\n")
+					// Deliberately not "tighten the literal". A broad literal is
+					// usually load-bearing: detect_xss declares "(" and that is
+					// what nominates rule 3010 for `jAvAsCrip t:alert(1)`, whose
+					// javascript: literal is not literally present because the
+					// scheme matcher skips whitespace on purpose. Tightening it
+					// is a bypass unless the matching it guards is byte-exact.
+					fmt.Printf("           this is a cost, not necessarily a defect: a broad\n")
+					fmt.Printf("           literal is often what keeps a tolerant matcher\n")
+					fmt.Printf("           reachable. Narrow it only if the scan it guards\n")
+					fmt.Printf("           matches the literal byte-for-byte.\n")
 				}
 			}
 		}
