@@ -624,3 +624,68 @@ var fuzzLiteralSeeds = []string{
 	"javascript:alert(1)", "<img src=x onerror=alert(1)>", "hello world", "",
 	"the onerror callback fires when loading fails", "<b>bold</b>", "a<b",
 }
+
+// TestSinkLeadsCoverEverySink keeps the fast path from becoming a filter.
+//
+// scanMarkup gates the sink lookup on isSinkLead, so a sink whose first byte is
+// missing from that set is never looked up — the detector would keep compiling,
+// keep passing its other tests, and silently stop reporting eval(). Deriving the
+// set from the table makes that impossible; this asserts the derivation rather
+// than trusting it, because the failure is invisible from every other direction.
+func TestSinkLeadsCoverEverySink(t *testing.T) {
+	for s := range sinks {
+		if s == "" {
+			t.Fatal("empty sink name")
+		}
+		lower, upper := s[0], byte(0)
+		if lower >= 'a' && lower <= 'z' {
+			upper = lower - 'a' + 'A'
+		}
+		if !isSinkLead(lower) {
+			t.Errorf("sink %q begins with %q, which isSinkLead rejects: it can never be detected", s, lower)
+		}
+		if upper != 0 && !isSinkLead(upper) {
+			t.Errorf("sink %q is undetectable when capitalised (%q rejected)", s, upper)
+		}
+	}
+}
+
+// TestSchemeLeadDispatchMatchesExhaustiveScan pins the other half of the same
+// bargain: matchesScheme now tries only the schemes whose first character is
+// present, so it must agree with trying all of them on every input that matters
+// — including the evasions the tolerant matcher exists for.
+func TestSchemeLeadDispatchMatchesExhaustiveScan(t *testing.T) {
+	inputs := []string{
+		"javascript:alert(1)", "JaVaScRiPt:alert(1)", "vbscript:msgbox",
+		"livescript:x", "mocha:x", "data:text/html,<script>",
+		"data:application/javascript,x", "data:text/javascript,x",
+		"java\tscript:alert(1)", "java\x00script:alert(1)",
+		"\tjavascript:alert(1)", "\x00javascript:alert(1)",
+		"&Tab;javascript:alert(1)", "java&Tab;script:alert(1)",
+		"javascript&colon;alert(1)", "&#106;avascript:alert(1)",
+		"\"javascript:alert(1)", "'javascript:alert(1)",
+		"standard delivery", "delivery", "modal", "video", "label",
+		"not a scheme at all", "", "d", "j", "data", "javascript",
+	}
+	for _, in := range inputs {
+		src := []byte(in)
+		for i := range src {
+			got := matchesScheme(src, i)
+			// The exhaustive form: what the function did before the dispatch.
+			want := false
+			k := i
+			if k < len(src) && (src[k] == '"' || src[k] == '\'') {
+				k++
+			}
+			for _, s := range executingSchemes {
+				if matchesSchemeFolded(src, k, s) {
+					want = true
+					break
+				}
+			}
+			if got != want {
+				t.Errorf("matchesScheme(%q, %d) = %v, exhaustive scan says %v", in, i, got, want)
+			}
+		}
+	}
+}

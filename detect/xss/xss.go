@@ -215,6 +215,29 @@ var sinks = map[string]bool{
 	"execscript": true, "createcontextualfragment": true,
 }
 
+// sinkLeads is the set of bytes that can begin a sink name, in both cases.
+//
+// Derived from sinks rather than written beside it: a hand-maintained copy of a
+// table is a table that goes stale, and going stale here means a sink that is
+// silently never looked up. TestSinkLeadsCoverEverySink asserts the derivation
+// still holds, so adding "prompt" to sinks cannot quietly disable it.
+var sinkLeads = func() (t [256]bool) {
+	for s := range sinks {
+		if s == "" {
+			continue
+		}
+		c := s[0]
+		t[c] = true
+		if c >= 'a' && c <= 'z' {
+			t[c-'a'+'A'] = true
+		}
+	}
+	return t
+}()
+
+// isSinkLead reports whether c can begin a sink name.
+func isSinkLead(c byte) bool { return sinkLeads[c] }
+
 // executingSchemes execute rather than fetch.
 var executingSchemes = []string{
 	"javascript:", "vbscript:", "livescript:", "mocha:",
@@ -363,12 +386,27 @@ func scanMarkup(src []byte) Signal {
 		}
 
 		// Sink calls anywhere: eval(...), setTimeout(...), atob(...).
-		if isAlpha(src[i]) && (i == 0 || !isNameByte(src[i-1])) {
+		//
+		// The lead-byte gate is a performance guard, not a semantic one. Without
+		// it this ran for every word in the input: walk the word, fold it into a
+		// buffer, hash it, and probe a map. On a 1 MiB JSON body that is every
+		// "id", "sku", "qty" and "note" in the document, and it showed up as
+		// mapaccess1_faststr plus aeshashbody at 13% of a profile whose input
+		// contained no markup at all.
+		//
+		// Every sink begins with one of a/c/e/f/s/u, so a byte outside that set
+		// cannot start one and the fold and the hash are both wasted. The gate
+		// is derived from the sinks table rather than written next to it, so a
+		// sink added later cannot fall through it — the test asserts that.
+		if isSinkLead(src[i]) && (i == 0 || !isNameByte(src[i-1])) {
 			j := i
 			for j < len(src) && isNameByte(src[j]) {
 				j++
 			}
-			if sinks[lowerWord(src[i:j])] && callFollows(src, j) {
+			// callFollows before the map probe: a sink is only a sink when it is
+			// called, and the check is a handful of bytes against a fold, a hash
+			// and a probe. Text with no "(" in it never reaches the map.
+			if callFollows(src, j) && sinks[lowerWord(src[i:j])] {
 				sigs |= SignalSinkCall
 			}
 		}
@@ -723,6 +761,30 @@ func matchesScheme(src []byte, i int) bool {
 	if i < len(src) && (src[i] == '"' || src[i] == '\'') {
 		i++
 	}
+
+	// Try only the schemes that can start with the byte actually present.
+	//
+	// A control byte, a NUL or a '&' says nothing about what follows, because
+	// the folded matcher skips the first two and decodes the third — so those
+	// fall through and try everything, which is both correct and rare.
+	//
+	// Every other byte has to fold-match the scheme's first character, so the
+	// six schemes that cannot start with it are six walks of a matcher that
+	// skips controls and decodes character references as it goes. This ran for
+	// every 'j', 'v', 'l', 'm' and 'd' in the input; "standard delivery" pays it
+	// four times and matches nothing.
+	if i < len(src) {
+		if c := src[i]; c >= 0x21 && c != '&' {
+			lc := c | 0x20 // ASCII fold; scheme leads are all letters
+			for _, s := range executingSchemes {
+				if s[0] == lc && matchesSchemeFolded(src, i, s) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
 	for _, s := range executingSchemes {
 		if matchesSchemeFolded(src, i, s) {
 			return true
