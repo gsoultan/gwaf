@@ -229,6 +229,18 @@ var evasions = []evasion{
 	{name: "rce/bin sh", technique: "wrapper", arg: "/bin/sh -c id"},
 	{name: "rce/encoded bin sh", technique: "wrapper", arg: "%2Fbin%2Fsh%20-c%20id"},
 
+	// A command line in a parameter whose *name* says it is a shell. shelli
+	// scored these all along -- "id" reaches its threshold in sink mode -- and
+	// the prefilter could not nominate the rule, because "id" carries no
+	// separator and no interpreter path. Keyed on the name instead; see
+	// shelli.SinkOperator.
+	{name: "rce/bare command in cmd param", technique: "cmd-sink", optIn: true,
+		target: "/data/manage/cmd.php?cmd=id"},
+	{name: "rce/echo in cmd param", technique: "cmd-sink", optIn: true,
+		target: "/setup.cgi?todo=syscmd&cmd=echo abc123"},
+	{name: "rce/whoami in command param", technique: "cmd-sink", optIn: true,
+		target: "/x?command=whoami"},
+
 	// One level of traversal in a parameter the application resolves as a path.
 	// The core rules require two, because one is ambiguous in a value -- and not
 	// in a parameter called filePath. optIn for the reason in pathsink.go: a
@@ -1040,6 +1052,15 @@ var benignTraffic = []benignCase{
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
 
+	// ---- admin verbs in a parameter called cmd -----------------------------
+	//
+	// Half of all admin UIs are written this way. shelli scores them zero, which
+	// is what makes the sink rule narrow rather than reckless.
+	{name: "cmd verb list", target: "/admin?cmd=list"},
+	{name: "cmd verb save", target: "/admin?cmd=save"},
+	{name: "cmd verb refresh", target: "/admin?cmd=refresh"},
+	{name: "ping host value", target: "/tools?ping=127.0.0.1"},
+
 	// ---- paths that do not leave the directory -----------------------------
 	{name: "ordinary relative path", target: "/api/files?path=reports/2026/q1.pdf"},
 	{name: "theme editor file", target: "/wp-admin/theme-editor.php?file=functions.php"},
@@ -1576,7 +1597,8 @@ func TestEvasionCorpus(t *testing.T) {
 			core.SSRFParamRule(1016),
 			core.SQLSinkRule(2011),
 			core.PathSinkRule(1017),
-		})))
+		})),
+		gwaf.WithRuleset(rules.Set{core.CommandSinkRule(4022)}))
 
 	// Both WAFs must be able to decide everything the corpus asks them.
 	// Diagnostics is the engine's own account of what it cannot decide, so a

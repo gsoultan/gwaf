@@ -146,9 +146,9 @@ the same origin.
 
 | | gwaf | gwaf tuned | Coraza + CRS 4.25 |
 |---|---|---|---|
-| Detection | 88.8% | **92.4%** | 89.7% |
+| Detection | 88.8% | **92.6%** | 89.7% |
 | False positives (ordinary traffic) | 2/12 | **0/12** | 4/12 |
-| Latency | 61 µs | **58 µs** | 973 µs |
+| Latency | 61 µs | **57 µs** | 920 µs |
 
 **Ahead on all three columns** — detection, false positives, and roughly a
 sixteenth of the latency. CRS leads on RCE alone now; **XSS and SQLi are ties**

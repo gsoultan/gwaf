@@ -41,22 +41,33 @@ type stages struct {
 	// prefix is measured.
 	prev []rules.Transform
 
-	// buf[i] backs the value after i+1 transforms; val[i] is that value, which
-	// may alias val[i-1] when the transform changed nothing.
+	// buf[i] backs the value after i+1 transforms.
 	buf []([]byte)
-	val []([]byte)
 
-	// changed[i] reports whether any transform up to and including i altered
-	// the value, which is what the caller reports as "transformed".
-	changed []bool
+	// step[i] is the state after i+1 transforms: the value, which may alias
+	// step[i-1].val when the transform changed nothing, and whether anything up
+	// to and including i altered it.
+	//
+	// One slice of structs rather than two parallel slices. Both fields are
+	// written on every transform step of every chain -- the profile put the two
+	// stores at 180ms of apply's 780ms flat, more than the transforms
+	// themselves cost -- and as parallel arrays each store lands on a different
+	// cache line. Adjacent in one struct they share one, which is also what
+	// Green Tea's locality-sensitive collector prefers (CLAUDE.md 4).
+	step []stageState
+}
+
+// stageState is the result of one transform depth.
+type stageState struct {
+	val     []byte
+	changed bool
 }
 
 // grow sizes the staging arrays for the longest chain in a phase.
 func (s *stages) grow(depth int) {
 	for len(s.buf) < depth {
 		s.buf = append(s.buf, nil)
-		s.val = append(s.val, nil)
-		s.changed = append(s.changed, false)
+		s.step = append(s.step, stageState{})
 	}
 }
 
@@ -85,8 +96,8 @@ func (s *stages) apply(chain []rules.Transform, meter *budget.Meter) ([]byte, bo
 	cur := s.src
 	transformed := false
 	if reuse > 0 {
-		cur = s.val[reuse-1]
-		transformed = s.changed[reuse-1]
+		st := s.step[reuse-1]
+		cur, transformed = st.val, st.changed
 	}
 
 	for i := reuse; i < len(chain); i++ {
@@ -105,8 +116,7 @@ func (s *stages) apply(chain []rules.Transform, meter *budget.Meter) ([]byte, bo
 		// Recorded whether or not it changed: a later chain resuming at this
 		// depth needs the value as of this step either way, and when nothing
 		// changed that value is simply the previous one, with no copy.
-		s.val[i] = cur
-		s.changed[i] = transformed
+		s.step[i] = stageState{val: cur, changed: transformed}
 	}
 
 	s.prev = chain

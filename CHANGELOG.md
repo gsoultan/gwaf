@@ -134,6 +134,20 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Fixed
 
+- **`stages.apply` wrote two parallel arrays per transform step.** `val[i]` and
+  `changed[i]` are written on every step of every chain, and as parallel slices
+  each store lands on a different cache line — the profile put the pair at 180ms
+  of `apply`'s 780ms flat, more than the transforms themselves cost. Merged into
+  one slice of structs so they share a line, which is also what Green Tea's
+  locality-sensitive collector prefers. **−2.1%**, measured paired.
+
+  **A dense-transition table for the automaton's depth-1 states was built and
+  reverted**: 4.3% *slower*, measured. The extra branch in `child` plus growing
+  `node` from 24 to 28 bytes cost more than the linear scan saved. The package
+  comment already said so — "nodes have few children in practice, which makes a
+  short linear scan over contiguous bytes faster and more cache-friendly" — and
+  it was right. Recorded in decisions.md so it is not rebuilt.
+
 - **A urlencoded body with no `=` was shown to value-reading rules as empty.**
   `ParseForm`'s own comment said such a token is "worth inspecting either way"
   and the code then emitted it with an empty value, so only rules targeting
@@ -175,7 +189,28 @@ semver, and the four extension interfaces are frozen hard.
 
 ### Added
 
-- **`core.PathSinkRule(id)`** — a traversal segment or a local-file scheme in a
+- **`core.CommandSinkRule(id)` and `shelli.SinkOperator()`** — a command line in
+  a parameter whose *name* says the application hands it to a shell.
+
+  **Nothing in the detector was broken.** `detect/shelli` scores `id` at exactly
+  its threshold when told the parameter is a command sink, and has since that
+  mode was added. The value never reached it: the prefilter nominates the shell
+  rule by scanning *values* for separators and interpreter paths, and `cmd=id`
+  contains neither. Four corpus exploits walked through a detector that would
+  have caught all of them.
+
+  `.serena/memories/decisions.md` recorded this as an open engine question —
+  "how does a key-anchored rule get scheduled without becoming unconditional" —
+  and the engine already had the answer. The rule targets `ARGS_NAMES` and
+  declares the sink names as its literals, so the automaton nominates it by
+  matching the **name**; the operator then reads the sibling value and scores
+  that. The sibling is used to convict, never to acquit, which is the direction
+  `rules.EvalContext` documents as sound.
+
+  RCE 297/378 → **302/378**, auth-bypass to 16/23 (level with CRS), tuned
+  detection **92.6%**.
+
+- **`core.PathSinkRule(id)` — a traversal segment or a local-file scheme in a
   parameter the application resolves as a path. LFI goes from 629/674 to
   **647/674**, past Coraza + CRS's 643, and tuned detection to **92.4%**.
 

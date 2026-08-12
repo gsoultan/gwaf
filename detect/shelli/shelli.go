@@ -68,6 +68,8 @@
 package shelli
 
 import (
+	"sort"
+
 	"github.com/gsoultan/gwaf/internal/scan"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
@@ -1008,3 +1010,73 @@ func isCommandSinkParam(key string) bool {
 	}
 	return commandSinkParams[string(lower)]
 }
+
+// SinkOperator scores the value of a parameter whose *name* says it is handed
+// to a shell.
+//
+// # Why the ordinary operator cannot reach these
+//
+// It is nominated by the prefilter, which scans values for the literals this
+// detector declares -- separators and interpreter paths. "cmd=id" contains
+// none of them, so the rule is never a candidate and AnalyzeIn is never
+// called. The detector scores "id" at exactly the threshold in sink mode and
+// has done all along; nothing ever handed it the value.
+//
+// That gap was recorded in .serena/memories/decisions.md as an open engine
+// question -- "how does a key-anchored rule get scheduled without becoming
+// unconditional" -- and the answer was already in the engine. An operator can
+// read its siblings, so the rule keys on the *name*: it targets ARGS_NAMES and
+// declares the sink names as its literals, which the automaton matches against
+// the name. Having been nominated, it fetches the value beside it.
+//
+// The nomination is cheap and rare because these names are specific. A form
+// with no parameter called cmd, exec or shell never nominates this rule at all.
+//
+// # Direction of evidence
+//
+// The sibling value is attacker-controlled, and it is used to *convict*: a
+// parameter named cmd whose value is a command line is evidence against the
+// request. It never acquits. That is the direction rules.EvalContext documents
+// as sound (docs/RULES.md §4).
+func SinkOperator() rules.Operator { return &sinkOperator{d: New(), threshold: Threshold} }
+
+type sinkOperator struct {
+	d         *Detector
+	threshold int
+}
+
+func (o *sinkOperator) Name() string { return "shelli_command_sink" }
+
+func (o *sinkOperator) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool) {
+	// Nominated by the argument *name*, so the value handed in is the name.
+	if ctx == nil || ctx.Target.Kind != types.TargetArgNames {
+		return rules.Match{}, false
+	}
+	if !isCommandSinkParam(ctx.Key) {
+		return rules.Match{}, false
+	}
+	v, ok := ctx.SiblingValue(ctx.Key)
+	if !ok || len(v) == 0 {
+		return rules.Match{}, false
+	}
+	if o.d.AnalyzeIn(v, true).Score < o.threshold {
+		return rules.Match{}, false
+	}
+	// The span belongs to the name, which is the value this operator was given;
+	// the finding names the parameter and the message says what was in it.
+	return rules.WholeValue(value), true
+}
+
+// Literals are the sink parameter names, because the name is what this operator
+// is nominated on. A request with no parameter called any of these cannot
+// match, which is what keeps it off ordinary traffic entirely.
+func (o *sinkOperator) Literals() ([]string, bool) {
+	out := make([]string, 0, len(commandSinkParams))
+	for name := range commandSinkParams {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out, true
+}
+
+func (o *sinkOperator) Cost() types.Fuel { return types.CostLiteralMatch * 6 }

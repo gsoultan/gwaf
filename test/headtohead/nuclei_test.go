@@ -315,6 +315,10 @@ func TestNucleiHeadToHead(t *testing.T) {
 				core.SQLSinkRule(2011),
 				core.PathSinkRule(1017),
 			})),
+		// Name-anchored, so it needs no body-phase counterpart: the operator
+		// reads siblings from the argument collection, which the body phase
+		// fills for JSON and form fields alike.
+		gwaf.WithRuleset(rules.Set{core.CommandSinkRule(4022)}),
 		// The fetch half fires on webhook registration, because registering a
 		// webhook *is* handing the server a foreign URL. That is the measured
 		// reason the rule is opt-in rather than core, and it does not go away

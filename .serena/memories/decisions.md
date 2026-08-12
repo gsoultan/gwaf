@@ -2288,3 +2288,48 @@ Tuned detection 85.9% -> 92.4% against CRS's 89.7%, FPs unchanged at 0/12
 against 4/12 throughout. **Every one of these came from reading the misses
 rather than imagining attacks**, and in each case the fix was a payload class
 that stayed inside one language or one parameter shape no detector was reading.
+
+## REJECTED: dense transition rows for depth-1 automaton states
+
+Built and measured: **4.3% slower** (18014ns vs 17268ns, paired, best-of-6).
+The idea was sound on paper -- `child()` was 8.6% of a benign request, almost
+all of it a linear scan at the states one byte below the root, which is where
+ordinary English lands constantly ("s" starts select, "u" starts union).
+
+It lost for two reasons that only a measurement shows: the extra `nd.dense >= 0`
+branch runs on *every* child() call including the ones that stay sparse, and
+`node` grew from 24 to 28 bytes, thinning the node array's cache density.
+
+**The package comment already said this** -- "nodes have few children in
+practice, which makes a short linear scan over contiguous bytes faster and more
+cache-friendly than a binary search or a map". It was right. The root's dense
+table is worth it; a second tier is not.
+
+## Parallel arrays cost more than the work they bookkeep
+
+`stages.apply` wrote `val[i]` and `changed[i]` on every transform step of every
+chain. As parallel slices each store lands on a different cache line: the
+profile put the pair at **180ms of apply's 780ms flat** -- more than every
+transform's Apply() combined. Merged into one `[]stageState`. **-2.1%**.
+
+Line-level profiling was what found it (`pprof -list`). The top-level view said
+"apply is 29% cum" and stopped there; the line view said two assignment
+statements were the single largest item in it.
+
+## The key-anchored rule problem, finally answered
+
+decisions.md carried this as an open engine question: "a rule whose evidence is
+the *parameter name* cannot be selected by an automaton over *values*... how
+does a key-anchored rule get scheduled without becoming unconditional, and that
+is an engine question with a latency budget attached".
+
+**The engine already had the answer.** `EvalContext.Siblings`. A rule targets
+ARGS_NAMES and declares the sink *names* as its literals, so the automaton
+nominates it by matching the name; the operator then reads `SiblingValue(Key)`.
+No unconditional rule, no broad value literals, and it costs nothing on a
+request with no parameter of that name.
+
+shelli scored `cmd=id` correctly all along -- 5, exactly at threshold, in sink
+mode. Four corpus exploits walked through a *correct detector* that was never
+handed the value. **When a detector is right and the request still passes, look
+at scheduling before touching the detector.**

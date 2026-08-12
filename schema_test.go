@@ -288,7 +288,8 @@ func TestSchemaDoesNotWeakenTheEvasionCorpus(t *testing.T) {
 			core.SSRFParamRule(1016),
 			core.SQLSinkRule(2011),
 			core.PathSinkRule(1017),
-		})))
+		})),
+		gwaf.WithRuleset(rules.Set{core.CommandSinkRule(4022)}))
 
 	missed := 0
 	for _, e := range evasions {
