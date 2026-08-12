@@ -2377,3 +2377,38 @@ recorded where, and at what cost to the zero-allocation argument path (finding
 duplicates naively is O(n^2) in MaxArgs=1000) -- and half-building it into a
 security library is worse than tracking it. Documented in redteam_test.go's
 header rather than added as a failing case.
+
+## Red-team round two: limits held, encoding chains did not
+
+Twenty composed attacks against limits, nested encodings, normalization, path
+confusion and headers. **Two got through, and only one was a vulnerability.**
+
+Everything else held, which is worth recording as much as the failures:
+payload past MaxArgs / MaxParts / MaxFields / MaxDepth all fail closed; a
+UTF-7 charset on a *later* multipart part is caught (the CVE-2026-21876 vector
+itself); fullwidth and \u-escaped payloads, `/api/..;/admin`, `%2e%2e`, double
+slashes, and payloads in X-Filter / User-Agent / Referer are all blocked.
+
+**Real: base64(base64(shell)).** One decode left printable base64 that was
+recorded and never looked at again. Now unwrapped to maxBase64Depth=2. The
+bound is the point -- each layer is a full decode and scan, so unbounded
+iteration lets an attacker choose how much work the firewall does. Cost +0.4%.
+
+Note the fix's own bug, caught by re-running the suite: the recursion was added
+to the long-form decode path only, and the double-encoded value is 56 characters
+-- the *short* path. **The spelling the red team used was the one the fix
+missed.**
+
+## NOT a vulnerability: gzip(gzip(x)) declared once
+
+gwaf decompresses once and sees gzip bytes. **The origin also decompresses once
+and sees gzip bytes.** The payload never executes, so there is no disagreement
+to exploit. Teaching gwaf to unwrap a layer nobody declared would invent a
+reading no origin performs -- the mirror image of every bug this file records --
+and would open a decompression-bomb surface, since nested gzip is the cheapest
+way to build one.
+
+`Content-Encoding: gzip, gzip` *is* blocked, because there the origin does
+unwrap twice. **The rule throughout: follow the readings the origin performs,
+and no others.** Multi-interpretation is not "try everything"; a reading nobody
+performs is cost and false positives, not coverage.

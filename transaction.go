@@ -114,6 +114,10 @@ type Transaction struct {
 	respBodyLen   int
 	respTruncated bool
 
+	// nestedBuf backs a second base64 layer. Separate from decodeBuf because
+	// the first layer's output is this one's input.
+	nestedBuf []byte
+
 	// Framing state for desync detection. See noteFraming.
 	contentLengths  int
 	firstLength     string
@@ -1416,6 +1420,11 @@ func (tx *Transaction) recordValueBytes(kind types.TargetKind, key, value []byte
 		if decoded, ok := body.IsBase64Text(tx.decodeBuf[:0], value); ok {
 			tx.decodeBuf = decoded
 			tx.recordFieldBytes(kind, key, decoded, false)
+			// A decode that yields more base64 is a second layer; see
+			// recordNestedBase64. Both entry points need this, and the first
+			// version of the fix had it on only one -- which is precisely the
+			// spelling the red team had used.
+			tx.recordNestedBase64(kind, key, decoded, 1)
 		}
 		tx.recordFieldBytes(kind, key, value, inert)
 		return
@@ -1436,6 +1445,44 @@ func (tx *Transaction) recordValueBytes(kind types.TargetKind, key, value []byte
 		return
 	}
 	tx.recordFieldBytes(kind, key, decoded, false)
+
+	// A decode that yields more base64 is a second layer, and a red-team pass
+	// walked a PHP web shell through as base64(base64(shell)): one decode left
+	// printable base64 text, which was recorded and never looked at again.
+	//
+	// Bounded at maxBase64Depth, and the bound is the point. Each layer is a
+	// full decode and scan, so an unbounded loop would let an attacker choose
+	// how much work the firewall does for a few hundred bytes of input. Two is
+	// what real nesting uses; anything deeper is a payload built to be expensive
+	// rather than to be decoded.
+	tx.recordNestedBase64(kind, key, decoded, 1)
+}
+
+// maxBase64Depth bounds how many layers of base64 are unwrapped.
+const maxBase64Depth = 2
+
+// recordNestedBase64 unwraps further base64 layers, depth-bounded.
+//
+// The buffer alternates rather than being reused, because the previous layer's
+// bytes are the input to this one and decoding into them in place would read
+// what it had just overwritten.
+func (tx *Transaction) recordNestedBase64(kind types.TargetKind, key, value []byte, depth int) {
+	if depth >= maxBase64Depth {
+		return
+	}
+	var next []byte
+	var ok bool
+	if body.IsBase64(value) {
+		next, ok = body.DecodeBase64(tx.nestedBuf[:0], value)
+	} else {
+		next, ok = body.IsBase64Text(tx.nestedBuf[:0], value)
+	}
+	if !ok || len(next) == 0 || body.IsBinary(next) {
+		return
+	}
+	tx.nestedBuf = next
+	tx.recordFieldBytes(kind, key, next, false)
+	tx.recordNestedBase64(kind, key, next, depth+1)
 }
 
 // noteOversize records that a value exceeded the per-value ceiling.
