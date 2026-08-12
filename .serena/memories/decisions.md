@@ -2702,3 +2702,35 @@ reads before adding a rule; now the compiler asks.
 Third time this cycle that auditing a suspected problem found the code already
 right and the *claim* unenforced. That is the pattern worth keeping: probe
 first, and when the premise fails, ship the harness rather than a change.
+
+## The middleware was the DoS: io.ReadAll on a client-controlled body
+
+Nine modules had gone the whole cycle without an adversarial reading. The first
+one looked at -- `middleware`, which every Profile-A adopter runs -- had
+`io.ReadAll(r.Body)` with no bound.
+
+The engine rejects a body over MaxBodySize (1 MiB), but **after** the bytes are
+in memory. Measured: a 256 MiB body allocated **572 MiB** to reach a verdict
+available at 1 MiB (io.ReadAll doubles as it grows). A few concurrent requests
+ends the process.
+
+Plain violation of "no unbounded reads from a request. Ever" -- and `gin`,
+`echo` and `proxy` all delegate to `middleware.HTTP`, so **four of ten modules
+shared one bug**.
+
+Fix: read `MaxBodySize+1`, which is enough to know the body is over. 572 MiB ->
+2 MiB, same 403, same ReasonLimit.
+
+**The second half is what stops the fix being a worse bug.** Truncating for the
+origin would corrupt data: under FailOpen an oversize request proceeds and the
+handler would get a silently shortened body. The buffered prefix is chained to
+the *unread remainder* via MultiReader, so the handler streams the rest and the
+middleware never holds more than limit+1.
+
+Needed `(*gwaf.WAF).Limits()` -- the middleware could not size its buffer without
+knowing the ceiling the engine applies, which is how it came to apply none.
+
+**The lesson about attention, not code:** twenty-two commits of adversarial work
+on the core module, and the worst bug of the cycle was one `io.ReadAll` in the
+integration layer nobody had looked at. Coverage of *attention* is a thing to
+audit, the same way coverage of tests is.

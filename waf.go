@@ -227,6 +227,15 @@ func (w *WAF) Report() rules.Report { return w.ruleset.Load().Report() }
 // Schema returns the configured API description, or nil.
 func (w *WAF) Schema() *schema.Schema { return w.cfg.schema }
 
+// Limits reports the configured bounds.
+//
+// Exported so an integration can bound what it reads. A middleware buffering a
+// request body has to know the ceiling the WAF will apply or it allocates
+// without one: io.ReadAll on a client-controlled body spent 572 MiB reaching a
+// verdict the engine reaches at 1 MiB, which makes the firewall the denial of
+// service it exists to prevent (CLAUDE.md §2, invariant 3).
+func (w *WAF) Limits() Limits { return w.cfg.limits }
+
 // Mode returns the configured enforcement mode.
 func (w *WAF) Mode() Mode { return w.cfg.mode }
 

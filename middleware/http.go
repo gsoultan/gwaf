@@ -175,7 +175,7 @@ func serve(waf *gwaf.WAF, cfg *config, next http.Handler, w http.ResponseWriter,
 	// Blocking above means the body was never read from the client, which is
 	// the point of the phase ordering: a request rejected on its headers costs
 	// nothing to read.
-	restore, ok := captureBody(tx, r)
+	restore, ok := captureBody(tx, waf, r)
 	if !ok {
 		// The body could not be read. Treating that as clean would assert
 		// something about bytes nobody saw.
@@ -256,7 +256,30 @@ func populateRequest(tx *gwaf.Transaction, r *http.Request) {
 // The returned function restores r.Body so the handler reads the same bytes.
 // The bool reports whether the body could be read at all; a body that could not
 // be read has not been shown to be clean.
-func captureBody(tx *gwaf.Transaction, r *http.Request) (restore func(), ok bool) {
+//
+// # The read is bounded, and it was not
+//
+// This called io.ReadAll on a client-controlled stream. The engine rejects a
+// body over MaxBodySize -- 1 MiB by default -- but that check happens after the
+// bytes are already in memory, so a 256 MiB body allocated 572 MiB to reach a
+// verdict available at 1 MiB. io.ReadAll doubles its buffer as it grows, which
+// is where the 2.2x comes from. A handful of concurrent requests like that ends
+// the process, and the firewall is then the outage rather than the defence --
+// the thing CLAUDE.md §2 invariant 3 exists to prevent, and a plain violation
+// of "no unbounded reads from a request, ever".
+//
+// One byte past the limit is enough to know the body is over it, so that is
+// what is read. The engine sees an oversize body and returns ReasonLimit
+// exactly as before; what changes is the memory spent getting there.
+//
+// # Why the handler still sees a whole body
+//
+// Truncating for the origin would be worse than the bug: under FailOpen an
+// oversize request proceeds, and handing the handler a silently shortened body
+// corrupts data rather than protecting anything. The restore chains the
+// buffered prefix to the *unread remainder*, so the handler streams the rest
+// and the middleware never holds more than the limit plus one byte.
+func captureBody(tx *gwaf.Transaction, waf *gwaf.WAF, r *http.Request) (restore func(), ok bool) {
 	if r.Body == nil || r.Body == http.NoBody {
 		return func() {}, true
 	}
@@ -266,16 +289,38 @@ func captureBody(tx *gwaf.Transaction, r *http.Request) (restore func(), ok bool
 		return func() {}, true
 	}
 
-	buf, err := io.ReadAll(r.Body)
-	_ = r.Body.Close()
+	limit := waf.Limits().MaxBodySize
+	if limit <= 0 {
+		limit = gwaf.DefaultLimits().MaxBodySize
+	}
+
+	// One past the ceiling: enough to distinguish "at the limit" from "over it"
+	// without reading a byte more.
+	buf, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
 	if err != nil {
+		_ = r.Body.Close()
 		return func() {}, false
 	}
 
 	tx.SetRequestBody(buf)
+
+	if len(buf) <= limit {
+		// The whole body. Close now, since nothing else will read it.
+		_ = r.Body.Close()
+		return func() {
+			r.Body = io.NopCloser(bytes.NewReader(buf))
+			r.ContentLength = int64(len(buf))
+		}, true
+	}
+
+	// Over the limit. The engine will say so; the handler, if it ever runs,
+	// gets the prefix followed by whatever is still on the wire.
+	rest := r.Body
 	return func() {
-		r.Body = io.NopCloser(bytes.NewReader(buf))
-		r.ContentLength = int64(len(buf))
+		r.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(buf), rest), rest}
 	}, true
 }
 

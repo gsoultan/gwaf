@@ -45,6 +45,28 @@ targets and its exit code now depends on them.
 
 ### Security
 
+- **The middleware read request bodies without a bound, so the firewall was the
+  denial of service.** `captureBody` called `io.ReadAll` on a client-controlled
+  stream. The engine rejects a body over `MaxBodySize` — 1 MiB by default — but
+  that check happens *after* the bytes are in memory: a 256 MiB body allocated
+  **572 MiB** to reach a verdict available at 1 MiB, because `io.ReadAll`
+  doubles its buffer as it grows. A handful of concurrent requests ends the
+  process.
+
+  This is a plain violation of CLAUDE.md §2's "no unbounded reads from a
+  request. Ever", in the one file every Profile-A adopter runs — and `gin`,
+  `echo` and `proxy` all delegate to it, so four of the ten modules shared it.
+
+  One byte past the limit is enough to know a body is over it, so that is what
+  is read now: **572 MiB → 2 MiB**, same 403, same `ReasonLimit`.
+
+  The handler still sees a whole body, and that half matters as much. Truncating
+  for the origin would be worse than the bug — under `FailOpen` an oversize
+  request proceeds, and a silently shortened body loses data while protecting
+  nothing. The buffered prefix is chained to the unread remainder, so the
+  handler streams the rest and the middleware never holds more than the limit
+  plus one byte.
+
 - **`COPY ... TO PROGRAM` walked through.** It is PostgreSQL's `INTO OUTFILE`:
   the shortest path from injection to command execution, since the server runs
   the string as a shell command. `'; copy (SELECT '') to program 'curl …'-- -`
