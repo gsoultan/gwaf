@@ -146,7 +146,7 @@ the same origin.
 
 | | gwaf | gwaf tuned | Coraza + CRS 4.25 |
 |---|---|---|---|
-| Detection | 89.2% | **92.9%** | 89.7% |
+| Detection | 89.3% | **93.1%** | 89.7% |
 | False positives (ordinary traffic) | 2/12 | **0/12** | 4/12 |
 | Latency | 61 µs | **57 µs** | 920 µs |
 

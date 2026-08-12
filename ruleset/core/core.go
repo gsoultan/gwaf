@@ -1483,11 +1483,11 @@ func requestRules() rules.Set {
 			// "<!ENTITY lol '&lol;&lol;...'>" expands until the parser runs out
 			// of memory. Whitespace is stripped by the chain, so the spacing
 			// variants collapse together.
-			Op:         op.ContainsAny("<!entity", "<!element", "%remote;", "<!attlist"),
+			Op:         xmlEntityOrExternalDTD(),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
 			Confidence: types.Certain,
-			Msg:        "XML entity declaration in request",
+			Msg:        "XML entity or external DTD in request",
 			Tags:       []string{"xxe", "dos", "owasp-a05"},
 		},
 
@@ -1966,7 +1966,7 @@ func readsArgs(r rules.Rule) bool {
 func repeatedTraversal() rules.Operator {
 	return op.Func("repeated_traversal", func(v []byte) bool {
 		runs := 0
-		for i := 0; i+2 < len(v); {
+		for i := 0; i+1 < len(v); {
 			if v[i] == '.' && v[i+1] == '.' {
 				if n := traversalSep(v, i+2); n > 0 {
 					runs++
@@ -1975,6 +1975,22 @@ func repeatedTraversal() rules.Operator {
 					}
 					i += 2 + n
 					continue
+				}
+				// A ".." ending the value is still a segment: "../.." walks two
+				// levels and names no file, which is what a directory listing
+				// probe looks like. The loop used to stop at i+2 < len(v), so
+				// the final segment was never examined and "category=../.."
+				// counted one level -- below the bar this rule sets.
+				//
+				// The separator *before* it is what keeps this narrow. Without
+				// that test "report..final.pdf" and "v1.2..v1.3" would end in a
+				// segment they do not contain.
+				if i+2 == len(v) && (i == 0 || traversalSep(v, i-1) > 0) {
+					runs++
+					if runs >= 2 {
+						return true
+					}
+					break
 				}
 			}
 			runs = 0

