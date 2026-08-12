@@ -121,4 +121,31 @@ The core module has **zero third-party dependencies** by design, so a
 dependency vulnerability cannot reach it. That is not true of the adapter and
 integration modules, which is exactly why `make check` runs `govulncheck`
 across **all** modules and treats a missing scanner as a failure rather than a
-skip. Releases ship an SBOM and SLSA provenance.
+skip.
+
+### Verifying a release
+
+Every release carries a CycloneDX SBOM per module, bundled and signed with SLSA
+build provenance:
+
+```bash
+gh release download v0.5.0 -p 'gwaf-*-sbom.tar.gz*'
+
+# The provenance: who built it, from which commit, with which workflow.
+gh attestation verify gwaf-v0.5.0-sbom.tar.gz --repo gsoultan/gwaf
+
+sha256sum -c gwaf-v0.5.0-sbom.tar.gz.sha256
+tar -xzf gwaf-v0.5.0-sbom.tar.gz
+```
+
+There is one SBOM per module, and the split is the point. `core.cdx.json` lists
+**zero components** — that is the zero-dependency claim above, in a form you can
+check rather than take on trust — while `adapters-gin.cdx.json` lists 29. The
+dependency risk of embedding gwaf is entirely a function of which modules you
+import, and the SBOMs are how you see that before you import them.
+
+This section previously ended "Releases ship an SBOM and SLSA provenance" while
+v0.5.0 shipped no assets at all and nothing in the repository produced either
+one. It is recorded here rather than quietly corrected, because a security
+policy describing a control that does not exist is the failure mode this
+document is supposed to help a reader avoid.
