@@ -55,4 +55,10 @@ criteria. `RULES.md`, `INTEGRATION.md`, `PERFORMANCE.md`, `GATEON-MIGRATION.md`.
 ## Gotchas worth reading before optimizing
 [[prefilter_literal_selectivity]] — a literal set can be sound and still filter
 nothing. `detect_xss` declares `"`, so XSS evaluates on 100% of JSON traffic
-while `gwaf lint` correctly reports it as prefiltered.
+while `gwaf lint` correctly reports it as prefiltered. Measure it with
+`gwaf lint -corpus`.
+
+[[rejected_literal_hints]] — and do not "fix" that by telling operators which
+literals hit, or by tightening the broad ones. Built and reverted with a
+counterexample: tolerant matching makes the detector match text its own literals
+are absent from, so both are bypasses.
