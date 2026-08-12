@@ -45,6 +45,56 @@ targets and its exit code now depends on them.
 
 ### Security
 
+- **A value ending in a bare quote crashed the request.** `foldStringConcatInto`
+  stripped a closing quote from every quoted run it scanned, including the runs
+  that did not have one. For a value whose last byte is a quote the run starts
+  and ends at the same index, so excluding a delimiter that was never there
+  slices backwards and the runtime kills the goroutine mid-request.
+
+  A WAF that panics on a crafted value is a WAF an attacker can take out of the
+  request path. None of the inputs involved is exotic — `system('id`, `x"`, a
+  trailing backslash — they are what a truncated payload and an ordinary scanner
+  probing quote handling look like, which is most of what a WAF sees. Introduced
+  this cycle and not present in v0.4.2, so nothing shipped with it.
+
+  `FuzzBuild` had covered this function since the day it was written and did not
+  find it, because not one of its seeds contained a quote: `ClassStringConcat`
+  was added to the code and not to the corpus. Adding the seeds turned up 433
+  new interesting inputs in 40 seconds. A seed corpus is part of the class, not
+  decoration for it — extending a target's reach by editing only the code under
+  it is how a fuzz target reports coverage it does not have.
+
+- **The audit record amplified the request it was describing.** A 1 MiB
+  parameter name produced a **3.1 MiB** record. `MatchedBytes` was bounded at
+  256 bytes and nothing else was, so the name was written as the key, again in
+  the suggested exception, and a third time inside the rendered target —
+  `ARGS:<key>`, a field that does not look like it carries attacker input.
+
+  A 1 MiB *value* produced 672 bytes, correctly, which is why this survived
+  review: the field that looked dangerous was the one already handled.
+
+  An audit sink a client can drive to three times its input is the sink becoming
+  the outage. Filling a disk or a SIEM quota is a denial of service that also
+  destroys the evidence of the attack that caused it.
+
+  Bounding the key took it to 1.05 MiB; bounding the target as well took it to
+  1,230 bytes; then the harness failed a third time on the exception's path.
+  Field-by-field is the wrong unit, so every attacker-influenced string now goes
+  through one bound and the test asserts a ceiling on the **serialized record**
+  rather than on a list of fields somebody must remember to extend. `MaxKeyBytes`
+  (256) is `body.Limits.MaxKeyLen`, the answer this project already gave to how
+  long a parameter name is; `MaxPathBytes` is 2048. Truncation is marked, because
+  a key an operator searches for and cannot find reads as a broken log rather
+  than an abbreviated one.
+
+- **`telemetry` needed no fix and can now fail if that changes.** Its package doc
+  has always refused per-route labels, on the grounds that unbounded cardinality
+  is how a metrics endpoint becomes the outage. That was a comment. A harness now
+  puts 5,000 distinct paths, parameter names, client IPs and user agents through
+  `Observe` and asserts what comes out: **5 rule keys and 1 severity key**,
+  because the maps are keyed by rule ID and a typed constant. It exists for
+  whoever later adds `ByPath` to make a dashboard nicer.
+
 - **`seclang` parsed without bounds, and without a stated trust boundary.**
   Those are the same gap. A test comment called it "a build-time tool", but
   `Parse` is exported from a module anyone may import, and the first adopter
