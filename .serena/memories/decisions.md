@@ -2670,3 +2670,35 @@ which is what a directory-listing probe looks like.
 The separator *before* it is what keeps the fix narrow: without that test,
 "report..final.pdf" and "v1.2..v1.3" would end in segments they do not contain.
 Both are in the benign corpus now.
+
+## The chain audit found nothing to merge, and that is the result
+
+Plan item predicted "14 transform chains with no audit". **Both halves were
+wrong.** `gwaf lint`'s ChainGroups counts (phase x chain) pairs, so 14 is
+**6 distinct chains across 4 phases**. And all six are load-bearing:
+
+    (none)                                          raw-byte rules: a CR in a
+                                                    header and a NUL in a file
+                                                    name are findings *because*
+                                                    they arrived undecoded
+    lowercase                                       pre-decode rules. 1001 matches
+                                                    "%2e%2e", 1005 matches "%00" --
+                                                    decoding first blinds them
+    url_decode+lowercase                            word-boundary rules (3012, 2011)
+    url_decode+escape_decode                        language-level escapes
+    url_decode+lowercase+remove_whitespace          decodeChain, the bulk
+    url_decode+hex_escape+lowercase+normalize_path  pathChain
+
+Prefix reuse in `stages` is what makes six affordable: sorted by chain, four
+resume from a `url_decode` already computed and decodeChain resumes from
+`url_decode+lowercase` -- eight transform applications per value rather than
+twelve.
+
+**The deliverable was the enforcement, not a change.** `TestTransformChainInventory`
+pins the set with each chain's reason, so a seventh fails the build until someone
+writes down why. The cost of a novel chain was documented in a memory nobody
+reads before adding a rule; now the compiler asks.
+
+Third time this cycle that auditing a suspected problem found the code already
+right and the *claim* unenforced. That is the pattern worth keeping: probe
+first, and when the premise fails, ship the harness rather than a change.

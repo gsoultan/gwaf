@@ -316,6 +316,32 @@ targets and its exit code now depends on them.
   deliberately absent from the sink list for the same reason — each is what a
   search box is called.
 
+- **The transform-chain inventory is pinned** (`TestTransformChainInventory`).
+  Chains are the expensive axis — each is materialised once per value per phase,
+  and `decisions.md` records that going from ten to twelve once cost more than
+  ninety extra literals did. A rule author adding a novel chain pays that for
+  every value in the phase, and nothing told them.
+
+  The audit that produced it found the set already minimal, which is worth
+  stating because the plan predicted otherwise. `gwaf lint` reports 14, and that
+  is 6 distinct chains across 4 phases — `ChainGroups` counts (phase × chain)
+  pairs, not chains. All six are load-bearing:
+
+  | Chain | Why it cannot merge |
+  |---|---|
+  | `(none)` | a CR in a header and a NUL in a file name are findings *because* they arrived undecoded |
+  | `lowercase` | 1001 matches `%2e%2e` and 1005 matches `%00` — decoding first blinds them to what they look for |
+  | `url_decode+lowercase` | 3012 and 2011 read word boundaries `RemoveWhitespace` destroys |
+  | `url_decode+escape_decode` | values carrying language-level escapes |
+  | `url_decode+lowercase+remove_whitespace` | `decodeChain`, the bulk |
+  | `url_decode+hex_escape_decode+lowercase+normalize_path` | `pathChain`, which resolves traversal rather than looking for it |
+
+  Prefix reuse in `stages` is what makes six affordable: four resume from a
+  `url_decode` already computed and `decodeChain` resumes from
+  `url_decode+lowercase`, so a value costs eight transform applications rather
+  than twelve. Adding a seventh now fails the build until someone writes down
+  why it has to exist.
+
 - **Rule 3012, JavaScript injected into a script context** — and with it XSS goes
   from 962/1007 to **993/1007**, exactly level with Coraza + CRS, taking tuned
   detection to **91.4%** against their 89.7%.
