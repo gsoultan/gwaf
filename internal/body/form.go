@@ -31,6 +31,45 @@ func (p *Parser) ParseForm(src []byte, fn Emit) error {
 			continue
 		}
 
+		// Both separator readings, for the reason Transaction.addQueryArguments
+		// gives at length: some origins honour ';' as a pair separator and most
+		// do not, and committing to either discards the other. The query side
+		// was fixed when "?cmd=;whoami" turned out to be a live command
+		// injection; the body kept the '&'-only reading, which is the majority
+		// one and therefore hides the *name*-anchored half -- a payload after
+		// ';' arrives as part of a value here and as an argument name there.
+		//
+		// The whole pair is emitted first because it is the reading most
+		// origins use, which matters when MaxFields is reached. A pair with no
+		// ';' costs one IndexByte and produces nothing extra.
+		if err := p.emitPair(pair, fn); err != nil {
+			return err
+		}
+		if bytes.IndexByte(pair, ';') < 0 {
+			continue
+		}
+		for len(pair) > 0 {
+			var sub []byte
+			if i := bytes.IndexByte(pair, ';'); i >= 0 {
+				sub, pair = pair[:i], pair[i+1:]
+			} else {
+				sub, pair = pair, nil
+			}
+			if len(sub) == 0 {
+				continue
+			}
+			if err := p.emitPair(sub, fn); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// emitPair splits one "name=value" pair, decodes both halves and emits them.
+func (p *Parser) emitPair(pair []byte, fn Emit) error {
+	{
+
 		var rawName, rawValue []byte
 		if i := bytes.IndexByte(pair, '='); i >= 0 {
 			rawName, rawValue = pair[:i], pair[i+1:]
@@ -61,6 +100,24 @@ func (p *Parser) ParseForm(src []byte, fn Emit) error {
 
 		if len(p.scratch) > p.limits.MaxValueLen {
 			return ErrTooLarge
+		}
+
+		// The parameter *name* is attacker-controlled and is emitted in its own
+		// right, exactly as ParseJSON emits an object key and ParseMultipart
+		// emits a field name.
+		//
+		// It was not, and the asymmetry is the one readsArgs already warns
+		// about from the other direction: a rule reading names "would catch
+		// ?password[$ne]=1 and miss {"password":{"$ne":null}}". JSON keys were
+		// fixed; form names were left, so the *same* payload was caught in a
+		// query string and missed in a urlencoded body. NoSQL operators and
+		// prototype pollution both live in the name.
+		p.fields++
+		if p.fields > p.limits.MaxFields {
+			return ErrTooManyFields
+		}
+		if !fn(p.path, p.path, KindKey) {
+			return nil
 		}
 
 		p.fields++

@@ -817,12 +817,20 @@ func TestSwapRulesetUnderLoad(t *testing.T) {
 		t.Error(msg)
 	}
 
-	// The premise, checked rather than assumed. Ten swaps would mean the
-	// workers barely straddled one; the number here is normally in the
-	// millions, and a sharp drop is itself worth investigating.
-	if n := swaps.Load(); n < int64(workers*iterations) {
-		t.Errorf("only %d swaps against %d transactions: the two did not "+
-			"overlap enough for this to have tested anything",
+	// The premise, checked rather than assumed: a concurrency test that finishes
+	// before the thing it races with has started passes without exercising
+	// anything.
+	//
+	// The floor is deliberately far below what a quiet machine produces
+	// (hundreds of thousands) rather than tied to the transaction count. How
+	// much CPU the swapper wins against twenty-four workers is a property of
+	// the host, and an assertion that tracks it fails on a busy machine while
+	// saying nothing about the code -- the same mistake bench-guard exists to
+	// prevent for benchmarks.
+	const minSwaps = 1000
+	if n := swaps.Load(); n < minSwaps {
+		t.Errorf("only %d swaps against %d transactions: the swapper barely ran, "+
+			"so this did not test the overlap it claims to",
 			n, workers*iterations)
 	} else {
 		t.Logf("%d swaps across %d transactions", n, workers*iterations)

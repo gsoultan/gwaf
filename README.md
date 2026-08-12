@@ -41,7 +41,7 @@ workload. Reproduce with `make bench-publish`.
 | Workload | p50 | p99 | Allocations |
 |---|---|---|---|
 | Benign `GET`, no body | **917 ns** | 1.29 µs | **0** |
-| Benign `POST`, 1 KiB JSON | **13.5 µs** | 18.0 µs | **0** |
+| Benign `POST`, 1 KiB JSON | **17.8 µs** | 24.1 µs | **0** |
 | Attack (blocked at header phase) | **708 ns** | 958 ns | **0** |
 
 Percentiles rather than means, because a mean hides the request that took forty
@@ -146,7 +146,7 @@ the same origin.
 
 | | gwaf | gwaf tuned | Coraza + CRS 4.25 |
 |---|---|---|---|
-| Detection | 88.9% | **92.7%** | 89.7% |
+| Detection | 89.2% | **92.9%** | 89.7% |
 | False positives (ordinary traffic) | 2/12 | **0/12** | 4/12 |
 | Latency | 61 µs | **57 µs** | 920 µs |
 

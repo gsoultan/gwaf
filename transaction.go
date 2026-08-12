@@ -118,6 +118,9 @@ type Transaction struct {
 	// the first layer's output is this one's input.
 	nestedBuf []byte
 
+	// joinBuf backs the joined reading of repeated parameters.
+	joinBuf []byte
+
 	// Framing state for desync detection. See noteFraming.
 	contentLengths  int
 	firstLength     string
@@ -413,6 +416,90 @@ func (tx *Transaction) addQueryArguments(query string) {
 				tx.addQueryPair(sub)
 			}
 		}
+	}
+
+	tx.joinDuplicateArgs()
+}
+
+// joinArgScanLimit bounds the duplicate search.
+//
+// Finding repeats is quadratic in the argument count, and the argument count is
+// attacker-chosen up to MaxArgs, so an unbounded scan would let a request with
+// a thousand parameters cost a million comparisons. Sixty-four covers every
+// real form -- the widest in the benign corpus has eleven -- and a request past
+// it is already anomalous in its own right.
+//
+// Skipping the join above the limit loses nothing that matters: the payload is
+// still inspected as two values, and REQUEST_URI still carries the whole query
+// verbatim. What is lost is only the reading in which they are adjacent.
+const joinArgScanLimit = 64
+
+// joinDuplicateArgs records the value an origin sees when it joins repeated
+// parameters.
+//
+// # Why this reading exists
+//
+// A red-team round split a payload across two parameters of the same name:
+//
+//	?q=1'+UNION&q=+SELECT+pw--
+//
+// Neither half is an attack. ASP.NET and several other stacks join repeated
+// names with a comma before the handler sees them, and the joined value is
+// "1' UNION, SELECT pw--" -- an injection that exists only in that reading.
+// PHP keeps the last, Go keeps the first, Express builds an array; gwaf already
+// inspects each value on its own, which covers those three, and this covers the
+// fourth.
+//
+// It is the same argument as the ';' separator and the multipart sniff: the
+// origin performs a reading, so evaluate it. The comma is the separator ASP.NET
+// uses, and it is also what makes the joined value parse as two SQL fragments
+// in sequence rather than one run-on token.
+func (tx *Transaction) joinDuplicateArgs() {
+	start := tx.bodyStart
+	if start < 0 {
+		start = 0
+	}
+	n := len(tx.values)
+	if n-start > joinArgScanLimit {
+		return
+	}
+
+	for i := start; i < n; i++ {
+		if tx.values[i].Target.Kind != types.TargetArgs || len(tx.values[i].Key) == 0 {
+			continue
+		}
+		// Only the first of a run builds the joined value, so three copies of a
+		// name produce one reading rather than three.
+		dup := false
+		for j := start; j < i; j++ {
+			if tx.values[j].Target.Kind == types.TargetArgs &&
+				string(tx.values[j].Key) == string(tx.values[i].Key) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+
+		tx.joinBuf = tx.joinBuf[:0]
+		count := 0
+		for j := i; j < n; j++ {
+			if tx.values[j].Target.Kind != types.TargetArgs ||
+				string(tx.values[j].Key) != string(tx.values[i].Key) {
+				continue
+			}
+			if count > 0 {
+				tx.joinBuf = append(tx.joinBuf, ',')
+			}
+			tx.joinBuf = append(tx.joinBuf, tx.values[j].Data...)
+			count++
+		}
+		if count < 2 {
+			continue
+		}
+		tx.recordBytes(types.Target{Kind: types.TargetArgs},
+			string(tx.values[i].Key), tx.joinBuf, false)
 	}
 }
 

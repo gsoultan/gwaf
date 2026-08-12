@@ -179,8 +179,10 @@ func (d *Detector) Analyze(doc []byte) Verdict {
 		return Verdict{}
 	}
 	src := doc
+	oversize := false
 	if len(src) > maxScan {
 		src = src[:maxScan]
+		oversize = true
 	}
 
 	var v Verdict
@@ -189,6 +191,19 @@ func (d *Detector) Analyze(doc []byte) Verdict {
 
 	v.Depth, v.Fields, v.MaxAlias = s.maxDepth, s.fields, s.maxAlias
 
+	// A document too large to read whole has not been shown to be within any
+	// limit, and the limits here only ever *under*-count from a prefix: depth,
+	// field count and alias count are all global properties, so a query whose
+	// expensive half is past the cut scores as the cheap half.
+	//
+	// Reported rather than windowed. A window is not a document -- structural
+	// scoring over a fragment measures a fragment -- so the honest answer is
+	// that the bound was reached, which is itself the finding: no client sends
+	// a half-megabyte query, and one that does is the resource abuse these
+	// signals exist to catch.
+	if oversize {
+		v.Signals |= SignalExcessiveComplexity
+	}
 	if s.maxDepth > d.limits.MaxDepth {
 		v.Signals |= SignalExcessiveDepth
 	}

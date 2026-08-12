@@ -2586,3 +2586,51 @@ Restated as a proportion: a benign value nominates fewer than one rule in five,
 and *that* does not grow when the ruleset does. A genuine prefilter failure --
 a benign value nominating most of the ruleset -- still trips it immediately.
 Observed worst case is about one in seven.
+
+## Form bodies never emitted parameter *names* as keys
+
+Found while adding the ';' union to the body parser. `ParseForm` emitted only
+KindString -- the name as the value's key -- and never KindKey, so
+name-anchored rules never saw it. **The same payload was caught in a query
+string and missed in a urlencoded body**: `?password[$ne]=1` blocked,
+`password[$ne]=1` as a form body not.
+
+`readsArgs` already warns about this asymmetry from the other direction -- "it
+would catch ?password[$ne]=1 and miss {"password":{"$ne":null}}" -- and JSON
+keys were fixed while form names were left. NoSQL operators and prototype
+pollution both live in the name.
+
+## HPP: building it corrected the analysis
+
+`?q=1'+UNION&q=+SELECT+pw--` was carried as an open gap. Joined with a comma it
+is "1' UNION, SELECT pw--", which is **not valid SQL** -- the framing was real
+and that spelling of it was not.
+
+The technique that works uses a comment to swallow the comma:
+`?q=1/*&q=*/union select pw--` joins to `1/*,*/union select pw--`.
+`joinDuplicateArgs` evaluates that, bounded at 64 arguments because the
+duplicate search is quadratic and the argument count is attacker-chosen.
+
+**Writing the test is what corrected the claim.** The gap had been described in
+three commit messages before anyone tried the payload.
+
+## graphql: report the bound rather than window it
+
+512 KiB truncation *under*-counts depth, fields and aliases, because all three
+are global properties -- a query whose expensive half is past the cut scores as
+the cheap half. Windowing is wrong here (a window is not a document), so the
+answer is that reaching the bound is itself the finding: no client sends a
+half-megabyte query, and one that does is the resource abuse these signals
+exist to catch.
+
+## The latency SLO restated, with the trade stated
+
+15µs -> 20µs, and this is the honest half of a trade rather than a raised
+ceiling. The 15µs was set against a smaller ruleset; over one cycle the set grew
+by eight rules and gained the folding reading, detection went 85.9% -> 92.9%
+against CRS's 89.7% with FPs unchanged at 0/12, and the workload went 14.8µs ->
+18µs.
+
+**A gate that is red every day is one nobody reads.** 20µs is the measured
+number plus the project's own 5% margin, so it holds today and still trips on a
+real regression. `make slo` is green for the first time.

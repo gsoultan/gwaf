@@ -18,15 +18,24 @@
 //   - filename="a.php\x00.jpg", because the null-byte rule matches the encoded
 //     spelling, which is the one that does *not* work in a multipart header.
 //
-// # One framing is deliberately absent
+// # The framing tracked here is now closed, and the analysis was wrong
 //
-// "?q=1'+UNION&q=+SELECT+pw--" is not here, and it is not fixed. Neither value
-// is an attack alone; the injection exists only under the comma-joining that
-// ASP.NET and some other stacks apply to repeated parameters. Evaluating a
-// joined view of duplicate names is a real gap and a real design decision —
-// which separator, recorded where, and at what cost to the zero-allocation
-// argument path — and it is tracked rather than half-built. Adding it here as a
-// failing case would break the build to say something a comment says better.
+// "?q=1'+UNION&q=+SELECT+pw--" was carried here as an unfixed gap: neither value
+// is an attack alone, and the injection was said to exist under the comma-joining
+// ASP.NET applies to repeated parameters.
+//
+// Building it corrected that. Joined with a comma the payload is
+// "1' UNION, SELECT pw--", which is not valid SQL and not an injection — the
+// framing was real and that spelling of it was not. The technique that works
+// uses a comment to swallow the comma:
+//
+//	?q=1/*&q=*/union select pw from users--
+//
+// which joins to "1/*,*/union select pw from users--". Transaction.joinDuplicateArgs
+// evaluates that reading, bounded so the quadratic duplicate search cannot be
+// driven by a request with a thousand parameters. TestHPPJoinedReading covers it
+// alongside the ordinary repeated parameters — tag lists, checkbox groups — that
+// must not become attacks by being joined.
 
 package gwaf_test
 
