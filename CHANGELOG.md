@@ -4,6 +4,82 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## Unreleased
+
+Two detection fixes, both found by classifying the RCE misses in the nuclei
+corpus instead of guessing at them, and both in rules that were already written.
+Neither added a rule; each made an existing one reachable.
+
+Detection **93.1% → 93.4%** (2294/2457) against Coraza + CRS 4.25's 89.7%, with
+false positives unchanged at **0/12** against their 4/12 and every rule still
+inside its declared confidence tier on 10,473 benign requests.
+
+### Security
+
+- **`CommandSinkRule` read the value raw; the shell reads it decoded.** The rule
+  is nominated by the argument *name*, so it carries no transform chain — "names
+  arrive already decoded", which is true of names. Its operator then reads the
+  sibling *value*, which is not decoded, so percent-encoding the spaces evaded it:
+
+  | payload | before | after |
+  |---|---|---|
+  | `cmd=nslookup oast.example.com` | blocked | blocked |
+  | `cmd=nslookup%20oast.example.com` | **allowed** | blocked |
+  | `cmd=echo%20-n%20X%7cmd5sum` | **allowed** | blocked |
+
+  CVE-2023-45878 in the corpus is exactly that shape. It survived because the
+  obvious test case cannot see it: `cat%20/etc/passwd` was always caught, since
+  the path scan finds `/etc/passwd` at any spacing. Only a payload whose *sole*
+  signal is command-position structure slipped through, because that is the one
+  scan needing the space to delimit tokens.
+
+  Both readings are now evaluated, raw and decoded, rather than one replacing the
+  other — decoding erases evidence as readily as it reveals it. The decoded form
+  is built only when the value contains `%` or `+`, on a stack buffer.
+
+- **The canonical SSTI probe scored below the bar.** `{{7*7}}` — the payload
+  every scanner sends to find out whether a template engine evaluates input —
+  was noticed and not reported: `SignalArithmeticProbe` weighed 2 against a
+  threshold of 5.
+
+  The justification, in the comment and in a test named *"records that `{{7*7}}`
+  cannot fire alone"*, was that "`{{ 2*n }}` is a real template". True, and it
+  does not apply: the probe requires a digit on **both** sides of the operator,
+  so `{{ 2*n }}`, `{{ price*qty }}`, `{{ item.count * 2 }}` and `{{ x*3 }}` raise
+  nothing. The weight was calibrated against a case the code already excluded.
+
+  Measured before changing it, because a weight is a false-positive claim: of
+  84,682 benign values, **1,918 carry template delimiters and zero carry constant
+  arithmetic inside them**. A template that computes `7*7` would be written `49`.
+
+  SSTI **2/4 → 3/4** (Coraza 1/4), injection 9/14 → 10/14, fileupload 45 → 46/52.
+
+### Changed
+
+- **`{{7*7}}` and `${7*7}` now block by default.** An adopter whose traffic
+  legitimately carries constant arithmetic inside template delimiters — a
+  templating tutorial, a documentation site quoting one — needs a scoped
+  exception. Ordinary template syntax is unaffected and was measured to be so.
+
+### Added
+
+- **`gwaf lint -corpus` measures prefilter selectivity.** A rule is *prefiltered*
+  when its operator declares a required literal and *selective* only when that
+  literal is absent from ordinary traffic; `detect_xss` declares `"`, so it is
+  both prefiltered and evaluated on all JSON traffic. Reported, never gated —
+  and the output says to narrow a literal **only** when the scan it guards
+  matches byte-for-byte, because a broad literal is usually what keeps a tolerant
+  matcher reachable. See `.serena/memories/rejected_literal_hints.md`.
+- **Releases ship an SBOM and SLSA provenance**, which `SECURITY.md` had promised
+  while v0.5.0 shipped zero assets. One CycloneDX document per module: core lists
+  **0 components**, `adapters/gin` lists 29 — the zero-dependency claim in a form
+  an adopter can check. Verify with `gh attestation verify`.
+- **`linux/amd64` benchmark numbers** in `docs/BENCHMARKS.md` §2b, including the
+  two SLOs a shared CI runner does not meet.
+- **CRS conformance measured for the first time**: 2079/5066 (41.0%) through the
+  SecLang adapter with exact rule-ID matching. Read it beside the 93.4% on real
+  CVE exploits — the two ask different questions.
+
 ## v0.5.0 — 2026-08-12
 
 The cycle where the documented invariants were checked instead of believed.
