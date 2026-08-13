@@ -530,3 +530,51 @@ Re-run:
 
     cd /tmp/slscan && go run . /path/coreruleset/rules
     (ParseSources with DefaultConfidence + DataFiles; rank rep.Skipped by What/Why)
+
+## Rejected: chained SecRule support — 2026-08-13
+
+Measured before building, and the measurement says do not build it.
+
+Chains looked like the largest remaining SecLang gap: 55 of them, none
+imported, roughly 20% of what CRS would contribute. Implementing them means
+teaching the engine to evaluate a conjunction across different collections,
+which it deliberately does not do — it evaluates one value at a time. That is a
+change to the hot path's evaluation model, so it needs to buy something.
+
+Decomposing CRS 4.25's 55 chains:
+
+| | count |
+|---|---|
+| reference a variable gwaf refuses by design | **37** |
+| translatable, head only annotates (`pass`) | 2 |
+| translatable, head blocks | 16 |
+
+The 37 are blocked by decisions already made and still made after chains exist:
+`TX` (22) is CRS's anomaly-score collection, which gwaf rejects as an engine
+concept in favour of confidence tiers; `MATCHED_VARS` (10) is the same model.
+Implementing chains does not reach any of them.
+
+Of the 16 that would block:
+
+- **920181, CL and TE both present, is already caught** — engine-level desync
+  detection returns `framing_ambiguous` without any rule. That is the most
+  valuable one in the set, the classic CL.TE request-smuggling signature, and
+  chains would add nothing.
+- Most of the rest are protocol *hygiene* rather than injection: "Request
+  Missing an Accept Header", "Range: Too many fields", "Request Has an Empty
+  Accept Header". CRS runs these at low paranoia feeding an anomaly score, so
+  they contribute points rather than block. Imported into a model that blocks on
+  a confidence tier they are false positives waiting to happen — curl and most
+  API clients omit Accept.
+- The genuinely valuable, low-FP remainder is **three**: GET/HEAD with a body
+  (920170), GET/HEAD with Transfer-Encoding (920171), and POST with neither
+  Content-Length nor Transfer-Encoding (920180). Verified missing.
+
+**So the honest cost/benefit is: a change to the engine's evaluation model, for
+three rules.** Each of those three is a two-condition check on the method and
+one header — expressible as a native gwaf rule or as an extension of desync
+detection, with no conjunction mechanism at all.
+
+If chain support is ever built, build it for a reason other than CRS coverage.
+The 55 is not 55; after the variables gwaf refuses and the one the engine
+already catches, it is three.
