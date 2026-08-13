@@ -412,3 +412,56 @@ re-run, match on `panic:` or on the `Failing input written` line instead.
 
 Worth re-running when a detector gains a new input class, which is the event that
 created the gap the first time. Not worth re-running on a schedule.
+
+## CRS conformance — first real measurement, 2026-08-13
+
+`test/conformance` has existed since M0 and `TestCRSSuite` **skipped** without
+`CRS_TESTS`, so "CRS conformance" was a checkbox with no number behind it for
+the life of the project. The test's own comment said as much: "this is the run
+that produces a real number."
+
+Against CRS's own regression corpus (323 files, 5,066 cases, 31 skipped):
+
+| run | result |
+|---|---|
+| SecLang adapter, **exact CRS rule IDs** | **2079/5066 (41.0%)** |
+| gwaf core ruleset, rule IDs ignored | 1934/5066 (38.2%) |
+
+Per-category, core ruleset. Sorted by what it says rather than by score:
+
+| category | rate | reading |
+|---|---|---|
+| 999-COMMON-EXCEPTIONS | 94.6% | |
+| 949-BLOCKING-EVALUATION | 80.0% | |
+| 922-MULTIPART | 61.5% | |
+| 941-XSS | 49.8% | |
+| 921-PROTOCOL-ATTACK | 49.6% | |
+| 920-PROTOCOL-ENFORCEMENT | 48.7% | much of this is policy, not detection |
+| 933-PHP | 48.7% | |
+| 932-RCE | 39.0% | known weak area; matches the nuclei gap |
+| 930-LFI | 38.6% | |
+| 942-SQLI | 35.3% | |
+| 934-GENERIC | 35.1% | |
+| 944-JAVA | 29.0% | **largest category at 1,172 cases, and the weakest in scope** |
+| 931-RFI | 26.2% | |
+| 943-SESSION-FIXATION | 12.8% | cross-request state — out of scope by design |
+| RESPONSE-95x DATA-LEAKAGES | 0–58% | gwaf never buffers responses; out of scope by design |
+
+**Do not read this as a detection score.** On 2,457 real CVE exploits from
+nuclei-templates gwaf detects 93.1% against CRS 4.25's 89.7%. Both numbers are
+correct because they ask different questions: nuclei asks whether real attacks
+are caught, this asks whether gwaf agrees with CRS's ~900 specific rules, many
+of which exist at paranoia levels gwaf deliberately does not reproduce and
+several of which cover categories the scope line assigns to the embedder.
+
+**What is actionable is the shape, not the total.** 944-JAVA at 29% over 1,172
+cases is the largest in-scope gap and the obvious place to look. Chasing the
+total would mean tuning against CRS's test suite rather than against attacks,
+which is optimising for the benchmark — and the suite is not neutral ground,
+because it was written to exercise the rules of the product it ships with.
+
+Re-run:
+
+    CRS_TESTS=/path/coreruleset/tests/regression/tests \
+    CRS_RULES=/path/coreruleset/rules \
+    go test -count=1 -v -run TestCRSSuite ./test/conformance/

@@ -63,14 +63,18 @@ existing on day one, you optimize the wrong thing for three months and find out 
 
 Order matters; it's CONCEPT.md build-order steps 1–3.
 
-1. [ ] IR + **closure-threaded plan** + **fuel metering** — no optimizations yet
-2. [ ] Prefilter (Aho-Corasick) + candidate bitset
-3. [ ] Target-grouped evaluation plan
-4. [ ] Transform interning (materialized — slow but correct; this is M2's fuzz oracle)
-5. [ ] Arena + pointer-free `Span`
-6. [ ] Bounded streaming body parsers (form, multipart, JSON, XML)
-7. [ ] **Desync detection** (CONCEPT.md §11) — framing ambiguity rejected before rules run
-8. [ ] Policy model: confidence tiers, per-route compiled plans
+1. [x] IR + **closure-threaded plan** + **fuel metering** — no optimizations yet
+2. [x] Prefilter (Aho-Corasick) + candidate bitset
+3. [x] Target-grouped evaluation plan
+4. [x] Transform interning (materialized — slow but correct; this is M2's fuzz oracle)
+5. [x] Arena + pointer-free `Span`
+6. [~] Bounded streaming body parsers — form, multipart, JSON and protobuf/gRPC
+       ship in `internal/body`. **There is no XML parser.** XXE is covered by a
+       rule scanning the raw body (`ruleset/core/xxe.go`), which finds an inline
+       entity declaration or an external DTD but does not parse the document, so
+       nothing bounds XML nesting structurally
+7. [x] **Desync detection** (CONCEPT.md §11) — framing ambiguity rejected before rules run
+8. [x] Policy model: confidence tiers, per-route compiled plans
 
 **Gates:**
 - Benign GET: **0 allocations, 0 rules evaluated**
@@ -124,8 +128,8 @@ closures don't win at ≥100 rules, keep the IR and swap the executor. Don't def
        names too, and each part's declared charset is reported. Added rule 1005
        for encoded NUL bytes: the double-extension payload is the *disagreement*
        between readings, so the NUL is what to detect, not the extension.
-7. [ ] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
-6. [ ] **SecLang parser** (pulled forward — gateon's DB requires it)
+7. [x] Cross-parameter joined view (CONCEPT.md §10), reduced confidence
+6. [x] **SecLang parser** (pulled forward — gateon's DB requires it)
 7. [x] **`gwaf calibrate`** — confidence is now measured against a committed
        benign corpus and gated in CI, which was the largest doc/code gap: it was
        cited as a gate in CLAUDE.md and CONCEPT.md §8 while being a claim rather
@@ -236,7 +240,7 @@ and the framework adapters belong.
        Measured: benign POST with a 1 KiB JSON body **16.4µs → 13.0µs**, benign
        GET **1.5µs → 0.74µs**, ruleset scaling 354ns → 240ns and still flat from
        10 to 10,000 rules. Detection identical, allocations still zero.
-4. [ ] **Context-aware confidence from schema** (§9)
+4. [x] **Context-aware confidence from schema** (§9)
 4. [~] **gRPC frame handling shipped** (`internal/body/grpc.go`): message
        unframing, per-message decompression via `grpc-encoding`, and whole-body
        base64 for grpc-web-text. Two live bypasses closed — both the same class
@@ -252,7 +256,7 @@ and the framework adapters belong.
        amplification, and fragment cycles in the core ruleset; introspection as
        an opt-in rule, because it is how every GraphQL development tool works
        and blocking it by default is the "switched off in week one" failure.
-5. [ ] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation
+5. [x] `net/http` middleware — body double-read via arena, `ResponseWriter` interface preservation
 6. [~] Framework adapters shipped as separate modules: `adapters/gin`,
        `adapters/echo`, `adapters/fiber`. `Explain()` shipped.
        `rules.Overlay` remains.
@@ -297,7 +301,14 @@ The most important milestone. A WAF library with no adopter is a benchmark, not 
        faithfully is **reported, never approximated** — a silently weakened rule
        is worse than an absent one. `gwaf convert --from seclang` and
        `gwaf doctor` remain.
-5. [ ] CRS v4.25 LTS conformance
+5. [~] CRS conformance — **measured for the first time on 2026-08-13, and the
+       number is low.** Through the SecLang adapter with exact rule-ID matching:
+       **2079/5066 (41.0%)** over CRS's own 323-file regression corpus. gwaf's
+       core ruleset against the same corpus, rule IDs ignored, is 1934/5066
+       (38.2%). Read it beside the nuclei result — 93.1% against CRS's 89.7% on
+       2,457 real CVE exploits — because they measure different things: that one
+       asks whether real attacks are caught, this one asks whether gwaf agrees
+       with CRS's ~900 specific rules
 6. [ ] Second adopter — **do not skip.** One adopter shapes the API around one use case.
 
 **Gates:**
@@ -316,7 +327,7 @@ The most important milestone. A WAF library with no adopter is a benchmark, not 
        as p50/p90/p99/p99.9/max rather than as a mean, which is what the SLO
        table always claimed and nothing had ever measured. Remaining: a
        `linux/amd64` run, and a like-for-like comparison against another WAF.
-3. [ ] SLSA-3 provenance, SBOM, signed releases, documented CVE process
+3. [x] SLSA-3 provenance, SBOM, signed releases, documented CVE process
 4. [ ] Public API + four extension interfaces frozen under semver
 
 **Gate:** external sign-off, and every SLO in CLAUDE.md §2 met on published hardware.
