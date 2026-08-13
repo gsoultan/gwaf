@@ -95,6 +95,18 @@ func (c *compiler) run(ds []directive) rules.Set {
 			c.skip(d.Line, 0, d.Name,
 				"removal by tag or message needs the rule text at import time; "+
 					"re-express it as SecRuleRemoveById or a gwaf exception")
+
+		case "secruleupdatetargetbyid":
+			// Collected in the same pass as removals and for the same reason:
+			// CRS puts these in REQUEST-999-COMMON-EXCEPTIONS-AFTER, which is
+			// included last, so a single in-order pass sees them after the rules
+			// they tune.
+			//
+			// All 55 in CRS 4.25 live in that file and all but one exclude a
+			// cookie -- _ga, __gads, the analytics and ad cookies that are the
+			// classic CRS false-positive source. Dropping them imported CRS's
+			// detection without CRS's tuning.
+			c.updateTarget(d.Line, d.Name, d.Args)
 		}
 	}
 
@@ -216,10 +228,21 @@ func (c *compiler) secRule(ds []directive, i int) (consumed int, out rules.Rule,
 		return consumed, out, false
 	}
 
-	targets, tSkip := c.targets(splitVariables(d.Args[0]))
+	targets, excl, tSkip := c.targets(splitVariables(d.Args[0]))
 	if tSkip != "" {
 		c.skip(d.Line, id, "SecRule variables", tSkip)
 		return consumed, out, false
+	}
+	// Attached only once the rule is known to import. An exception for a rule
+	// that was skipped suppresses nothing and reads, to whoever audits the
+	// list later, as a hole somebody opened on purpose.
+	for _, e := range excl {
+		c.addException(rules.Exception{
+			RuleID: types.RuleID(id),
+			Target: e.Kind,
+			Key:    e.Key,
+			Note:   "SecLang !" + e.Key + " exclusion on rule " + strconv.FormatUint(uint64(id), 10),
+		})
 	}
 	if len(targets) == 0 {
 		c.skip(d.Line, id, "SecRule variables", "no variable maps to a gwaf target")
@@ -478,17 +501,29 @@ func (c *compiler) operator(name, arg string, negated bool) (rules.Operator, str
 }
 
 // targets maps SecLang variables onto gwaf targets.
-func (c *compiler) targets(vars []string) ([]types.Target, string) {
+func (c *compiler) targets(vars []string) ([]types.Target, []exclusion, string) {
 	var out []types.Target
+	var excl []exclusion
 	for _, v := range vars {
 		if strings.HasPrefix(v, "!") {
-			// An exclusion is a scoped exception in gwaf, which is a different
-			// object with a different lifetime.
-			return nil, "variable exclusions (!ARGS:x) are gwaf exceptions; " +
-				"express them with rules.Exception so they are visible and tunable"
+			// An exclusion is a scoped exception in gwaf -- a different object
+			// with a different lifetime, which is why it is returned separately
+			// rather than folded into the target list.
+			//
+			// This used to drop the whole rule. That is safe and expensive: a
+			// SecRule carrying "!ARGS:foo" was not imported at all, so CRS's
+			// detection went with its tuning. Importing the rule and attaching
+			// the exception is equivalent to what CRS does and strictly better
+			// than importing neither.
+			e, why := parseExclusion(strings.TrimPrefix(v, "!"))
+			if why != "" {
+				return nil, nil, why
+			}
+			excl = append(excl, e)
+			continue
 		}
 		if strings.HasPrefix(v, "&") {
-			return nil, "counting a collection (&ARGS) is not a value gwaf inspects"
+			return nil, nil, "counting a collection (&ARGS) is not a value gwaf inspects"
 		}
 
 		name, qualifier, _ := strings.Cut(v, ":")
@@ -516,21 +551,21 @@ func (c *compiler) targets(vars []string) ([]types.Target, string) {
 				out = append(out, types.Target{Kind: types.TargetRequestBody})
 				continue
 			}
-			return nil, fmt.Sprintf("XML XPath %q is not one of the whole-document "+
+			return nil, nil, fmt.Sprintf("XML XPath %q is not one of the whole-document "+
 				"forms gwaf can map to the request body", q)
 		}
 
 		kind, ok := targetKind(strings.ToUpper(strings.TrimSpace(name)))
 		if !ok {
-			return nil, fmt.Sprintf("variable %q has no gwaf equivalent", name)
+			return nil, nil, fmt.Sprintf("variable %q has no gwaf equivalent", name)
 		}
 		if strings.HasPrefix(qualifier, "/") {
-			return nil, "regex-qualified variables (ARGS:/^x/) select by name " +
+			return nil, nil, "regex-qualified variables (ARGS:/^x/) select by name " +
 				"pattern, which gwaf targets do not express"
 		}
 		out = append(out, types.Target{Kind: kind, Name: strings.TrimSpace(qualifier)})
 	}
-	return out, ""
+	return out, excl, ""
 }
 
 func targetKind(name string) (types.TargetKind, bool) {
@@ -854,4 +889,91 @@ func (c *compiler) confidence() types.Confidence {
 		return types.ConfidenceFromParanoiaLevel(c.paranoia)
 	}
 	return types.Confidence(c.opts.DefaultConfidence)
+}
+
+// exclusion is a SecLang "!VAR:key" the compiler turns into a gwaf exception.
+type exclusion struct {
+	Kind types.TargetKind
+	Key  string
+}
+
+// parseExclusion maps "REQUEST_COOKIES:__gads" onto a target and a key.
+//
+// A regex-qualified key -- CRS writes !REQUEST_COOKIES:/^_ga(?:_\w+)?$/ -- is
+// refused rather than approximated. rules.Exception matches a key exactly, and
+// the nearest prefix reading of that pattern also covers "_gabbage": broader
+// than CRS wrote. An exception that is too broad is a wider hole in the
+// firewall, which is the one direction it must not be wrong in, and it is the
+// same reason `gwaf tune` prints exceptions for a human instead of applying
+// them.
+func parseExclusion(v string) (exclusion, string) {
+	name, key, _ := strings.Cut(strings.TrimSpace(v), ":")
+	kind, ok := targetKind(strings.TrimSpace(name))
+	if !ok {
+		return exclusion{}, fmt.Sprintf("exclusion names variable %q, which has "+
+			"no gwaf equivalent", name)
+	}
+	key = strings.TrimSpace(key)
+	if strings.HasPrefix(key, "/") && strings.HasSuffix(key, "/") && len(key) > 1 {
+		return exclusion{}, fmt.Sprintf("exclusion key %s is a regex; "+
+			"rules.Exception matches a key exactly and widening it to a prefix "+
+			"would suppress more than the ruleset asked for -- write the "+
+			"exception by hand", key)
+	}
+	return exclusion{Kind: kind, Key: key}, ""
+}
+
+// addException records a translated exclusion, ignoring duplicates.
+//
+// CRS repeats the same exclusion across files -- five identical _ga cookie
+// entries in COMMON-EXCEPTIONS-AFTER alone -- and a list that carries each one
+// five times makes the report harder to audit without changing what it does.
+func (c *compiler) addException(e rules.Exception) {
+	for _, have := range c.report.Exceptions {
+		if have.RuleID == e.RuleID && have.Target == e.Target && have.Key == e.Key {
+			return
+		}
+	}
+	c.report.Exceptions = append(c.report.Exceptions, e)
+}
+
+// updateTarget translates SecRuleUpdateTargetById into an exception.
+//
+//	SecRuleUpdateTargetById 932240 "!REQUEST_COOKIES:__gads"
+//
+// The positive form -- adding a target to an existing rule -- is refused. It
+// widens what a rule inspects, and a rule that has already been imported and
+// calibrated should not silently start reading a collection the operator did
+// not see it read.
+func (c *compiler) updateTarget(line int, name string, args []string) {
+	if len(args) < 2 {
+		c.skip(line, 0, name, "expected a rule ID and a variable list")
+		return
+	}
+	id64, err := strconv.ParseUint(strings.TrimSpace(args[0]), 10, 32)
+	if err != nil {
+		c.skip(line, 0, name, "rule ID "+strconv.Quote(args[0])+" is not a number")
+		return
+	}
+	id := uint32(id64)
+
+	for _, v := range splitVariables(args[1]) {
+		v = strings.TrimSpace(v)
+		if !strings.HasPrefix(v, "!") {
+			c.skip(line, id, name, "adding a target to an imported rule widens "+
+				"what it inspects; only exclusions (!VAR:key) are translated")
+			continue
+		}
+		e, why := parseExclusion(strings.TrimPrefix(v, "!"))
+		if why != "" {
+			c.skip(line, id, name, why)
+			continue
+		}
+		c.addException(rules.Exception{
+			RuleID: types.RuleID(id),
+			Target: e.Kind,
+			Key:    e.Key,
+			Note:   "SecRuleUpdateTargetById " + strconv.FormatUint(id64, 10),
+		})
+	}
 }

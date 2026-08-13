@@ -142,3 +142,17 @@ func (c Coverage) String() string {
 	return fmt.Sprintf("seclang bridge: %d directives -> %d rules (%d prefiltered, %d not translated)",
 		c.Directives, c.Rules, c.Prefiltered, c.Skipped)
 }
+
+// Exceptions gathers the tuning the reports translated.
+//
+// Returned separately rather than applied by LoadCRS, because an exception is a
+// hole in a firewall and the caller decides which holes their deployment has.
+// The suite applies them because it is measuring conformance with the ruleset
+// CRS actually runs, tuning included.
+func Exceptions(reports []seclang.Report) []rules.Exception {
+	var out []rules.Exception
+	for _, r := range reports {
+		out = append(out, r.Exceptions...)
+	}
+	return out
+}

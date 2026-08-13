@@ -79,6 +79,15 @@ func TestCRSSuite(t *testing.T) {
 		// something different when the bridge translated half the rules.
 		t.Log(cov)
 		opts = append(opts, gwaf.WithRuleset(set))
+		// And the ruleset's own tuning. CRS ships 55 SecRuleUpdateTargetById
+		// exclusions and a further 20 inline in SecRules -- mostly analytics
+		// cookies -- and importing the detection without them measures a
+		// ruleset CRS does not run, and one strictly more false-positive-prone
+		// than the original.
+		if ex := conformance.Exceptions(reports); len(ex) > 0 {
+			t.Logf("applying %d exceptions translated from the ruleset's own tuning", len(ex))
+			opts = append(opts, gwaf.WithExceptions(ex...))
+		}
 		mode = conformance.ModeRuleID
 	}
 

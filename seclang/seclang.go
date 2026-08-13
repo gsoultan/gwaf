@@ -200,6 +200,19 @@ type Report struct {
 
 	// Skipped lists what did not come across, with file and line.
 	Skipped []Skip
+
+	// Exceptions are the ruleset's own false-positive tuning, translated.
+	//
+	// SecLang expresses it as SecRuleUpdateTargetById and as "!ARGS:x"
+	// exclusions inside a SecRule. gwaf expresses it as rules.Exception, and
+	// until this field existed both forms were dropped -- so an import got
+	// CRS's detection without CRS's tuning and was strictly more
+	// false-positive-prone than CRS itself.
+	//
+	// Pass them to gwaf.WithExceptions. They are not applied for you: an
+	// exception is a hole in a firewall and the embedder decides which holes
+	// their deployment has.
+	Exceptions []rules.Exception
 }
 
 // Skip is one thing that could not be translated.
