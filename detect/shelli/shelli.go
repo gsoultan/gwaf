@@ -72,6 +72,7 @@ import (
 
 	"github.com/gsoultan/gwaf/internal/scan"
 	"github.com/gsoultan/gwaf/rules"
+	"github.com/gsoultan/gwaf/rules/transform"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -1094,12 +1095,54 @@ func (o *sinkOperator) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, 
 	if !ok || len(v) == 0 {
 		return rules.Match{}, false
 	}
-	if o.d.AnalyzeIn(v, true).Score < o.threshold {
-		return rules.Match{}, false
+	if o.d.AnalyzeIn(v, true).Score >= o.threshold {
+		return rules.WholeValue(value), true
 	}
-	// The span belongs to the name, which is the value this operator was given;
-	// the finding names the parameter and the message says what was in it.
-	return rules.WholeValue(value), true
+
+	// Then the decoded reading.
+	//
+	// This rule carries no transform chain, because it is nominated by the
+	// argument *name* and names arrive decoded. The value it then goes and reads
+	// does not, and the application will decode it before handing it to a shell
+	// -- so analysing only the raw bytes reads a different string than the one
+	// that executes. Percent-encoding the spaces was enough to evade:
+	//
+	//	cmd=nslookup oast.example.com     blocked
+	//	cmd=nslookup%20oast.example.com   allowed
+	//
+	// CVE-2023-45878 in the nuclei corpus is exactly that shape. It survived
+	// because the obvious test case does not show it: "cat%20/etc/passwd" was
+	// always caught, since scanPaths finds /etc/passwd at any spacing. Only a
+	// payload whose sole signal is command-position structure -- which needs the
+	// space to delimit tokens -- slipped through.
+	//
+	// Both readings are evaluated rather than just the decoded one, because
+	// decoding can erase evidence as easily as it can reveal it (CLAUDE.md §2:
+	// canonicalization is multi-interpretation, never one "the" form).
+	if decodable(v) {
+		var stack [512]byte
+		dst := stack[:0]
+		if need := transform.URLDecode.MaxOutputLen(len(v)); need > len(stack) {
+			dst = make([]byte, 0, need)
+		}
+		if dec, changed := transform.URLDecode.Apply(dst, v); changed {
+			if o.d.AnalyzeIn(dec, true).Score >= o.threshold {
+				return rules.WholeValue(value), true
+			}
+		}
+	}
+	return rules.Match{}, false
+}
+
+// decodable reports whether a value could decode to something different, so the
+// second reading is only built when there is a reason to.
+func decodable(v []byte) bool {
+	for _, c := range v {
+		if c == '%' || c == '+' {
+			return true
+		}
+	}
+	return false
 }
 
 // Literals are the sink parameter names, because the name is what this operator
