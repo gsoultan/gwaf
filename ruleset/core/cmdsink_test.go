@@ -65,6 +65,18 @@ func TestCommandSinkSeesTheValueTheShellWillSee(t *testing.T) {
 		{"path, percent space", "cat%20/etc/passwd"},
 		{"fully encoded", "%63%61%74%20%2fetc%2fpasswd"},
 		{"chained", "id%3bcurl%20oast.example.com"},
+
+		// Backtick substitution. The detector does not report a bare "`id`" by
+		// default and is right not to: it is also how everyone writes inline
+		// code, and 1.00% of the benign corpus carries a backtick span --
+		// `api.example.com`, `filter`, `page[size]`. That reasoning is about a
+		// comment field and says nothing about a parameter named cmd. Nobody
+		// documents an API inside ?cmd=, and an application that hands that
+		// parameter to a shell is the bug the rule exists to find.
+		{"backtick bare word", "%60id%60"},
+		{"backtick, literal", "`id`"},
+		{"backtick whoami", "`whoami`"},
+		{"backtick joined", "127.0.0.1`id`"},
 	}
 	for _, a := range attacks {
 		t.Run(a.name, func(t *testing.T) {
@@ -103,6 +115,10 @@ func TestCommandSinkStillRejectsOrdinaryAdminTraffic(t *testing.T) {
 		// this must stay quiet however it is encoded.
 		{"note", "cat VERSION | tr -d x"},
 		{"script", "echo%20hello"},
+		// Still Markdown wherever the name does not say "shell".
+		{"comment", "use the `id` field to reference it"},
+		{"description", "the `filter` and `include` parameters"},
+		{"note", "matches `^(www|api)\\.example\\.com$`"},
 	}
 	for _, b := range benign {
 		t.Run(b.key+"="+b.value, func(t *testing.T) {

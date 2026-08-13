@@ -332,7 +332,7 @@ func (d *Detector) AnalyzeIn(value []byte, commandSink bool) Verdict {
 	// shape there is, and an application that stores one on purpose needs a
 	// scoped exception rather than a quieter detector.
 	if commandSink || !isStoredCommandLine(src) {
-		scanCommandPositions(src, mark)
+		scanCommandPositions(src, commandSink, mark)
 	}
 	// A command sink is also the one place a bare invocation counts: the whole
 	// value being "cat /etc/passwd" is the payload, and there is no separator in
@@ -401,7 +401,7 @@ func substringExpansion(rest []byte) (int, bool) {
 }
 
 // scanCommandPositions walks separators and reads the token that follows each.
-func scanCommandPositions(src []byte, mark func(Signal, int, int)) {
+func scanCommandPositions(src []byte, commandSink bool, mark func(Signal, int, int)) {
 	for i := 0; i < len(src); i++ {
 		sepLen, backtick := separatorAt(src, i)
 		if sepLen == 0 {
@@ -469,7 +469,20 @@ func scanCommandPositions(src []byte, mark func(Signal, int, int)) {
 			// tagged template) are the same shape word`command`, distinguishable
 			// only by field context this detector deliberately does not keep. See
 			// TestBacktickLimitIsDeliberate and .serena/memories/decisions.md.
-			if backtick && !isInvocation(src, end) {
+			//
+			// A command sink is the field context that was missing, which is why
+			// the limit lifts there. The Markdown reading is about a comment
+			// field and says nothing about a parameter named cmd: nobody
+			// documents an API inside ?cmd=, and an application that hands that
+			// parameter to a shell is the bug this rule exists to find. Measured
+			// on the benign corpus: 1.00% of requests carry a backtick span --
+			// `api.example.com`, `filter`, `page[size]` -- and not one of them is
+			// in a parameter a shell would ever see.
+			//
+			// The same shape as the isStoredCommandLine lift above. Both say the
+			// value belongs to the attacker once the parameter name says where it
+			// is going.
+			if backtick && !commandSink && !isInvocation(src, end) {
 				continue
 			}
 			mark(SignalCommandPosition, j, end-j)
