@@ -156,13 +156,27 @@ func TestSignalsOnlyCountInsideAnExpression(t *testing.T) {
 	}
 }
 
-// TestArithmeticProbeCorroborates records that "{{7*7}}" cannot fire alone.
-func TestArithmeticProbeCorroborates(t *testing.T) {
+// TestArithmeticProbeIsSufficientAndCorroborates replaces a test that asserted
+// the opposite, and the reversal is deliberate.
+//
+// The old test read "records that {{7*7}} cannot fire alone", failing with
+// "{{ 2*count }} is a real template". That reason does not hold:
+// hasConstantArithmetic needs a digit on both sides of the operator and skips
+// digits preceded by a name byte or a dot, so {{ 2*count }} raises no probe at
+// all. The test and the weight it guarded were both calibrated against a signal
+// looser than the one implemented.
+//
+// Measured before changing it: across 84,682 values of the benign corpus, 1,918
+// carry template delimiters and zero carry constant arithmetic inside them. A
+// template that computes 7*7 would be written 49 — the expression exists only
+// to find out whether the engine evaluates it.
+func TestArithmeticProbeIsSufficientAndCorroborates(t *testing.T) {
 	d := New()
 
 	v := d.Analyze([]byte("{{7*7}}"))
-	if v.Detected() {
-		t.Error("a bare arithmetic probe fired; {{ 2*count }} is a real template")
+	if !v.Detected() {
+		t.Errorf("the canonical SSTI probe scored %d (%s) and was not reported",
+			v.Score, v.Signals)
 	}
 	if v.Signals&SignalArithmeticProbe == 0 {
 		t.Error("arithmetic probe not noticed at all")
@@ -242,5 +256,56 @@ func BenchmarkAnalyzeAttack(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		d.Analyze(v)
+	}
+}
+
+// TestConstantArithmeticIsSufficient pins the canonical probe.
+//
+// "{{7*7}}" is the payload every scanner and every tutorial uses to test for
+// template injection, and it scored 2 against a threshold of 5 — detected by
+// nothing. The weight was justified by "{{ 2*n }} is a real template", which is
+// true and does not apply, because hasConstantArithmetic requires a digit on
+// both sides of the operator. The comment described a looser signal than the one
+// implemented.
+func TestConstantArithmeticIsSufficient(t *testing.T) {
+	d := New()
+	for _, v := range []string{
+		"{{7*7}}", "{{(7*7)|int}}", "{{ 7 * 7 }}", "${7*7}",
+		"{{7+7}}", "{{ 49/7 }}", "{{9-2}}",
+		"a{{7*7}}b", "search={{7*7}}",
+	} {
+		t.Run(v, func(t *testing.T) {
+			if got := d.Analyze([]byte(v)); !got.Detected() {
+				t.Errorf("%q scored %d (%s), want detected -- this is the probe "+
+					"an attacker sends to find out whether the engine evaluates",
+					v, got.Score, got.Signals)
+			}
+		})
+	}
+}
+
+// TestRealTemplatesAreNotProbes is the half that keeps the weight honest.
+//
+// A template that computes a constant would be written as the constant, which is
+// why the probe can be sufficient on its own. Anything with a variable on either
+// side is an ordinary expression and must stay silent however it is spelled --
+// measured at zero hits across 84,682 values of the benign corpus, of which
+// 1,918 carry template delimiters.
+func TestRealTemplatesAreNotProbes(t *testing.T) {
+	d := New()
+	for _, v := range []string{
+		"{{ 2*n }}", "{{ price*qty }}", "{{ item.count * 2 }}", "{{ x*3 }}",
+		"{{ total }}", "{{user.name}}", "Total: {{ 2 * count }}",
+		"{{ 1 }}", "{{7}}", "{{ a+b }}", "{{ subtotal + tax }}",
+		"{{ items.length - 1 }}", "{{ n*n }}", "{{ w1*h1 }}",
+		"{% for i in items %}", "{{ price | currency }}",
+	} {
+		t.Run(v, func(t *testing.T) {
+			if got := d.Analyze([]byte(v)); got.Signals&SignalArithmeticProbe != 0 {
+				t.Errorf("%q raised the constant-arithmetic probe (score %d); an "+
+					"expression with a variable in it is a real template",
+					v, got.Score)
+			}
+		})
 	}
 }
