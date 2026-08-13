@@ -63,6 +63,24 @@ inside its declared confidence tier on 10,473 benign requests.
 
 ### Added
 
+- **An XML body parser** — the last format with no structural parsing. Element
+  text and attribute values are now extracted as named fields (`order@id`,
+  `soapenv:Envelope.Body.cmd`) with per-field ceilings, where before an XML body
+  was one undifferentiated blob.
+
+  **It never expands an entity.** Not "expands them safely" — never at all.
+  `&lt;`, `&foo;` and a nine-deep `&lol9;` chain are copied through as the bytes
+  they are, which makes billion-laughs structurally impossible rather than
+  bounded: there is no expansion step to cap. A rule wanting the decoded form
+  asks for it, the way everything else in the engine does.
+
+  Parsing is an **additional** reading, not a replacement: the raw body is still
+  scanned, because the DOCTYPE lives outside every field the parser emits. Wiring
+  it in without that took the XXE corpus cases from blocked to allowed, which is
+  the multi-interpretation invariant failing in the one place it was easy to miss.
+
+  Deserialization detection 13/14 → **14/14**.
+
 - **`gwaf lint -corpus` measures prefilter selectivity.** A rule is *prefiltered*
   when its operator declares a required literal and *selective* only when that
   literal is absent from ordinary traffic; `detect_xss` declares `"`, so it is
