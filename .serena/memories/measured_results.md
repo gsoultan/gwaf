@@ -465,3 +465,68 @@ Re-run:
     CRS_TESTS=/path/coreruleset/tests/regression/tests \
     CRS_RULES=/path/coreruleset/rules \
     go test -count=1 -v -run TestCRSSuite ./test/conformance/
+
+## SecLang adapter: what it drops loading CRS 4.25 — 2026-08-13
+
+Run after CRS conformance measured 41.0% (2079/5066), to find out whether that
+number is ten missing operators or a hundred. It is neither: it is three
+categories, and only two of them are gaps.
+
+`ParseSources` over CRS's 27 rule files, with `DataFiles` supplied as the
+conformance loader does — **788 directives → 267 rules, 234 skipped**.
+
+| construct | skips | distinct rule IDs |
+|---|---|---|
+| `SecRule` variables | 107 | 107 |
+| `SecRuleUpdateTargetById` | 55 | — |
+| chained `SecRule` | 55 | 55 |
+| `SecAction` | 7 | 7 |
+| `@validatebyterange` | 5 | 5 |
+| `@within`, `@gt`, `@pmfromfile`, `SecComponentSignature` | 5 | 5 |
+
+### Deliberate, and correctly skipped (~85)
+
+- **`TX` (51)** — CRS's anomaly-score collection. gwaf rejects global anomaly
+  scoring as an engine concept in favour of confidence tiers (CLAUDE.md §1
+  non-goals). Not a gap; a different model.
+- **counting a collection `&ARGS` (29)** — a count is not a value; `Limits`
+  bounds this instead.
+- **`SecAction` (7)** — unconditional actions set variables or jump, both
+  cross-request.
+- **`@validatebyterange` (5)** — encoding validation is the canonicalization
+  tier and runs before rules.
+
+### Gap 1: CRS's own FP tuning is dropped (75)
+
+`SecRuleUpdateTargetById` (55) and variable exclusions `!ARGS:x` (20). The 55
+are **all active directives in REQUEST-999-COMMON-EXCEPTIONS-AFTER.conf** — the
+two in the SQLI file are commented-out examples. They are exclusions CRS ships
+to keep itself precise: `SecRuleUpdateTargetById 932240 "!REQUEST_COOKIES:/^_ga.../"`
+is "do not match Google Analytics cookies".
+
+**Dropping them imports CRS's detection without CRS's tuning**, so a
+gwaf-seclang import is strictly more false-positive-prone than CRS itself. On
+the one axis gwaf actually wins (0/12 against CRS's 4/12) that is the wrong
+direction to be wrong in.
+
+It is a **translation** gap and not a capability gap: gwaf has `rules.Exception`
+and the skip message already says so — "variable exclusions (!ARGS:x) are gwaf
+exceptions; express them as ...". Nothing new has to be built.
+
+### Gap 2: chained SecRules (55)
+
+55 chains are produced and 55 more are skipped, so support is partial. ~20% of
+the translated ruleset. A chain is a conjunction across several variables and
+the engine evaluates one value at a time, so this is a real capability gap
+rather than a translation one.
+
+### Order
+
+Gap 1 first: smaller, uses machinery that already exists, and fixes a
+false-positive liability rather than a detection one. Gap 2 is the larger and
+more interesting piece of work.
+
+Re-run:
+
+    cd /tmp/slscan && go run . /path/coreruleset/rules
+    (ParseSources with DefaultConfidence + DataFiles; rank rep.Skipped by What/Why)
