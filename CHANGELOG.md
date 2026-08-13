@@ -4,15 +4,16 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
-## Unreleased
+## v0.5.1 — 2026-08-13
 
-Two detection fixes, both found by classifying the RCE misses in the nuclei
-corpus instead of guessing at them, and both in rules that were already written.
-Neither added a rule; each made an existing one reachable.
+Two detection fixes and the last missing body parser. Both fixes were found by
+classifying the RCE misses in the nuclei corpus instead of guessing at them, and
+neither added a rule — each made a rule that already existed reachable.
 
-Detection **93.1% → 93.4%** (2294/2457) against Coraza + CRS 4.25's 89.7%, with
+Detection **93.1% → 93.4%** (2295/2457) against Coraza + CRS 4.25's 89.7%, with
 false positives unchanged at **0/12** against their 4/12 and every rule still
-inside its declared confidence tier on 10,473 benign requests.
+inside its declared confidence tier on 10,473 benign requests. Every latency SLO
+passes in strict mode.
 
 ### Security
 
