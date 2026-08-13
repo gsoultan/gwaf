@@ -185,6 +185,7 @@ const (
 	ContentUnknown ContentKind = iota
 	ContentJSON
 	ContentForm
+	ContentXML
 )
 
 // DetectContent maps a Content-Type header onto a body format.
@@ -206,6 +207,11 @@ func DetectContent(contentType string) ContentKind {
 		return ContentJSON
 	case ct == "application/x-www-form-urlencoded":
 		return ContentForm
+	case ct == "application/xml", ct == "text/xml",
+		ct == "application/soap+xml", ct == "application/xhtml+xml":
+		return ContentXML
+	case hasSuffixStr(ct, "+xml"):
+		return ContentXML
 	default:
 		return ContentUnknown
 	}

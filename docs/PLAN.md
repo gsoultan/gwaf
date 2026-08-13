@@ -68,11 +68,12 @@ Order matters; it's CONCEPT.md build-order steps 1–3.
 3. [x] Target-grouped evaluation plan
 4. [x] Transform interning (materialized — slow but correct; this is M2's fuzz oracle)
 5. [x] Arena + pointer-free `Span`
-6. [~] Bounded streaming body parsers — form, multipart, JSON and protobuf/gRPC
-       ship in `internal/body`. **There is no XML parser.** XXE is covered by a
-       rule scanning the raw body (`ruleset/core/xxe.go`), which finds an inline
-       entity declaration or an external DTD but does not parse the document, so
-       nothing bounds XML nesting structurally
+6. [x] Bounded streaming body parsers — form, multipart, JSON, protobuf/gRPC and
+       XML. The XML parser **never expands an entity**, which makes the
+       billion-laughs class structurally impossible rather than bounded: there is
+       no expansion step to cap. It is an *additional* reading, not a
+       replacement — the raw body is still scanned, because the DOCTYPE lives
+       outside every field the parser emits
 7. [x] **Desync detection** (CONCEPT.md §11) — framing ambiguity rejected before rules run
 8. [x] Policy model: confidence tiers, per-route compiled plans
 

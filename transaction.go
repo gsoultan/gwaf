@@ -771,17 +771,33 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 
 	switch body.DetectContent(tx.contentType) {
 	case body.ContentJSON:
-		if tx.parseStructuredBody(b, true) {
+		if tx.parseStructuredBody(b, body.ContentJSON) {
 			return
 		}
+	case body.ContentXML:
+		// Parsed *and* recorded, unlike JSON, which returns here.
+		//
+		// The parser skips declarations on purpose -- an internal subset is the
+		// one part of XML that exists to expand things -- so the DOCTYPE and the
+		// entity declarations live outside every field it emits. Rule 4005 finds
+		// them by scanning the raw body, and returning early here removed that
+		// scan: the XXE corpus cases went from blocked to allowed the moment
+		// this parser was wired in.
+		//
+		// Structural parsing is an additional reading, never a replacement. That
+		// is the same rule the sniffed-JSON path follows and the same one
+		// CVE-2026-21876 punished ModSecurity for breaking; it was easy to lose
+		// here only because the evidence sits in a part of the document the
+		// parser is right to ignore.
+		tx.parseStructuredBody(b, body.ContentXML)
 	case body.ContentForm:
 		// A form-encoded body never starts with '{' or '['. When one does, the
 		// declared type is not describing these bytes, and whichever decoder
 		// the origin runs is what decides — so the JSON reading is tried first.
-		if body.SniffJSON(b) && tx.parseStructuredBody(b, true) {
+		if body.SniffJSON(b) && tx.parseStructuredBody(b, body.ContentJSON) {
 			return
 		}
-		if tx.parseStructuredBody(b, false) {
+		if tx.parseStructuredBody(b, body.ContentForm) {
 			return
 		}
 	default:
@@ -803,8 +819,17 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 		// to be. This is an *additional* reading rather than a replacement, in
 		// the same spirit as SniffGzip: gwaf does not know which parser the
 		// origin runs, so it evaluates the plausible ones.
-		if body.SniffJSON(b) && tx.parseStructuredBody(b, true) {
+		if body.SniffJSON(b) && tx.parseStructuredBody(b, body.ContentJSON) {
 			return
+		}
+		// And the same argument for XML. A SOAP body labelled text/plain is
+		// still parsed as SOAP by the stack that receives it, and until there
+		// was a parser here such a body was inspected only as one flat blob --
+		// no path to name a field, and no per-field ceiling on it.
+		// Parsed without returning, for the reason the declared-XML case above
+		// gives: the entity declaration is not in any field.
+		if body.SniffXML(b) {
+			tx.parseStructuredBody(b, body.ContentXML)
 		}
 	}
 
@@ -816,7 +841,7 @@ func (tx *Transaction) SetRequestBody(b []byte) {
 // On failure the caller falls back to recording the raw body: a document gwaf
 // could not read is not a document it may ignore, and inspecting it whole is
 // the safe direction.
-func (tx *Transaction) parseStructuredBody(b []byte, isJSON bool) bool {
+func (tx *Transaction) parseStructuredBody(b []byte, kind body.ContentKind) bool {
 	limits := body.Limits{
 		MaxFields:    tx.waf.cfg.limits.MaxArgs,
 		MaxValueLen:  tx.waf.cfg.limits.MaxValueLen,
@@ -840,9 +865,12 @@ func (tx *Transaction) parseStructuredBody(b []byte, isJSON bool) bool {
 	}
 
 	var err error
-	if isJSON {
+	switch kind {
+	case body.ContentJSON:
 		err = tx.bodyParser.ParseJSON(b, emit)
-	} else {
+	case body.ContentXML:
+		err = tx.bodyParser.ParseXML(b, emit)
+	default:
 		err = tx.bodyParser.ParseForm(b, emit)
 	}
 	if err != nil {
@@ -996,9 +1024,11 @@ func (tx *Transaction) recordText(frame int, b []byte) {
 	// same failure as the original 1.2%, reintroduced by removing the accident
 	// that had been masking it.
 	case body.SniffJSON(b):
-		if tx.parseStructuredBody(b, true) {
+		if tx.parseStructuredBody(b, body.ContentJSON) {
 			return
 		}
+	case body.SniffXML(b):
+		tx.parseStructuredBody(b, body.ContentXML)
 	}
 
 	name := []byte("body")
