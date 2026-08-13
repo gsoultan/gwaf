@@ -122,6 +122,7 @@ type Transaction struct {
 	joinBuf []byte
 
 	// Framing state for desync detection. See noteFraming.
+	reqMethod       string
 	contentLengths  int
 	firstLength     string
 	transferEncoded bool
@@ -185,6 +186,7 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.contentEncoding = ""
 	tx.grpcEncoding = ""
 	tx.undecodable = ""
+	tx.reqMethod = ""
 	tx.contentLengths = 0
 	tx.firstLength = ""
 	tx.transferEncoded = false
@@ -295,6 +297,7 @@ const maxRequestLineLen = 8 << 10
 // SetRequestLine records the method, target, and protocol.
 func (tx *Transaction) SetRequestLine(method, target, proto string) {
 	tx.addValue(types.Target{Kind: types.TargetRequestMethod}, "", method)
+	tx.reqMethod = method
 	tx.addValue(types.Target{Kind: types.TargetRequestURI}, "", target)
 	tx.addValue(types.Target{Kind: types.TargetRequestProtocol}, "", proto)
 
@@ -1184,6 +1187,31 @@ func (tx *Transaction) ProcessRequestHeaders() Decision {
 	if tx.transferEncoded && tx.contentLengths > 0 {
 		tx.setFramingConflict("both Content-Length and Transfer-Encoding present")
 	}
+	// A body on a method that does not take one.
+	//
+	// Same family as the check above and the same failure: the two ends disagree
+	// about where this request stops. A front-end that forwards the body and a
+	// back-end that does not expect one leave those bytes at the head of the
+	// next request, which is request smuggling with no payload of its own.
+	//
+	// These arrived from CRS 920170 and 920171 by way of a decomposition that
+	// rejected chained-SecRule support: of 55 chains, 37 need variables gwaf
+	// refuses, one is already caught here, and what remained worth having was
+	// three framing checks. They are engine checks rather than imported rules
+	// because a rule on "the method is GET and Content-Length is set" has no
+	// literal to prefilter on, so it would run on every request -- and the
+	// budget for rules that do that is zero.
+	if isBodylessMethod(tx.reqMethod) {
+		switch {
+		case tx.transferEncoded:
+			tx.setFramingConflict("Transfer-Encoding on a " + tx.reqMethod + " request")
+		case tx.contentLengths > 0 && tx.firstLength != "" && tx.firstLength != "0":
+			// Content-Length: 0 is ordinary and says the opposite -- that there
+			// is no body. Only a declared, non-empty body is the anomaly.
+			tx.setFramingConflict("Content-Length " + tx.firstLength +
+				" on a " + tx.reqMethod + " request")
+		}
+	}
 	if tx.framingConflict != "" {
 		return tx.framingAmbiguous()
 	}
@@ -2058,4 +2086,20 @@ func indexByte(s string, c byte) int {
 		}
 	}
 	return -1
+}
+
+// isBodylessMethod reports whether a method is defined to carry no body.
+//
+// GET and HEAD only. DELETE and OPTIONS are left out on purpose: both are
+// widely used with a body in real APIs -- a DELETE carrying a JSON list of IDs
+// is ordinary REST -- and flagging them would be enforcing a reading of the RFC
+// that the traffic does not follow. The two listed here are the ones where a
+// body is both meaningless and a documented smuggling vector.
+// The comparands are lower case because equalFoldASCII folds only its first
+// argument and compares the rest byte for byte -- every other call site passes
+// "content-length", "content-type". Passing "GET" here matched nothing, and it
+// failed silently: a framing check that never fires looks exactly like a
+// request that was fine.
+func isBodylessMethod(m string) bool {
+	return equalFoldASCII(m, "get") || equalFoldASCII(m, "head")
 }

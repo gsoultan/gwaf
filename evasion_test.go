@@ -3235,3 +3235,106 @@ func TestBackupArtifactRequiresDoubledExtension(t *testing.T) {
 		}
 	}
 }
+
+// TestBodyOnABodylessMethodIsDesync covers CRS 920170 and 920171, implemented
+// as framing checks rather than imported as rules.
+//
+// A GET or HEAD carrying a declared body is a request-smuggling shape with no
+// payload of its own: a front-end that forwards the body and a back-end that
+// does not expect one leave those bytes at the head of the next request. It is
+// the same failure as Content-Length with Transfer-Encoding, which is why it
+// reports the same reason.
+//
+// They are engine checks and not rules because a rule on "the method is GET and
+// Content-Length is set" has no literal to prefilter on. It would run on every
+// request, and the budget for rules that do that is zero.
+func TestBodyOnABodylessMethodIsDesync(t *testing.T) {
+	w := newWAF(t)
+
+	blocked := []struct {
+		name, method string
+		headers      [][2]string
+	}{
+		{"GET with a declared body", "GET", [][2]string{{"Content-Length", "5"}}},
+		{"HEAD with a declared body", "HEAD", [][2]string{{"Content-Length", "12"}}},
+		{"GET with Transfer-Encoding", "GET", [][2]string{{"Transfer-Encoding", "chunked"}}},
+		{"HEAD with Transfer-Encoding", "HEAD", [][2]string{{"Transfer-Encoding", "chunked"}}},
+		{"lower-case method", "get", [][2]string{{"Content-Length", "5"}}},
+	}
+	for _, tt := range blocked {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine(tt.method, "/x", "HTTP/1.1")
+			for _, h := range tt.headers {
+				tx.AddRequestHeader(h[0], h[1])
+			}
+			d := tx.ProcessRequestHeaders()
+			if !d.Blocked() {
+				t.Errorf("%s %v accepted", tt.method, tt.headers)
+			}
+			if d.Reason() != gwaf.ReasonDesync {
+				t.Errorf("Reason() = %v, want ReasonDesync", d.Reason())
+			}
+		})
+	}
+
+	// The other half, and the reason the check is narrow.
+	allowed := []struct {
+		name, method string
+		headers      [][2]string
+	}{
+		// "Content-Length: 0" says there is no body. It is ordinary on a GET
+		// from several clients and asserts the opposite of the attack.
+		{"GET with Content-Length 0", "GET", [][2]string{{"Content-Length", "0"}}},
+		{"GET with no framing headers", "GET", nil},
+		{"POST with a body", "POST", [][2]string{{"Content-Length", "5"}}},
+		{"POST chunked", "POST", [][2]string{{"Transfer-Encoding", "chunked"}}},
+		// DELETE and OPTIONS with a body are ordinary REST and deliberately not
+		// flagged: a DELETE carrying a JSON list of IDs is a real API.
+		{"DELETE with a body", "DELETE", [][2]string{{"Content-Length", "24"}}},
+		{"OPTIONS with a body", "OPTIONS", [][2]string{{"Content-Length", "9"}}},
+	}
+	for _, tt := range allowed {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine(tt.method, "/x", "HTTP/1.1")
+			for _, h := range tt.headers {
+				tx.AddRequestHeader(h[0], h[1])
+			}
+			if d := tx.ProcessRequestHeaders(); d.Blocked() {
+				t.Errorf("%s %v blocked: %v", tt.method, tt.headers, d.Reason())
+			}
+		})
+	}
+}
+
+// TestAbsenceOfAHeaderIsNotAFactGwafHas records why CRS 920180 -- "POST without
+// Content-Length and Transfer-Encoding" -- was measured and then not
+// implemented, so it is a decision rather than an omission.
+//
+// The rule asks what was on the wire. gwaf does not own the socket, so it
+// cannot tell "no Content-Length was sent" from "the embedder did not mention
+// it" — and the second is the common case: this repository's own corpus calls
+// SetRequestBody in 25 places and passes Content-Length in none of them.
+// Implementing it would block every one, and every embedder that already holds
+// the body and sees no reason to restate its length.
+//
+// Presence of a header is a fact gwaf is given. Absence is not.
+func TestAbsenceOfAHeaderIsNotAFactGwafHas(t *testing.T) {
+	w := newWAF(t)
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("POST", "/api", "HTTP/1.1")
+	tx.AddRequestHeader("Content-Type", "application/json")
+	if d := tx.ProcessRequestHeaders(); d.Blocked() {
+		t.Fatalf("headers blocked: %v", d.Reason())
+	}
+	tx.SetRequestBody([]byte(`{"a":1}`))
+	if d := tx.ProcessRequestBody(); d.Blocked() {
+		t.Errorf("a body supplied without Content-Length was blocked (%v); the "+
+			"embedder holds the body and need not restate its length", d.Reason())
+	}
+}
