@@ -362,20 +362,39 @@ attacker-influenceable model — everything the boundary forbids.
 Resolution: **learn offline, ship an artifact.**
 
 ```
-$ gwaf learn --from access-log.jsonl --ruleset ./rules
-  analyzed 2.1M requests, 14 rules produced findings
+$ gateon export-waf-corpus > corpus.jsonl     # the embedder's half
+$ gwaf tune -corpus corpus.jsonl              # the toolchain's half
 
-  942100  /api/v1/markdown       412 hits, 0 confirmed attacks
-          suggested: Except(942100).On(PathPrefix("/api/v1/markdown")).For(Body())
-  920420  /grpc/*                 8.1k hits — all application/grpc
-          suggested: Except(920420).On(ContentTypePrefix("application/grpc"))
+// 10473 benign requests; 3 rules matched at least one.
+//
+// Review each one before pasting. An exception is a hole in a firewall,
+// and the corpus only proves these requests are benign -- not that every
+// request matching the same scope will be.
 
-  wrote exceptions.suggested.yaml — review before committing
+gwaf.WithExceptions(
+	rules.Exception{
+		RuleID: 5910,
+		Path:   "/api/v1/templates",
+		Target: types.TargetArgs,
+		Key:    "body",
+		Note:   "benign in this corpus: cms/template 22 on /api/v1/templates loc0; ...",
+	},
+)
 ```
 
 Runtime stays memoryless. The output is reviewable, diffable, version-controlled code — not an opaque
 model. It's also the honest answer to open-appsec's ML approach: same benefit, full explainability,
 and a human approves every suppression.
+
+**This shipped as `gwaf tune`, and the split above is the design rather than an
+accident.** The analysis is a pure function of a ruleset and a set of requests, so it belongs to the
+toolchain. Reading *your* access log does not: there is no universal format — gateon's, nginx's
+combined, a Lambda's CloudWatch entry and an Envoy tap are four different things — and a parser for
+any one of them would fail the Dependency and Environment tests in CLAUDE.md §1.
+
+So the embedder exports once, in whatever way suits it, to the shape `calibrate.Request` documents as
+"deliberately close to what an access log holds". gwaf never learns what a log looks like. Nothing in
+the two commands above is gateon-specific, which is the test that each half is in the right place.
 
 ---
 

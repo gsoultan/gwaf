@@ -285,7 +285,32 @@ The most important milestone. A WAF library with no adopter is a benchmark, not 
 
 1. [ ] gateon `wafengine` adapter
 2. [ ] **Shadow mode in gateon production** — Coraza authoritative, gwaf observing
-3. [ ] `gwaf learn` (CONCEPT.md §12)
+3. [x] `gwaf learn` (CONCEPT.md §12) — **delivered as `gwaf tune`**, and the
+       remainder is deliberately not gwaf's. §12 asks for four things: read
+       traffic, find rules firing on what is not an attack, derive the
+       *narrowest* exception, and print it for review rather than applying it.
+       `tune` does all four, over `calibrate.Run` and
+       `Explanation.NarrowestException`, and refuses to emit anything when the
+       samples disagree about what to scope to.
+
+       What is left is turning *your* logs into requests, and that belongs to
+       the embedder on two of the five ownership tests — **Dependency** (a log
+       parser it did not choose) and **Environment** (a guess about where it
+       runs). There is no universal access-log format: gateon's, nginx's
+       combined, a Lambda's CloudWatch entry and an Envoy tap are four
+       different things, and gwaf must not learn any of them.
+
+       The seam already exists and was built for this. `calibrate.Request`
+       documents its own shape as "deliberately close to what an access log
+       holds, so a corpus can be built from real traffic rather than invented",
+       and `calibrate.LoadCorpus` reads it. An embedder exports once and runs
+       the toolchain:
+
+           gateon export-waf-corpus > corpus.jsonl
+           gwaf tune -corpus corpus.jsonl
+
+       Nothing there is gateon-specific, which is the test that it is in the
+       right place.
 4. [~] `gwaf explain` shipped, and `gwaf-seclang` now does the converting:
        `report` prints what would and would not come across, `convert` emits Go
        source. Source rather than a runtime loader, because the point of
