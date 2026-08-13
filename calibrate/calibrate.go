@@ -54,6 +54,16 @@ type RuleResult struct {
 	// Requests is how many benign requests were evaluated.
 	Requests int
 
+	// Blocking is how many requests matched at least one rule at High or
+	// Certain confidence — the tiers gwaf.New blocks on.
+	//
+	// It exists to answer a question the rest of this report assumes away: is
+	// this corpus actually benign? Every caller says it is, and nothing checked.
+	// A corpus exported from production traffic contains real attacks, and
+	// tuning against one turns last week's SQL injection into a permanent
+	// exception. See BlockingRate.
+	Blocking int
+
 	// Samples are up to SampleLimit of the benign requests that matched, so a
 	// failure can be reproduced rather than merely reported.
 	Samples []Sample
@@ -112,6 +122,16 @@ type Report struct {
 
 	// Requests is the corpus size.
 	Requests int
+
+	// Blocking is how many requests matched at least one rule at High or
+	// Certain confidence — the tiers gwaf.New blocks on.
+	//
+	// It exists to answer a question the rest of this report assumes away: is
+	// this corpus actually benign? Every caller says it is, and nothing checked.
+	// A corpus exported from production traffic contains real attacks, and
+	// tuning against one turns last week's SQL injection into a permanent
+	// exception. See BlockingRate.
+	Blocking int
 
 	// Failed counts rules whose measurement exceeded their declared tier.
 	Failed int
@@ -177,6 +197,14 @@ func Run(waf *gwaf.WAF, corpus []Request) (Report, error) {
 
 	seen := make(map[types.RuleID]*ruleAcc)
 
+	// Confidence per rule, so a request can be classified by the strongest tier
+	// that matched it rather than by a raw hit count.
+	tier := make(map[types.RuleID]types.Confidence)
+	for _, cr := range waf.Ruleset().All() {
+		tier[cr.Rule.ID] = cr.Rule.Confidence
+	}
+	blocking := 0
+
 	for i := range corpus {
 		req := &corpus[i]
 
@@ -196,11 +224,20 @@ func Run(waf *gwaf.WAF, corpus []Request) (Report, error) {
 			tx.ProcessRequestBody()
 			collect(tx, req, seen, fired)
 		}
+		// Did anything at a blocking tier fire? Counted once per request: the
+		// question is how many requests look like attacks, not how many rules
+		// noticed.
+		for id := range fired {
+			if tier[id] >= types.High {
+				blocking++
+				break
+			}
+		}
 		tx.Close()
 	}
 
 	rs := waf.Ruleset()
-	rep := Report{Requests: len(corpus)}
+	rep := Report{Requests: len(corpus), Blocking: blocking}
 
 	for _, cr := range rs.All() {
 		id := cr.Rule.ID
@@ -289,4 +326,29 @@ func collect(tx *gwaf.Transaction, req *Request, seen map[types.RuleID]*ruleAcc,
 			})
 		}
 	}
+}
+
+// BlockingRate is the fraction of the corpus that matched a blocking-tier rule.
+//
+// A benign corpus should sit near zero: Certain is calibrated to at most one
+// false positive in 10,000 requests and High to one in 1,000, so a corpus where
+// a percent of requests trip them is not benign — it is traffic with attacks in
+// it, and every exception derived from it would suppress a real detection.
+func (r Report) BlockingRate() float64 {
+	if r.Requests == 0 {
+		return 0
+	}
+	return float64(r.Blocking) / float64(r.Requests)
+}
+
+// LooksLikeProductionTraffic reports whether the corpus carries enough
+// blocking-tier matches to be unsafe to tune against.
+//
+// The threshold is High's own published ceiling rather than a number chosen
+// here. A corpus is meant to be requests believed legitimate; if more of them
+// trip a High-confidence rule than that tier permits as false positives, either
+// the ruleset is badly miscalibrated or the corpus is not what it claims. Both
+// are reasons to stop and look rather than to emit exceptions.
+func (r Report) LooksLikeProductionTraffic() bool {
+	return r.Requests > 0 && r.BlockingRate() > types.High.MaxFPRate()
 }

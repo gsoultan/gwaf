@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/gsoultan/gwaf/calibrate"
@@ -113,4 +114,57 @@ func countOccurrences(s, sub string) int {
 		}
 	}
 	return n
+}
+
+// TestTuneRefusesACorpusThatIsAttackingYou is the harness for the claim every
+// other message in this command makes.
+//
+// "benign requests" appears in the flag help, the output header and every Note
+// it writes, and nothing checked it. The consequence is silent and permanent: a
+// corpus containing last week's SQL injection yields an exception suppressing
+// the rule that caught it, and the suggestion is indistinguishable from a
+// legitimate one.
+//
+// It matters because the corpus is meant to come from real traffic --
+// calibrate.Request documents its shape as close to an access log -- and an
+// access log is not a benign corpus.
+func TestTuneRefusesACorpusThatIsAttackingYou(t *testing.T) {
+	benign := []calibrate.Request{}
+	for i := range 400 {
+		benign = append(benign, calibrate.Request{
+			Name: "ok", Method: "GET", Target: "/api/items",
+			Args: map[string]string{"page": fmt.Sprint(i)},
+		})
+	}
+	waf, err := calibrate.NewWAF()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clean, err := calibrate.Run(waf, benign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clean.LooksLikeProductionTraffic() {
+		t.Errorf("a corpus of ordinary requests was called hostile (%d/%d, %.4f%%)",
+			clean.Blocking, clean.Requests, clean.BlockingRate()*100)
+	}
+
+	// One attack in four hundred is already ten times what High permits.
+	poisoned := append(append([]calibrate.Request{}, benign...), calibrate.Request{
+		Name: "sqli", Method: "GET", Target: "/search",
+		Args: map[string]string{"q": "1' OR '1'='1"},
+	})
+	dirty, err := calibrate.Run(waf, poisoned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirty.Blocking == 0 {
+		t.Fatal("the injection was not counted at a blocking tier")
+	}
+	if !dirty.LooksLikeProductionTraffic() {
+		t.Errorf("a corpus containing an attack was accepted as benign "+
+			"(%d/%d, %.4f%%); every exception derived from it would suppress a "+
+			"real detection", dirty.Blocking, dirty.Requests, dirty.BlockingRate()*100)
+	}
 }

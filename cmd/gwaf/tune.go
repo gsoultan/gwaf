@@ -5,6 +5,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -45,6 +46,8 @@ func runTune(args []string) error {
 	fs := flag.NewFlagSet("tune", flag.ExitOnError)
 	corpusPath := fs.String("corpus", "testdata/corpus/benign.jsonl",
 		"JSON Lines file of benign requests")
+	force := fs.Bool("force", false,
+		"emit suggestions even when the corpus looks like it contains attacks")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -60,6 +63,43 @@ func runTune(args []string) error {
 	rep, err := calibrate.Run(waf, corpus)
 	if err != nil {
 		return err
+	}
+
+	// Refuse to tune against traffic that is attacking you.
+	//
+	// Every message this command prints says "benign", and until now nothing
+	// checked. That is the shape of defect this project treats as a bug
+	// everywhere else: a claim with no harness behind it. Here the consequence
+	// is worse than usual, because the failure is silent and permanent -- a
+	// corpus containing last week's SQL injection yields an exception
+	// suppressing the rule that caught it, and the suggestion looks exactly
+	// like a legitimate one.
+	//
+	// It matters now because the corpus is meant to come from real traffic:
+	// calibrate.Request documents its shape as "deliberately close to what an
+	// access log holds". An access log is not a benign corpus. Whoever exports
+	// one has to filter it -- 2xx/3xx only, nothing another engine flagged, no
+	// scanner agents -- and this is the check that tells them they did not.
+	//
+	// Refuses rather than warns because the output is meant to be pasted, and a
+	// warning above text somebody is about to paste is a warning somebody
+	// pastes past. -force is there because a maintainer deliberately tuning a
+	// deliberately hostile corpus is a real thing to want.
+	if rep.LooksLikeProductionTraffic() && !*force {
+		fmt.Fprintf(os.Stderr,
+			"gwaf tune: %d of %d requests (%.2f%%) matched a rule at High or "+
+				"Certain confidence.\n\n"+
+				"Those tiers are calibrated to at most one false positive in "+
+				"1,000 and 10,000 requests, so a corpus this far above them is "+
+				"not benign -- it is traffic with attacks in it. Every exception "+
+				"derived from it would permanently suppress a real detection.\n\n"+
+				"If this is an access-log export, filter it first: keep only "+
+				"requests the origin answered 2xx or 3xx, drop anything another "+
+				"engine already flagged, drop known scanner agents.\n\n"+
+				"Run `gwaf calibrate -corpus %s -v` to see which rules fired, or "+
+				"pass -force if the corpus is hostile on purpose.\n",
+			rep.Blocking, rep.Requests, rep.BlockingRate()*100, *corpusPath)
+		return fmt.Errorf("corpus does not look benign")
 	}
 
 	var fired []calibrate.RuleResult
