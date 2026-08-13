@@ -4,6 +4,86 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## v0.5.2 — 2026-08-13
+
+Two detection fixes, a SecLang import that carries the ruleset's own tuning, and
+a guard on the tuning tool itself.
+
+gwaf's own numbers are unchanged — **93.4%** detection against Coraza + CRS
+4.25's 89.7%, false positives **0/12** against their 4/12 — because none of the
+SecLang work touches the core ruleset.
+
+### Security
+
+- **Backtick substitution passed in a parameter named `cmd`.** A bare `` `id` ``
+  is not reported by default and that is correct and measured: 1.00% of the
+  benign corpus carries a backtick span, and they are `` `api.example.com` ``,
+  `` `filter` ``, `` `page[size]` `` — inline code in API documentation.
+
+  That reasoning is about a comment field, and the code applied it everywhere.
+  Nobody documents an API inside `?cmd=`, and an application that hands that
+  parameter to a shell is the bug `CommandSinkRule` exists to find. The limit
+  now lifts inside a command sink, the same shape as the stored-command-line
+  lift beside it: both say the value belongs to the attacker once the parameter
+  name says where it is going.
+
+- **A body on a method that does not take one is a desync** — CRS 920170 and
+  920171. A GET or HEAD carrying a declared body or a `Transfer-Encoding` is a
+  request-smuggling shape with no payload of its own: a front-end that forwards
+  the body and a back-end that does not expect one leave those bytes at the head
+  of the next request.
+
+  Engine checks rather than imported rules, because a rule on "the method is GET
+  and Content-Length is set" has no literal to prefilter on and would run on
+  every request. `Content-Length: 0` asserts the opposite of the attack and stays
+  quiet; DELETE and OPTIONS with a body are ordinary REST and are not flagged.
+
+- **`gwaf tune` refuses to tune against traffic that is attacking you.** Every
+  message it printed said "benign" and nothing checked. The failure was silent
+  and permanent: a corpus containing last week's SQL injection yields an
+  exception suppressing the rule that caught it, and the suggestion is
+  indistinguishable from a legitimate one.
+
+  It matters now because the corpus is meant to come from real traffic —
+  `calibrate.Request` documents its shape as close to an access log — and **an
+  access log is not a benign corpus.** The threshold is `High`'s own published
+  ceiling of one in a thousand rather than a number chosen for the occasion.
+  gwaf's own corpus reads 0.00000%; 200 benign requests with three attacks
+  appended reads 1.02% and is refused. `-force` overrides.
+
+### Changed
+
+- **The SecLang adapter imports the ruleset's own tuning, not just its rules.**
+  CRS ships 55 `SecRuleUpdateTargetById` exclusions and 20 inline `!ARGS:x` ones
+  — mostly analytics cookies, `_ga`, `__gads` — and both forms were dropped. An
+  import got CRS's detection without CRS's tuning and was strictly more
+  false-positive-prone than CRS itself.
+
+  An inline exclusion used to drop the **whole rule**, so detection went with the
+  tuning: 18 more rules now import (267 → 285), and 51 exceptions translate.
+  Regex-qualified keys are refused rather than approximated — a too-broad
+  exception is a wider hole in the firewall.
+
+  **CRS conformance 41.0% → 49.1%** (2079 → 2486 of 5066).
+
+  Exceptions arrive on `seclang.Report.Exceptions` and are **not applied**: an
+  exception is a hole in a firewall and the embedder decides which holes their
+  deployment has.
+
+### Documentation
+
+- **`gwaf learn` shipped as `gwaf tune`.** CONCEPT.md §12 advertised a command
+  that does not exist. The analysis — read traffic, find rules firing on what is
+  not an attack, derive the narrowest exception, print it for review — is all
+  there. What is left is turning *your* logs into requests, which belongs to the
+  embedder: there is no universal access-log format, so a parser for one fails
+  the Dependency and Environment tests.
+- **Chained `SecRule` support rejected, with the decomposition.** Of 55 chains,
+  37 need variables gwaf refuses by design, 920181 is already caught by desync
+  detection, and most of the rest are protocol hygiene CRS runs at low paranoia
+  feeding a score. After all that it is three rules, two of which shipped above.
+  Recorded so the 55 does not get re-quoted.
+
 ## v0.5.1 — 2026-08-13
 
 Two detection fixes and the last missing body parser. Both fixes were found by
