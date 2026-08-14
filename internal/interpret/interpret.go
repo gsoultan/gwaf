@@ -141,14 +141,34 @@ const (
 	// into "username" would invent text nobody sent -- the mistake ClassBestFit
 	// avoids by folding only punctuation.
 	ClassStringConcat
+
+	// ClassUTF16 marks a value that is UTF-16 (or UTF-32) text: an ASCII run
+	// carried as code units, so every other byte is a NUL. "<\x00s\x00c..." is
+	// inert to a byte matcher and is "<script>" to anything that honours a
+	// "charset=utf-16" on the request, which a Java servlet's setCharacterEncoding,
+	// an ASP.NET request decoder, and Commons FileUpload's per-part charset all do.
+	//
+	// This is the sibling of ClassUTF7 and exists for the same reason: the CVE
+	// gwaf is named against, CVE-2026-21876, is a charset the firewall did not
+	// read the way the origin did. ClassUTF7 closed the vector the CVE used;
+	// leaving UTF-16 unread is the same gap wearing a different charset. The
+	// engine's body layer declines to transcode part charsets *because* this
+	// package is meant to evaluate them (internal/body/multipart.go) -- so the
+	// reading has to exist here or that deferral is a hole.
+	//
+	// Detected on a byte-order mark or on the every-other-NUL interleave that ASCII
+	// text takes in UTF-16, not on the declared charset, because the reading runs
+	// over a value and never sees a header -- which also catches a BOM-tagged body
+	// that declares no charset at all.
+	ClassUTF16
 )
 
 // MaxReadings bounds the interpretations produced for one value, including the
 // verbatim reading. It also sizes the reusable buffers in a Set.
 //
-// Eight classes plus verbatim is nine; the tenth slot is headroom so that adding
-// a class is not silently a truncation.
-const MaxReadings = 10
+// Eleven classes plus verbatim is twelve; the thirteenth slot is headroom so
+// that adding a class is not silently a truncation.
+const MaxReadings = 13
 
 // maxEntityLen bounds how far an entity or UTF-7 run is scanned before being
 // treated as literal text, so a pathological value cannot drive a long search.
@@ -202,6 +222,9 @@ func (c Class) String() string {
 	if c.Has(ClassBestFit) {
 		appendName("best_fit")
 	}
+	if c.Has(ClassUTF16) {
+		appendName("utf16")
+	}
 	return string(out)
 }
 
@@ -234,6 +257,13 @@ var ambiguityLead = func() (t [256]bool) {
 
 func Detect(src []byte) Class {
 	var c Class
+
+	// A UTF-16/UTF-32 byte-order mark decides the reading before the byte loop:
+	// its bytes (0xFE/0xFF) are not ambiguity leads, and a BOM is proof of a
+	// wide-char encoding even when the body declares no charset.
+	if hasUTF16BOM(src) {
+		c |= ClassUTF16
+	}
 
 	for i := 0; i < len(src); i++ {
 		if !ambiguityLead[src[i]] {
@@ -353,6 +383,14 @@ func Detect(src []byte) Class {
 			}
 		case 0x00:
 			c |= ClassNullTruncate
+			// Interleaved NULs are ASCII text carried as UTF-16 code units:
+			// "<\x00s\x00" (LE) or "\x00<\x00s" (BE). A NUL with a printable ASCII
+			// neighbour and another NUL exactly one code unit away is that pattern;
+			// a lone NUL, or two adjacent NULs in binary, is not. This costs two
+			// comparisons on a byte that is already rare and already a lead.
+			if isUTF16Interleave(src, i) {
+				c |= ClassUTF16
+			}
 		case 0xc0, 0xc1:
 			// A raw overlong lead byte.
 			c |= ClassOverlongUTF8
@@ -477,6 +515,9 @@ func (s *Set) Build(src []byte, classes Class) {
 	}
 	if classes.Has(ClassUTF7) {
 		s.addDecoded(src, ClassUTF7, decodeUTF7Into)
+	}
+	if classes.Has(ClassUTF16) {
+		s.addDecoded(src, ClassUTF16, decodeUTF16Into)
 	}
 	// The entity reading exists for origins that decode "&lt;script&gt;" and
 	// then reflect the result into HTML -- a real double-decoding bug class.
@@ -676,6 +717,22 @@ var bestFitASCII = map[uint16]byte{
 	0xFF08: '(',  // FULLWIDTH LEFT PARENTHESIS
 	0xFF09: ')',  // FULLWIDTH RIGHT PARENTHESIS
 	0xFF1D: '=',  // FULLWIDTH EQUALS SIGN
+
+	// The shell metacharacters. The table above folds what traversal and
+	// injection into a *document* need, and stopped there -- so a value carrying
+	// a fullwidth pipe was inert to every command-injection rule while an origin
+	// that normalises before it shells out reads "1.1.1.1|id". Python's
+	// unicodedata.normalize("NFKC", …) before subprocess(shell=True), Java's
+	// Normalizer.normalize, and PHP's Normalizer::normalize all perform exactly
+	// that fold, which makes it a reading an origin really does and therefore one
+	// this package owes. Same claim as the parens already listed, same
+	// justification, and the ASCII forms of all of these are already what the
+	// shell rules match.
+	0xFF5C: '|', // FULLWIDTH VERTICAL LINE
+	0xFF1B: ';', // FULLWIDTH SEMICOLON
+	0xFF06: '&', // FULLWIDTH AMPERSAND
+	0xFF04: '$', // FULLWIDTH DOLLAR SIGN
+	0xFF40: '`', // FULLWIDTH GRAVE ACCENT
 }
 
 // percentRuneAt reads a percent-encoded UTF-8 sequence at i and returns its code
@@ -896,6 +953,54 @@ func decodeOverlongInto(dst, src []byte) []byte {
 		default:
 			dst = append(dst, c)
 			i++
+		}
+	}
+	return dst
+}
+
+// hasUTF16BOM reports whether src opens with a UTF-16 or UTF-32 byte-order mark.
+//
+// The UTF-32LE mark is "FF FE 00 00", whose first two bytes are the UTF-16LE
+// mark, so this claims the wide-char reading for both -- which is right, because
+// the reading strips NULs and recovers the ASCII either way.
+func hasUTF16BOM(src []byte) bool {
+	return len(src) >= 2 &&
+		((src[0] == 0xFF && src[1] == 0xFE) || (src[0] == 0xFE && src[1] == 0xFF))
+}
+
+// isUTF16Interleave reports whether the NUL at src[i] is part of the every-other
+// -NUL pattern that ASCII text takes in UTF-16 (and UTF-32).
+//
+// It requires a printable ASCII neighbour -- the code unit's own low byte -- and
+// another NUL one code unit away, so the interleave has to actually repeat. A
+// lone NUL, or the adjacent NULs of ordinary binary, does not qualify; that is
+// what keeps this from claiming every value that carries a stray NUL.
+func isUTF16Interleave(src []byte, i int) bool {
+	printableNeighbour := (i > 0 && isASCIIPrint(src[i-1])) ||
+		(i+1 < len(src) && isASCIIPrint(src[i+1]))
+	if !printableNeighbour {
+		return false
+	}
+	return (i >= 2 && src[i-2] == 0x00) || (i+2 < len(src) && src[i+2] == 0x00)
+}
+
+func isASCIIPrint(b byte) bool { return b >= 0x20 && b < 0x7f }
+
+// decodeUTF16Into recovers the ASCII an origin reads from UTF-16 or UTF-32 text.
+//
+// UTF-16 and UTF-32 both carry an ASCII byte in a code unit padded with NULs, so
+// dropping the NULs yields the bytes the origin decodes to -- little- and
+// big-endian and both widths alike, without inferring which. A non-ASCII code
+// unit keeps its bytes and is inspected as it stands. A leading byte-order mark
+// is dropped so it does not wedge two bytes onto the front of the recovered text.
+func decodeUTF16Into(dst, src []byte) []byte {
+	dst = dst[:0]
+	if hasUTF16BOM(src) {
+		src = src[2:]
+	}
+	for _, b := range src {
+		if b != 0x00 {
+			dst = append(dst, b)
 		}
 	}
 	return dst

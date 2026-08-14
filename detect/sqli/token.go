@@ -228,13 +228,24 @@ func tokenize(dst []token, src []byte, ctx context) []token {
 		case c == 0xc2 && i+1 < len(src) && src[i+1] == 0xa0:
 			i += 2
 
+		// A line comment ends at the newline, not at the end of the value.
+		//
+		// Running it to the end was a single-interpretation reading of exactly the
+		// kind invariant #1 forbids: every SQL engine that accepts "--" and "#"
+		// terminates them at the line break and goes on parsing, so
+		// "1'-- x\nUNION SELECT password FROM users-- -" is a comment *and* a live
+		// union to MySQL, PostgreSQL and SQLite, while the tokenizer saw one
+		// comment reaching the end and scored the value below the threshold. The
+		// newline is what the origin reads, so it is where the comment stops here.
 		case c == '-' && i+1 < len(src) && src[i+1] == '-':
-			dst = append(dst, token{kind: tkComment, text: src[i:], off: i})
-			i = len(src)
+			end := lineCommentEnd(src, i)
+			dst = append(dst, token{kind: tkComment, text: src[i:end], off: i})
+			i = end
 
 		case c == '#':
-			dst = append(dst, token{kind: tkComment, text: src[i:], off: i})
-			i = len(src)
+			end := lineCommentEnd(src, i)
+			dst = append(dst, token{kind: tkComment, text: src[i:end], off: i})
+			i = end
 
 		case c == '/' && i+1 < len(src) && src[i+1] == '*' &&
 			i+2 < len(src) && src[i+2] == '!':
@@ -338,6 +349,20 @@ func tokenize(dst []token, src []byte, ctx context) []token {
 		}
 	}
 	return dst
+}
+
+// lineCommentEnd returns where a "--" or "#" comment beginning at i stops.
+//
+// That is the next line break, or the end of the value when there is none. Both
+// CR and LF end it: a value may carry either, and an engine reading the comment
+// stops at whichever arrives first.
+func lineCommentEnd(src []byte, i int) int {
+	for j := i; j < len(src); j++ {
+		if src[j] == '\n' || src[j] == '\r' {
+			return j
+		}
+	}
+	return len(src)
 }
 
 // closeQuote returns the index just past the first q in src, or -1.

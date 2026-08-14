@@ -89,6 +89,70 @@ func isTextByte(c byte) bool {
 	}
 }
 
+// wideTextMinChars is how many ASCII characters must arrive as NUL-padded code
+// units before data is read as UTF-16/UTF-32 text.
+//
+// It is the same judgement minTextRun makes: below this the pattern is a
+// coincidence in binary rather than a sentence in a wide encoding. A payload
+// worth carrying this way is far longer -- "<script>" alone is eight.
+const wideTextMinChars = 8
+
+// recoverWideText returns the ASCII that a UTF-16 or UTF-32 body decodes to, and
+// reports whether data looked like wide text at all.
+//
+// Both encodings carry an ASCII character in a code unit padded with NULs, so
+// dropping the padding recovers what the origin reads -- in either endianness and
+// at either width, without having to infer which. Nothing is inferred from the
+// declared charset: it is attacker-controlled, and IsBinary already refuses to
+// trust it for the same reason.
+//
+// The test is that most of the data is NUL-padded ASCII, so a body has to look
+// like wide text throughout rather than merely contain a run that does. A JPEG,
+// a protobuf message, and a zip file all fail it.
+func (p *Parser) recoverWideText(data []byte) ([]byte, bool) {
+	if len(data) < wideTextMinChars*2 {
+		return nil, false
+	}
+
+	body := data
+	if len(body) >= 2 &&
+		((body[0] == 0xFF && body[1] == 0xFE) || (body[0] == 0xFE && body[1] == 0xFF)) {
+		body = body[2:]
+	}
+
+	// Classify on a prefix, as IsBinary does, so a large body costs a bounded scan.
+	sample := body
+	if len(sample) > 1024 {
+		sample = sample[:1024]
+	}
+
+	nuls, printable, other := 0, 0, 0
+	for _, c := range sample {
+		switch {
+		case c == 0x00:
+			nuls++
+		case c >= 0x20 && c < 0x7f, c == '\t', c == '\n', c == '\r':
+			printable++
+		default:
+			other++
+		}
+	}
+	// Padding and characters in balance, and almost nothing else. UTF-16 ASCII is
+	// half NULs; UTF-32 is three quarters, which is why the NUL count is only
+	// required to reach the character count rather than to match it.
+	if printable < wideTextMinChars || nuls < printable || other*8 > len(sample) {
+		return nil, false
+	}
+
+	p.scratch = p.scratch[:0]
+	for _, c := range body {
+		if c != 0x00 {
+			p.scratch = append(p.scratch, c)
+		}
+	}
+	return p.scratch, true
+}
+
 // ExtractText emits the printable runs found in binary data.
 //
 // Each run is handed to fn as its own value, under a positional name. A
@@ -99,6 +163,22 @@ func isTextByte(c byte) bool {
 // short, and admitting them reintroduces exactly the chance matches this exists
 // to prevent.
 func (p *Parser) ExtractText(name []byte, data []byte, fn Emit) {
+	// UTF-16 and UTF-32 text is binary by every test above -- it is full of NULs --
+	// and yields nothing at all to run extraction, because ASCII carried as code
+	// units leaves printable runs one byte long and minTextRun drops every one of
+	// them. A body declaring "charset=utf-16" therefore passed inspected-and-clean
+	// while a Java servlet or ASP.NET request decoder read it straight back to
+	// "<script>". That is the CVE-2026-21876 shape: the firewall and the origin
+	// disagreeing about a charset.
+	//
+	// So wide text is recovered to the bytes the origin acts on and extracted from
+	// that. Recovery is deliberately narrow -- it fires only on the interleave that
+	// real UTF-16/32 text produces -- and a body that is genuinely binary is
+	// unaffected and still walks the loop below.
+	if wide, ok := p.recoverWideText(data); ok {
+		data = wide
+	}
+
 	runs := 0
 	start := -1
 
