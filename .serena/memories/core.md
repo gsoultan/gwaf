@@ -63,6 +63,11 @@ literals hit, or by tightening the broad ones. Built and reverted with a
 counterexample: tolerant matching makes the detector match text its own literals
 are absent from, so both are bypasses.
 
+[[redteam_round5]] — the statistics that mean something: 24.7% → 82.4% detection
+on 85 novel adversarial payloads, FP rate flat. Also the measured reason to put
+per-rule normalisation in an **operator** and not a transform chain (a chain cost
+22% on benign GET for the benefit of two rules).
+
 [[redteam_round4]] — the standing list of **reproduced bypasses that are still
 open**, each with the reason it was not closed (long UTF-7 runs, the CHAR()
 prefilter gap, sink operators reading siblings raw, inet_aton spellings of the
