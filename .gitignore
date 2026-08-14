@@ -19,3 +19,6 @@ graphify-out/
 /proxy/proxy
 gwaf-proxy
 dist/
+
+# Agent worktrees created by the Claude Code harness.
+.claude/

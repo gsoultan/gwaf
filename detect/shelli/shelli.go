@@ -70,6 +70,7 @@ package shelli
 import (
 	"sort"
 
+	"github.com/gsoultan/gwaf/internal/interpret"
 	"github.com/gsoultan/gwaf/internal/scan"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/transform"
@@ -1142,6 +1143,21 @@ func (o *sinkOperator) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, 
 			if o.d.AnalyzeIn(dec, true).Score >= o.threshold {
 				return rules.WholeValue(value), true
 			}
+		}
+	}
+
+	// And the folded reading, for the same reason as the decoded one.
+	//
+	// A rule that fetches a sibling value bypasses the engine's reading
+	// enumeration -- the engine builds readings for the value it is *given*, and
+	// this operator was given a name and went and read something else. So the
+	// readings it needs have to be asked for, and the gap that showed it was a
+	// fullwidth backtick: rule 4010 fired on the folded reading of
+	// "1.1.1.1｀whoami｀" while this rule, the only one that scores a backtick
+	// around a bare word, never saw the fold and let it past.
+	if folded, changed := interpret.FoldBestFit(nil, v); changed {
+		if o.d.AnalyzeIn(folded, true).Score >= o.threshold {
+			return rules.WholeValue(value), true
 		}
 	}
 	return rules.Match{}, false

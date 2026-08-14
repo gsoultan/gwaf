@@ -805,6 +805,21 @@ func decodeRune(b []byte) (uint16, int) {
 // digits are ordinary CJK input, so "価格は１２３４円です" comes out unchanged
 // while "＜script＞" comes out as markup, and only the second is something a rule
 // should have an opinion about.
+// FoldBestFit resolves the characters that fold onto ASCII punctuation, and
+// reports whether anything changed.
+//
+// Exported for the operators that read a *sibling* value rather than a target.
+// Those bypass the engine's reading enumeration entirely -- they go and fetch a
+// value themselves -- so they have to ask for the readings they need. A rule
+// that reads the value beside an argument name and matches it raw is one
+// interpretation deep, which is the thing this package exists to prevent.
+func FoldBestFit(dst, src []byte) ([]byte, bool) {
+	if !Detect(src).Has(ClassBestFit) {
+		return src, false
+	}
+	return foldBestFitInto(dst[:0], src), true
+}
+
 func foldBestFitInto(dst, src []byte) []byte {
 	for i := 0; i < len(src); {
 		// Percent-encoded first: a value that arrived over a query string is
