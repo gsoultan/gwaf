@@ -173,6 +173,17 @@ var osAccessFuncs = map[string]bool{
 	"gtid_subset": true, "gtid_subtract": true, "name_const": true,
 	"dbms_xmlgen": true, "xmltype": true, "ctxsys": true, "drithsx": true,
 	"json_arrayagg": true, "extractvalue_": true,
+
+	// Time-based probes whose names are not words.
+	//
+	// "sleep" and "benchmark" stay in the attachment tier because they are
+	// ordinary English -- "sleep(8h) is the recommendation" is the case that put
+	// them there. "pg_sleep" and "dbms_lock.sleep" are neither: they name a
+	// vendor's function and nothing else, and the payload that matters is the
+	// whole parameter value, "pg_sleep(5)", which has no surrounding SQL to
+	// attach to because the query around it belongs to the origin. That is the
+	// same argument this list is built on.
+	"pg_sleep": true, "randomblob": true,
 }
 
 // dmlKeywords are the statements that matter after a statement separator.

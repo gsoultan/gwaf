@@ -434,6 +434,10 @@ func score(toks []token, ctx context, valueLen int) Verdict {
 		sigs |= SignalSubquery
 	}
 
+	if hasCaseWhenThen(toks) {
+		sigs |= SignalSubquery
+	}
+
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 
@@ -1004,6 +1008,61 @@ func isPackagedDangerCall(toks []token, i int) bool {
 // sentence, and it fails here because what follows the paren is a word, not the
 // SELECT keyword. Welded together they are a fragment grafted onto a WHERE
 // clause the application wrote, which is what injection is.
+// hasCaseWhenThen reports a CASE ... WHEN ... THEN expression.
+//
+// This is the boolean-blind primitive that carries no danger function and no
+// subquery: "1 AND 1=CASE WHEN (username='admin') THEN 1 ELSE 0 END" asks the
+// database a yes/no question about stored data and reads the answer from whether
+// the row comes back. The scorer saw a tautology and nothing else, and scored it
+// below the bar.
+//
+// The three keywords in order are what makes it safe to score. "case" is an
+// ordinary English word and so is "when"; "CASE" followed by "WHEN" followed by
+// "THEN" is SQL and is not a sentence anybody writes. It is priced as a subquery
+// because that is what it is -- a nested question whose answer steers the outer
+// one -- and, like a subquery, it needs the surrounding injection to reach the
+// threshold on its own.
+func hasCaseWhenThen(toks []token) bool {
+	stage := 0
+	for _, t := range toks {
+		if t.kind != tkIdent && t.kind != tkKeyword && t.kind != tkLogic {
+			continue
+		}
+		switch stage {
+		case 0:
+			if equalFoldToken(t.text, "case") {
+				stage = 1
+			}
+		case 1:
+			if equalFoldToken(t.text, "when") {
+				stage = 2
+			}
+		case 2:
+			if equalFoldToken(t.text, "then") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// equalFoldToken compares a token to a lowercase ASCII keyword.
+func equalFoldToken(tok []byte, want string) bool {
+	if len(tok) != len(want) {
+		return false
+	}
+	for i := range tok {
+		c := tok[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func subqueryFollowsConnector(toks []token) bool {
 	for i := 0; i+2 < len(toks); i++ {
 		if !isSubqueryConnector(toks[i]) {
