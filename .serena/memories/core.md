@@ -62,3 +62,11 @@ while `gwaf lint` correctly reports it as prefiltered. Measure it with
 literals hit, or by tightening the broad ones. Built and reverted with a
 counterexample: tolerant matching makes the detector match text its own literals
 are absent from, so both are bypasses.
+
+[[redteam_round4]] — the standing list of **reproduced bypasses that are still
+open**, each with the reason it was not closed (long UTF-7 runs, the CHAR()
+prefilter gap, sink operators reading siblings raw, inet_aton spellings of the
+metadata address, CLI option injection, MongoDB aggregation stages). Read it
+before hunting for bypasses, so a round starts from what is known. Also records
+the trap that a new interpret reading is worthless if the value never reaches
+the reading layer.
