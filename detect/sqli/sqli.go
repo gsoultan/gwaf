@@ -41,6 +41,8 @@
 package sqli
 
 import (
+	"slices"
+
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/types"
 )
@@ -299,13 +301,43 @@ func (d *Detector) Analyze(value []byte) Verdict {
 			}
 		}
 
-		toks := tokenize(buf[:0], value, ctx)
-		if len(toks) == 0 {
-			continue
-		}
-		v := score(toks, ctx, len(value))
-		if v.Score > best.Score {
-			best = v
+		// Tokenize in windows, because the token buffer is bounded and a bound
+		// that truncates is a place to hide.
+		//
+		// tokenize stops at maxTokens and drops the rest of the value on the
+		// floor, so a payload preceded by 256 tokens of valid, harmless SQL was
+		// invisible: "1" then " or 1" 127 times then "UNION SELECT password FROM
+		// users" scores nothing, while MySQL evaluates the padding to true and
+		// runs the union. The boundary was exact -- 126 repetitions blocked, 127
+		// did not -- which is the signature of a limit rather than a gap in the
+		// grammar.
+		//
+		// This is the byte-space padding bypass that internal/scan.Windows exists
+		// for, reappearing in token space, and it gets the same answer: carry on
+		// from where the bound stopped, overlapping enough that a signal spanning
+		// the seam is still read whole. The passes are capped too, so a
+		// pathological value costs a bounded amount rather than being unbounded
+		// or being ignored.
+		for off, pass := 0, 0; off < len(value) && pass < maxTokenPasses; pass++ {
+			toks := tokenize(buf[:0], value[off:], ctx)
+			if len(toks) == 0 {
+				break
+			}
+			v := score(toks, ctx, len(value)-off)
+			if v.Score > best.Score {
+				// The span is relative to this window; callers want it relative
+				// to the value they were given.
+				v.Span = types.SpanOf(off+int(v.Span.Off), int(v.Span.Len))
+				best = v
+			}
+			if len(toks) < maxTokens {
+				break // the whole of the remainder fitted
+			}
+			adv := int(toks[len(toks)-tokenOverlap].off)
+			if adv <= 0 {
+				break // no forward progress is possible
+			}
+			off += adv
 		}
 	}
 
@@ -865,7 +897,7 @@ func (o *operator) Eval(_ *rules.EvalContext, value []byte) (rules.Match, bool) 
 // including them would make nearly every text value a candidate for no gain —
 // a boolean injection also requires a comparison operator, which is listed.
 func (o *operator) Literals() ([]string, bool) {
-	return []string{
+	out := []string{
 		"=", "<", ">", "like",
 		"'", "\"", "`",
 		"--", "#", "/*",
@@ -874,8 +906,45 @@ func (o *operator) Literals() ([]string, bool) {
 		"sleep", "benchmark", "load_file", "pg_sleep", "waitfor",
 		"extractvalue", "updatexml", "xp_cmdshell",
 		"||",
-	}, true
+	}
+	return append(out, osAccessLiterals...), true
 }
+
+// osAccessLiterals are the osAccessFuncs names that can safely be prefiltered.
+//
+// isDangerCall scores a name in osAccessFuncs on the name alone -- no attachment
+// to surrounding SQL required, because the whole parameter value is the injected
+// expression. The scorer therefore reports "sys_exec(whoami)" at the threshold
+// while the prefilter, keyed on quotes and operators and keywords, saw nothing to
+// nominate the rule with and dropped the value first. A detector that scores a
+// payload it is never given is not a detector, and an adversarial round found
+// thirty names in exactly that state.
+//
+// Derived from osAccessFuncs rather than written out again, so a name added
+// there becomes prefilterable in the same edit -- the drift that produces a rule
+// which compiles, lints clean and never fires is the thing this avoids.
+//
+// The exclusions are the whole judgement. A literal has to be selective as well
+// as sound ([[prefilter_literal_selectivity]]): declaring one that appears in
+// ordinary text makes the SQL detector run on ordinary text, which is how
+// "char" was rejected. These four are ordinary words -- "edit" most obviously,
+// and the file verbs appear in every code sample and API document -- so they
+// keep the attachment the rest do not need.
+var osAccessLiterals = func() []string {
+	skip := map[string]bool{
+		"edit": true, "readfile": true, "writefile": true, "xmltype": true,
+	}
+	out := make([]string, 0, len(osAccessFuncs))
+	for name := range osAccessFuncs {
+		if !skip[name] {
+			out = append(out, name)
+		}
+	}
+	// Sorted so a compile report and an automaton are byte-identical between
+	// builds; map order is not.
+	slices.Sort(out)
+	return out
+}()
 
 // Cost prices one analysis. Tokenization runs three times over the value, so
 // this is higher than a literal match and lower than a regex.

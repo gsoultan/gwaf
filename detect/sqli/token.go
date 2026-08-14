@@ -31,10 +31,26 @@ type token struct {
 	off  int
 }
 
-// maxTokens bounds the token stream. A value that needs more than this to
-// tokenize is not a query an origin would run; the bound keeps a pathological
-// input from driving unbounded work, and the scorer never needs deep context.
+// maxTokens bounds the token stream, so the token buffer is a stack array and
+// tokenizing allocates nothing.
+//
+// The premise this bound was first written with -- that a value needing more
+// than 256 tokens "is not a query an origin would run" -- is false, and Analyze
+// no longer relies on it. "1 or 1 or 1 …" is 256 tokens of SQL MySQL evaluates
+// happily, and a UNION after it is executed. The bound is now a window size
+// rather than a horizon: Analyze carries on past it.
 const maxTokens = 256
+
+// maxTokenPasses bounds how many windows one value is tokenized into, so the
+// work stays linear and bounded no matter how long the value is.
+//
+// Sixteen windows is 4096 tokens, which is far past any real query and still a
+// fixed ceiling.
+const maxTokenPasses = 16
+
+// tokenOverlap is how many tokens each window repeats from the one before, so a
+// signal sitting on the seam is read whole by the later window.
+const tokenOverlap = 16
 
 // keywords are the SQL words whose presence changes the grammar.
 //

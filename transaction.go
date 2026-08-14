@@ -1134,7 +1134,18 @@ func (tx *Transaction) parseMultipartBody(b, boundary []byte) bool {
 		}
 
 		inert := tx.checkBodySchema(name, value)
-		tx.recordFieldBytes(types.TargetArgs, name, value, inert)
+		// recordValueBytes rather than recordFieldBytes, so a base64 field in a
+		// multipart body is decoded and re-inspected exactly as the same field
+		// is in a JSON or urlencoded one.
+		//
+		// The inconsistency was the bug. gwaf already holds that an origin acts
+		// on the decoded form -- that is why recordValueBytes exists, and why a
+		// base64 web shell in a JSON field is caught -- but multipart went
+		// through the plain recorder, so the identical payload in the identical
+		// application passed because of how the form was posted. An adversarial
+		// round put "<?php system($_GET[0]);?>" in a multipart field and it
+		// walked through while the urlencoded spelling was blocked.
+		tx.recordValueBytes(types.TargetArgs, name, value, inert)
 		return true
 	}
 
@@ -1205,9 +1216,17 @@ func (tx *Transaction) ProcessRequestHeaders() Decision {
 		switch {
 		case tx.transferEncoded:
 			tx.setFramingConflict("Transfer-Encoding on a " + tx.reqMethod + " request")
-		case tx.contentLengths > 0 && tx.firstLength != "" && tx.firstLength != "0":
+		case tx.contentLengths > 0 && tx.firstLength != "" && !isZeroLength(tx.firstLength):
 			// Content-Length: 0 is ordinary and says the opposite -- that there
 			// is no body. Only a declared, non-empty body is the anomaly.
+			//
+			// Compared as a number rather than as the string "0", because the
+			// grammar allows leading zeros and a client that writes "00" means
+			// zero exactly as much as one that writes "0". A lexical compare
+			// read it as a body, and a GET carrying "Content-Length: 00" was
+			// rejected as a desync -- a false positive on a request that says
+			// nothing unusual at all, reachable through the net/http middleware,
+			// which forwards header values verbatim.
 			tx.setFramingConflict("Content-Length " + tx.firstLength +
 				" on a " + tx.reqMethod + " request")
 		}
@@ -2100,6 +2119,24 @@ func indexByte(s string, c byte) int {
 // "content-length", "content-type". Passing "GET" here matched nothing, and it
 // failed silently: a framing check that never fires looks exactly like a
 // request that was fine.
+// isZeroLength reports whether a Content-Length value denotes an empty body.
+//
+// Any run of ASCII digits that are all '0' is zero. A value that is not all
+// digits is not a length gwaf can read, and saying it is zero would be claiming
+// something about a header it did not understand -- so that returns false and
+// the framing check treats it as a declared body.
+func isZeroLength(v string) bool {
+	if v == "" {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] != '0' {
+			return false
+		}
+	}
+	return true
+}
+
 func isBodylessMethod(m string) bool {
 	return equalFoldASCII(m, "get") || equalFoldASCII(m, "head")
 }

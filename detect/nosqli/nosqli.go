@@ -84,6 +84,18 @@ const (
 	// sufficient: blocking every .NET API that round-trips typed JSON would be
 	// a far larger outage than the attack it prevents.
 	SignalAmbiguousOperator
+
+	// SignalPipelineWrite is an aggregation stage that writes a collection:
+	// $out and $merge. It is graded with the query operators rather than with
+	// the update operators, and the distinction is the whole reason it exists.
+	//
+	// $set and $inc are weak because an application that proxies a partial
+	// update sends them itself. Nothing sends $out on a user's behalf: the
+	// stage names the collection it replaces, so a user-supplied one redirects
+	// the result of the pipeline into a collection of the attacker's choosing.
+	// That is a write primitive, not a shaped query, and pricing it as a
+	// mutation left it below the threshold and therefore invisible.
+	SignalPipelineWrite
 )
 
 // String implements fmt.Stringer so a decision can say what it saw.
@@ -107,6 +119,9 @@ func (s Signal) String() string {
 	if s&SignalAmbiguousOperator != 0 {
 		add("ambiguous_operator")
 	}
+	if s&SignalPipelineWrite != 0 {
+		add("pipeline_write")
+	}
 	if len(out) == 0 {
 		return "none"
 	}
@@ -119,7 +134,7 @@ const Threshold = 5
 // weightOf prices each signal by what it means alone.
 func weightOf(s Signal) int {
 	switch s {
-	case SignalQueryOperator, SignalEvalOperator:
+	case SignalQueryOperator, SignalEvalOperator, SignalPipelineWrite:
 		return 5
 	case SignalUpdateOperator:
 		return 3
@@ -177,6 +192,29 @@ var operatorTokens = map[string]Signal{
 	"$slice": SignalUpdateOperator, "$sort": SignalUpdateOperator,
 	"$currentDate": SignalUpdateOperator, "$setOnInsert": SignalUpdateOperator,
 	"$bit": SignalUpdateOperator,
+
+	// Aggregation pipeline stages.
+	//
+	// The stages were missing entirely, and the omission was not a small one: an
+	// application that hands a user-supplied pipeline to db.collection.aggregate
+	// gets cross-collection reads from $lookup, $graphLookup and $unionWith --
+	// which read a collection the query was never scoped to, defeating whatever
+	// access control the endpoint applied -- and *writes* from $out and $merge,
+	// which replace or merge into an arbitrary collection. A detector that
+	// scores $ne at 5 and ignores $out was reading the query language and not
+	// the one that can drop a collection.
+	//
+	// $out and $merge are graded as mutations because that is what they are.
+	// The readers are query operators: they are how the pipeline is steered.
+	//
+	// Deliberately absent, on the same collision reasoning as $filter and
+	// $search above: $match, $group, $project, $sort and $limit are aggregation
+	// stages *and* ordinary field names in a great deal of JSON, and none of
+	// them reaches outside the collection being queried.
+	"$out": SignalPipelineWrite, "$merge": SignalPipelineWrite,
+	"$lookup": SignalQueryOperator, "$graphLookup": SignalQueryOperator,
+	"$unionWith": SignalQueryOperator, "$facet": SignalQueryOperator,
+	"$replaceWith": SignalQueryOperator, "$replaceRoot": SignalQueryOperator,
 
 	// Both an operator and an ordinary serialisation key.
 	"$type": SignalAmbiguousOperator,

@@ -85,6 +85,24 @@ const (
 	// Weak alone: asking a model to decode something is ordinary.
 	SignalEncodedPayload
 
+	// SignalRoleForgery is a chat turn or tool result forged in JSON inside a
+	// value: {"role":"system","content":…}, a "tool_call_id", a "function_call".
+	//
+	// This is SignalDelimiterInjection for the agent era, and it is the same
+	// argument. A template's delimiter and a protocol's role key are both
+	// structure, and a user who writes one is claiming a privilege the framing
+	// was there to deny. An adversarial round found the detector scoring 1 of 21
+	// agentic payloads precisely because it knew ChatML's markers and nothing
+	// about the JSON every tool-calling API actually speaks.
+	//
+	// What keeps it from firing on legitimate LLM traffic is *where* it is seen.
+	// gwaf's body parsers emit leaf values, so an API that genuinely accepts a
+	// messages array presents "system" as the value of a key named "role" and
+	// this never matches. The bytes `"role":"system"` appear *within a single
+	// value* only when a conversation has been embedded in text the user
+	// supplied -- which is the attack and not the protocol.
+	SignalRoleForgery
+
 	// SignalPromptContext is the mere presence of prompt vocabulary. On its own
 	// it means only that the text is about prompts, which is true of a great
 	// deal of legitimate content, so it carries no weight at all. It is tracked
@@ -119,6 +137,9 @@ func (s Signal) String() string {
 	if s&SignalEncodedPayload != 0 {
 		add("encoded_payload")
 	}
+	if s&SignalRoleForgery != 0 {
+		add("role_forgery")
+	}
 	if s&SignalPromptContext != 0 {
 		add("prompt_context")
 	}
@@ -140,7 +161,8 @@ const Threshold = 5
 func weightOf(s Signal) int {
 	switch s {
 	case SignalInstructionOverride, SignalRoleReassignment,
-		SignalSystemPromptExfil, SignalDelimiterInjection, SignalGuardrailNegation:
+		SignalSystemPromptExfil, SignalDelimiterInjection, SignalGuardrailNegation,
+		SignalRoleForgery:
 		return 5
 	case SignalEncodedPayload:
 		return 2
@@ -220,6 +242,12 @@ func scan(src []byte) (Signal, types.Span) {
 		if i := indexFold(src, d); i >= 0 {
 			note(SignalDelimiterInjection, i, len(d))
 		}
+	}
+
+	// A forged turn or tool result, for the same reason and with no imperative
+	// requirement: the structure is the claim.
+	if i, n := findRoleForgery(src); i >= 0 {
+		note(SignalRoleForgery, i, n)
 	}
 
 	// Everything else requires an *imperative aimed at the model*. The phrase
@@ -426,6 +454,122 @@ var chatDelimiters = []string{
 	"<|endoftext|>", "[/INST]", "[INST]", "<<SYS>>", "<</SYS>>",
 	"### Instruction:", "### System:", "</system>", "<system>",
 	"<|start_header_id|>", "<|eot_id|>",
+
+	// The rest of the live templates. The list above covered ChatML, Llama and
+	// the Alpaca instruction header and stopped there, which meant a forged turn
+	// was caught or missed according to which vendor's framing the attacker
+	// happened to copy. These are the markers the other widely-deployed
+	// templates use, and a user has no more reason to type one of these than an
+	// "<|im_start|>".
+	"<start_of_turn>", "<end_of_turn>", // Gemma
+	"<|START_OF_TURN_TOKEN|>", "<|SYSTEM_TOKEN|>", "<|CHATBOT_TOKEN|>", // Cohere
+	"<|start|>", "<|message|>", "<|channel|>", // harmony
+	"### Response:", "### Human:", "### Assistant:", // Alpaca/Vicuna
+	"[|system|]", "<|begin_of_text|>",
+}
+
+// findRoleForgery locates a forged chat turn or tool result, returning its
+// offset and length, or -1.
+//
+// A match is `"role"`, optional space, `:`, optional space, and a quoted
+// privileged role -- the JSON every tool-calling API speaks, written out inside
+// a value. The quotes are required on both sides: prose that merely discusses
+// the role of the system is not JSON and does not match.
+func findRoleForgery(src []byte) (int, int) {
+	for _, m := range toolMarkers {
+		if i := indexFold(src, m); i >= 0 {
+			return i, len(m)
+		}
+	}
+
+	// The Human:/Assistant: framing, which is a forged turn only as a pair.
+	//
+	// Neither half can be listed on its own. "Human:" opens a line in a
+	// transcript, a survey, a screenplay and a biology paper, and blocking it
+	// would be the phrase-list mistake this detector exists to avoid. Both
+	// halves, each at the start of a line, is the template -- and text that
+	// stages both sides of a conversation is staging one.
+	if i := lineLabel(src, "human:"); i >= 0 {
+		if j := lineLabel(src, "assistant:"); j > i {
+			return i, j + len("assistant:") - i
+		}
+	}
+
+	const key = "\"role\""
+	for off := 0; ; {
+		i := indexFold(src[off:], key)
+		if i < 0 {
+			return -1, 0
+		}
+		i += off
+		j := i + len(key)
+		for j < len(src) && isSpace(src[j]) {
+			j++
+		}
+		if j < len(src) && src[j] == ':' {
+			j++
+			for j < len(src) && isSpace(src[j]) {
+				j++
+			}
+			if j < len(src) && src[j] == '"' {
+				for _, r := range roleValues {
+					if hasPrefixFold(src[j+1:], r) {
+						end := j + 1 + len(r)
+						if end < len(src) && src[end] == '"' {
+							return i, end + 1 - i
+						}
+					}
+				}
+			}
+		}
+		off = i + len(key)
+	}
+}
+
+// lineLabel finds label where it opens a line, and returns its offset or -1.
+//
+// Opening a line is what makes it framing rather than a word: a transcript
+// writes "Human:" at the margin, and a sentence mentioning humans does not.
+func lineLabel(src []byte, label string) int {
+	for off := 0; ; {
+		i := indexFold(src[off:], label)
+		if i < 0 {
+			return -1
+		}
+		i += off
+		j := i
+		for j > 0 && (src[j-1] == ' ' || src[j-1] == '\t') {
+			j--
+		}
+		if j == 0 || src[j-1] == '\n' || src[j-1] == '\r' {
+			return i
+		}
+		off = i + len(label)
+	}
+}
+
+// hasPrefixFold reports whether src begins with p, compared case-insensitively.
+func hasPrefixFold(src []byte, p string) bool {
+	if len(src) < len(p) {
+		return false
+	}
+	return equalFold(src[:len(p)], p)
+}
+
+// roleValues are the privileged turn names a forged role block claims.
+//
+// "user" is deliberately absent: claiming to be the user grants nothing, and it
+// is the one role a user legitimately is.
+var roleValues = []string{"system", "assistant", "tool", "developer"}
+
+// toolMarkers are the structural keys of the tool-calling protocols.
+//
+// A model that is replaying a conversation treats a tool result as something it
+// produced rather than something the user wrote, so a forged one is read as
+// trusted context -- the same privilege escalation a forged system turn gets,
+// arriving through the agent loop instead of the prompt.
+var toolMarkers = []string{
+	"\"function_call\"", "\"tool_call_id\"", "\"tool_calls\"",
 }
 
 // Operator returns the rule operator for this detector.
@@ -472,6 +616,14 @@ func (o *operator) Literals() ([]string, bool) {
 		}
 	}
 	out = append(out, chatDelimiters...)
+	// Role forgery is reachable only through one of these, so declaring them
+	// keeps the assertion this returns true for. The quoted key is what makes
+	// it selective: `"role"` with its quotes is JSON, not the English word.
+	out = append(out, "\"role\"")
+	// The Human:/Assistant: pair needs both halves present, so either one is a
+	// sound nomination for it.
+	out = append(out, "human:", "assistant:")
+	out = append(out, toolMarkers...)
 	return out, true
 }
 

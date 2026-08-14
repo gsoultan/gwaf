@@ -601,8 +601,13 @@ func requestRules() rules.Set {
 			Phase:      types.PhaseRequestHeaders,
 			Targets:    nameTargets,
 			Transforms: textChain,
+			// SignalPipelineWrite is here rather than with the code-execution
+			// rule above because $out is not code execution -- but it is in the
+			// mask at all because a rule that scored $ne and ignored the stage
+			// that overwrites a collection was reading half the language.
 			Op: nosqli.Operator(nosqli.SignalQueryOperator |
-				nosqli.SignalUpdateOperator | nosqli.SignalAmbiguousOperator),
+				nosqli.SignalUpdateOperator | nosqli.SignalAmbiguousOperator |
+				nosqli.SignalPipelineWrite),
 			Actions:  []rules.Action{rules.Block},
 			Severity: types.SeverityCritical,
 			// High rather than Certain: a few frameworks expose MongoDB
@@ -611,7 +616,7 @@ func requestRules() rules.Set {
 			// injection surface by design and reporting it is right — but that
 			// is not the same as being certain it is an attack.
 			Confidence: types.High,
-			Msg:        "NoSQL injection: query operator in parameter name",
+			Msg:        "NoSQL injection: operator in parameter name",
 			Tags:       []string{"nosqli", "owasp-a03", "semantic"},
 		},
 
@@ -1320,7 +1325,7 @@ func requestRules() rules.Set {
 			// form. Go's net.ParseIP rejects most of them, but libcurl, PHP, and
 			// Java do not, and a rule that only knew the dotted-quad was one
 			// base conversion away from being bypassed.
-			Op: op.ContainsAny(
+			Op: addressContains(
 				"169.254.169.254", "metadata.google.internal",
 				"169.254.170.2", "100.100.100.200", "metadata.tencentyun.com",
 				"2852039166",          // decimal
@@ -2112,7 +2117,7 @@ func LoopbackSSRFRule(id types.RuleID) rules.Rule {
 		Phase:      types.PhaseRequestHeaders,
 		Targets:    argTargets,
 		Transforms: decodeChain,
-		Op: op.ContainsAny(
+		Op: addressContains(
 			"127.0.0.1", "localhost", "0.0.0.0", "[::1]",
 			"2130706433", "0x7f000001", "169.254.", "::ffff:127.",
 		),

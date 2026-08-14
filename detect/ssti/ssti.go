@@ -276,6 +276,30 @@ var delimiters = []struct {
 	{open: "{system", signal: SignalDirectiveExecution},
 	{open: "<#", close: ">"}, // FreeMarker directive
 	{open: "@{", close: "}"}, // Razor
+
+	// The syntaxes the list above spelled only one way.
+	//
+	// FreeMarker accepts "[#assign …]" and "[=x]" wherever it accepts the angle
+	// forms -- the square-bracket syntax exists precisely so a template can live
+	// in HTML -- and the canonical RCE, [#assign
+	// x="freemarker.template.utility.Execute"?new()("id")], is written that way
+	// in every advisory. Reading "<#" and not "[#" meant the vocabulary below
+	// was never even consulted for it.
+	{open: "[#", close: "]"}, // FreeMarker directive, bracket syntax
+	{open: "[=", close: "]"}, // FreeMarker interpolation, bracket syntax
+	{open: "*{", close: "}"}, // Thymeleaf selection expression
+	{open: "@(", close: ")"}, // Razor explicit expression
+
+	// Velocity directives other than #set. #evaluate renders a string as a
+	// template, which is the dynamic-evaluation primitive itself.
+	{open: "#evaluate", signal: SignalDirectiveExecution},
+	{open: "#parse", signal: SignalDirectiveExecution},
+	{open: "#include", signal: SignalDirectiveExecution},
+
+	// Smarty's evaluating tags. {math} evaluates its equation attribute, and
+	// {eval} renders its var as a template.
+	{open: "{math", signal: SignalDirectiveExecution},
+	{open: "{eval", signal: SignalDirectiveExecution},
 }
 
 // expressionAt reports the bounds of a template expression opening at i.
@@ -335,6 +359,23 @@ var rubyExecution = []string{
 	"system(", "exec(", "spawn(", "open3.",
 }
 
+// dotnetAccess is Razor and WebForms reaching the framework.
+//
+// The vocabulary tables covered Java, Python, Ruby and PHP, and the omission was
+// not academic: "@{" and "<%" were already delimiters, so an ASP.NET payload was
+// found, parsed, and then scored zero because nothing in it was a word any table
+// listed. Razor is the default template engine of a mainstream web stack, and
+// System.Diagnostics.Process.Start is its Runtime.getRuntime().exec.
+//
+// Namespaced forms only. Bare "process" and "file" are ordinary English and
+// ordinary field names; "system.diagnostics" is neither.
+var dotnetAccess = []string{
+	"system.diagnostics", "system.reflection", "system.io",
+	"system.net.webclient", "system.activator", "system.appdomain",
+	"processstartinfo", "process.start", "assembly.load",
+	"gettype(", "createinstance",
+}
+
 // directiveExecution reaches a runtime object from the template engine itself:
 // a Velocity or Smarty directive, or a Twig internal.
 //
@@ -360,6 +401,12 @@ func scanExpression(expr []byte) []Signal {
 		out = append(out, SignalPythonInternals)
 	}
 	if containsAnyFolded(expr, jvmAccess) || hasJVMTypeCall(expr) {
+		out = append(out, SignalJVMClassAccess)
+	}
+	// .NET reaches its runtime the same way the JVM does -- a namespaced type,
+	// then a method that starts something -- so it carries the same signal
+	// rather than a new one. What was missing was the vocabulary, not the idea.
+	if containsAnyFolded(expr, dotnetAccess) {
 		out = append(out, SignalJVMClassAccess)
 	}
 	if containsAnyFolded(expr, rubyExecution) || hasBacktickCommand(expr) {
