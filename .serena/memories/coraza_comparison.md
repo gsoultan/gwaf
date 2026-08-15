@@ -30,6 +30,28 @@ request in three**. Quoting either number alone is dishonest; the test file says
 so itself and lists the caveats (each corpus is its own engine's home turf;
 Coraza runs untuned CRS at PL1; the traffic is API-shaped).
 
+## The decisive corpus: real CVE exploits, neither engine's home turf
+
+`make nuclei` — 2457 payload-bearing exploits extracted from nuclei-templates:
+
+| engine | detection | latency |
+|---|---|---|
+| gwaf (default) | 2200/2457 — 89.5% | 63 µs/req |
+| gwaf + profile + opt-in | 2295/2457 — **93.4%** | 58 µs/req |
+| coraza+crs | 2203/2457 — 89.7% | **932 µs/req** |
+
+**On real attack traffic the two are tied (89.5% vs 89.7%), gwaf with its opt-in
+rules wins outright (93.4%), and gwaf is ~15x faster.** False positives on the
+ordinary-traffic sample: gwaf 2/12, gwaf+profile+optin 0/12, coraza+crs 4/12.
+
+Per class, gwaf beats Coraza on redirect (40/60 vs 3/60), fileupload (45 vs 42),
+xss (996 vs 993), ssti (3 vs 1); Coraza beats gwaf on rce (316 vs 302) and ssrf
+(14 vs 6 — but 45 with the opt-in loopback/SSRF rules enabled).
+
+**So: Coraza+CRS is better at matching CRS's test suite. It is not better at
+detecting real attacks.** Anyone quoting the 80.6% without the 89.5%/89.7% pair
+is quoting the wrong corpus.
+
 ## Where the 3000-case gap actually is
 
 `TestCRSGapAnalysis` (test/headtohead/gap_test.go) groups misses by CRS family
