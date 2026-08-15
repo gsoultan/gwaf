@@ -2019,7 +2019,7 @@ func repeatedTraversal() rules.Operator {
 			i++
 		}
 		return false
-	}).WithLiterals("../..", `..\..`, "..%2f..", `..%5c..`)
+	}).WithLiterals("../..", `..\..`, "..%2f..", `..%5c..`, "..;")
 }
 
 // traversalSep returns the length of a path separator at i, in the spellings
@@ -2035,6 +2035,21 @@ func traversalSep(v []byte, i int) int {
 	}
 	if i+2 < len(v) && v[i] == '%' && v[i+1] == '5' && v[i+2] == 'c' {
 		return 3
+	}
+	// A matrix-parameter segment, "..;/" and "..;jsessionid=x/". Tomcat, Jetty
+	// and Spring strip everything from a ';' to the next '/' before resolving the
+	// path, so "foo/..;/bar" is "foo/../bar" to the container and walks a level
+	// up -- CVE-2018-11784 and a standing WEB-INF/actuator bypass. A single ".."
+	// followed by a ';' that reaches a slash is that separator; the two-run bar
+	// this operator sets is what keeps "a..;b/c" from ever qualifying alone.
+	if i < len(v) && v[i] == ';' {
+		j := i + 1
+		for j < len(v) && v[j] != '/' && v[j] != '\\' && v[j] != ';' {
+			j++
+		}
+		if j < len(v) && (v[j] == '/' || v[j] == '\\') {
+			return j + 1 - i
+		}
 	}
 	return 0
 }

@@ -255,7 +255,9 @@ STRUCTURAL = {"xxe", "nosqli", "xml", "json"}
 
 def looks_json_object(s):
     t = s.strip()
-    return t.startswith("{") and t.endswith("}")
+    # An aggregation pipeline is a JSON *array* of stage objects, so both shapes
+    # are real request bodies whose keys the parser must see in place.
+    return (t.startswith("{") and t.endswith("}")) or (t.startswith("[") and t.endswith("]"))
 
 
 def looks_query_pair(s):
