@@ -623,6 +623,20 @@ func scanCommandPositions(src []byte, commandSink bool, mark func(Signal, int, i
 			mark(SignalVariableCommand, j, 2)
 
 		case commands[word]:
+			// A name immediately followed by '=' is a shell *assignment*, not a
+			// command: "dir=desc" sets the variable dir, and "foo & dir=desc"
+			// runs foo and assigns dir, executing nothing. A query string carried
+			// as a value -- "order=created_at&dir=desc&select=name" -- is exactly
+			// this shape, and reading its "&dir" as a command fired rule 4010 on
+			// ordinary API traffic. A real invocation is "dir /w" or "dir;": a
+			// space, a separator, or end of value, never "=value" glued on.
+			//
+			// The command sink is exempt: there the parameter name already says
+			// the value is handed to a shell, and "cmd=dir=x" is still worth a
+			// look. Everywhere else, an assignment is not an invocation.
+			if !commandSink && end < len(src) && src[end] == '=' {
+				continue
+			}
 			// Backtick substitution around a single bare word is Markdown far
 			// more often than it is an attack, so it needs a real invocation:
 			// a second token, a path, or another separator.

@@ -22,3 +22,6 @@ dist/
 
 # Agent worktrees created by the Claude Code harness.
 .claude/
+
+# attackgen generated corpora
+test/attackgen/*.jsonl
