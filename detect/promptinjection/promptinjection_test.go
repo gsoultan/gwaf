@@ -117,8 +117,40 @@ func TestLiteralsCoverEveryScoringPhrase(t *testing.T) {
 		if weightOf(p.signal) < Threshold {
 			continue // weak signals cannot fire alone and need no literal
 		}
-		if !have[strings.ToLower(p.text)] {
-			t.Errorf("scoring phrase %q is not in Literals(): the prefilter would drop it", p.text)
+		// A byte-exact phrase declares itself. A widened one cannot: under flex
+		// its words arrive as separate runs and under leet its letters arrive as
+		// digits, so the full text is not guaranteed to be in the raw bytes.
+		// It declares an anchor instead, and the anchor has to be something the
+		// widened match always leaves behind -- which is three properties, all
+		// checked here, because an anchor that fails any of them is an unsound
+		// gate and therefore a bypass of gwaf's own prefilter.
+		if !p.flex && !p.leet {
+			if !have[strings.ToLower(p.text)] {
+				t.Errorf("scoring phrase %q is not in Literals(): the prefilter would drop it", p.text)
+			}
+			continue
+		}
+		if p.anchor == "" {
+			t.Errorf("widened phrase %q declares no anchor", p.text)
+			continue
+		}
+		if !have[strings.ToLower(p.anchor)] {
+			t.Errorf("anchor %q of %q is not in Literals()", p.anchor, p.text)
+		}
+		// 1. It must be part of the phrase, or it says nothing about it.
+		if !strings.Contains(strings.ToLower(p.text), strings.ToLower(p.anchor)) {
+			t.Errorf("anchor %q is not inside phrase %q", p.anchor, p.text)
+		}
+		// 2. It must lie inside one word: flex respells the separators, so an
+		// anchor spanning one would not survive "ignore  all".
+		if strings.ContainsAny(p.anchor, " \t\r\n") {
+			t.Errorf("anchor %q of %q spans a separator, which flex may respell", p.anchor, p.text)
+		}
+		// 3. Under leet it must carry no letter that has a digit spelling, or
+		// the leeted payload would not contain it -- "instructions" survives as
+		// "truct" precisely because t, r, u and c have none.
+		if p.leet && strings.ContainsAny(strings.ToLower(p.anchor), "oilseag") {
+			t.Errorf("anchor %q of %q contains a leet-foldable letter", p.anchor, p.text)
 		}
 	}
 	for _, d := range chatDelimiters {
