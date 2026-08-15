@@ -73,3 +73,49 @@ func xmlEntityOrExternalDTD() rules.Operator {
 		return false
 	}).WithLiterals("<!entity", "<!element", "%remote;", "<!attlist", "<!doctype")
 }
+
+// xsltRemoteInclude reports a stylesheet the request tells the processor to
+// fetch from a URL.
+//
+// xsl:include and xsl:import are resolved when the stylesheet is compiled, so
+// the server makes the request the attacker names -- server-side request forgery
+// on its own, and remote code execution wherever the fetched stylesheet reaches
+// an extension function, which Xalan's java: namespace, libxslt's EXSLT and
+// Saxon's reflexive extensions all provide in some configuration.
+//
+// The remote scheme is the whole finding and the whole restraint. A stylesheet
+// that includes another one legitimately does it by relative path -- it ships
+// alongside the file it names -- so "common.xsl" and "../shared/base.xsl" are
+// invisible here, along with every xsl:template, xsl:value-of and xsl:for-each
+// in an ordinary document. Nothing benign writes http:// into an include.
+//
+// The element and the href are required to belong together: the scheme must
+// appear after the element name and before the tag closes. Without that, an
+// ordinary stylesheet that merely mentions a URL somewhere else in the document
+// would qualify, which is the shape "<xsl:template match="/">…<a href="http://
+// example.com">" takes on any page that links out.
+func xsltRemoteInclude() rules.Operator {
+	elements := []string{"<xsl:include", "<xsl:import"}
+	schemes := []string{"http://", "https://", "ftp://", "jar:", "netdoc:"}
+
+	return op.Func("xslt_remote_include", func(v []byte) bool {
+		for _, el := range elements {
+			i := indexOfFold(v, el)
+			if i < 0 {
+				continue
+			}
+			rest := v[i+len(el):]
+			// Bound the scan to this element: the scheme has to be inside the
+			// tag that names it.
+			if end := indexOfFold(rest, ">"); end >= 0 {
+				rest = rest[:end]
+			}
+			for _, s := range schemes {
+				if indexOfFold(rest, s) >= 0 {
+					return true
+				}
+			}
+		}
+		return false
+	}).WithLiterals("<xsl:include", "<xsl:import")
+}

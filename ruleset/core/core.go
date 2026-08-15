@@ -166,6 +166,11 @@ const (
 	// codeexec.go.
 	IDStringToCode types.RuleID = 4024
 
+	// A stylesheet pulled from a URL the request names. XSLT processors fetch
+	// and execute what xsl:include and xsl:import point at, and several expose
+	// extension functions that run commands from there.
+	IDXSLTRemoteInclude types.RuleID = 4025
+
 	// The Medium tier, in its own 5xxx band so an exception written against a
 	// default-tier rule can never accidentally silence the opt-in one, and so a
 	// reader of an audit log can tell at a glance which bar a finding cleared.
@@ -1511,6 +1516,30 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "XML entity or external DTD in request",
 			Tags:       []string{"xxe", "dos", "owasp-a05"},
+		},
+		{
+			ID:         IDXSLTRemoteInclude,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// A stylesheet the request tells the processor to go and fetch.
+			// xsl:include and xsl:import are resolved at compile time, so a
+			// remote href is a request the server makes on the attacker's
+			// behalf -- SSRF at minimum, and remote code execution wherever the
+			// fetched stylesheet can reach an extension function, which Xalan,
+			// libxslt and Saxon all offer in some configuration.
+			//
+			// The scheme is what makes it narrow. A stylesheet legitimately
+			// includes another by *relative* path -- "common.xsl",
+			// "../shared/base.xsl" -- because it ships alongside it. Nothing
+			// legitimate names http:// there, and requiring the scheme is what
+			// keeps every ordinary xsl:template and xsl:value-of untouched.
+			Op:         xsltRemoteInclude(),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.Certain,
+			Msg:        "XSLT include or import of a remote stylesheet",
+			Tags:       []string{"xslt", "rce", "ssrf", "owasp-a03"},
 		},
 
 		// ---- Response leaks --------------------------------------------------
