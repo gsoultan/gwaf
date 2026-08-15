@@ -1027,6 +1027,23 @@ func requestRules() rules.Set {
 				"prototypeclonefactory", "prototypeserializationfactory",
 				"whileclosure", "chainedtransformer", "constanttransformer",
 				"lazymap", "tiedmapentry", "keepalivecache",
+
+				// SnakeYAML's route to the same place: a YAML document tagged
+				// !!javax.script.ScriptEngineManager with a URLClassLoader loads
+				// a class from a URL the attacker names. The list already held
+				// its Jackson and Spring equivalents, and this was the sibling
+				// it happened not to name.
+				"javax.script.scriptenginemanager",
+
+				// "java.lang.runtime" is deliberately NOT here, and the reason
+				// is worth writing down because it looks like an oversight.
+				// It is a prefix of "java.lang.RuntimeException", which appears
+				// in every Java stack trace ever pasted into a bug-report field,
+				// so listing it would block error reports -- measured against
+				// the tests below, which carry exactly that. The call that
+				// matters, "getRuntime()", is already scored by detect/javaser's
+				// spawn chains, where the parentheses make it a call rather than
+				// a word.
 			),
 			Actions:    []rules.Action{rules.Block},
 			Severity:   types.SeverityCritical,
