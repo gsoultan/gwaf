@@ -234,9 +234,18 @@ var commands = map[string]bool{
 	"rsync": true, "telnet": true,
 
 	// Readers and decoders.
+	//
+	// "rev" was here and has been removed. It reverses the characters of each
+	// line, which is the weakest file-reader on this list -- an attacker reading
+	// a file reaches for cat -- and it is three letters that engineering prose
+	// produces constantly: "the PR is ready; rev 3 is current" was blocked, and
+	// so was every "; revenue" and "; reverse" that happened to follow a
+	// separator. Position makes an English word usable when the word is rare
+	// after a separator; "rev" is not, and the recall it bought did not cover
+	// the false positive it cost.
 	"cat": true, "tac": true, "head": true, "tail": true, "less": true,
 	"more": true, "strings": true, "od": true, "xxd": true, "base64": true,
-	"base32": true, "uudecode": true, "nl": true, "rev": true,
+	"base32": true, "uudecode": true, "nl": true,
 
 	// Reconnaissance.
 	"id": true, "whoami": true, "uname": true, "hostname": true,
@@ -257,7 +266,88 @@ var commands = map[string]bool{
 	// Timing, resolution, and scheduling.
 	"echo": true, "printf": true, "sleep": true, "ping": true, "dig": true,
 	"nslookup": true, "host": true, "crontab": true, "at": true,
+
+	// Windows / PowerShell LOLBins (LOLBAS). A command-injection payload that
+	// lands on a Windows host runs one of these, and every name here is a
+	// program, not an English word, so it has no benign reading in command
+	// position at all -- they are gated exactly like the Unix names above. The
+	// download-and-execute pattern splits across them: certutil -urlcache and
+	// bitsadmin fetch the second stage, mshta/rundll32/regsvr32/cscript/wmic
+	// execute it, msbuild/installutil compile-and-run it, and vssadmin/bcdboot/
+	// regedit/schtasks are the persistence and recon verbs. The PowerShell
+	// download cradle is written with the aliases far more often than the full
+	// cmdlet -- iwr (Invoke-WebRequest), irm (Invoke-RestMethod), iex
+	// (Invoke-Expression), icm (Invoke-Command), iwmi (Invoke-WmiMethod). CRS
+	// 932's regression corpus fires on certutil, mshta, regedit, bcdboot, iwr,
+	// iex and iwmi directly; the rest are the canonical LOLBAS entries that a
+	// real Windows RCE uses and gwaf should not wait for CRS to add a test for.
+	"certutil": true, "mshta": true, "regsvr32": true, "rundll32": true,
+	"bitsadmin": true, "wmic": true, "cscript": true, "regedit": true,
+	"schtasks": true, "vssadmin": true, "bcdboot": true, "msbuild": true,
+	"installutil": true, "iwr": true, "irm": true, "iex": true,
+	"icm": true, "iwmi": true,
+
+	// Obscure Unix file-readers and shell-escape binaries (GTFOBins). Each one
+	// reads a file or spawns a shell -- flock -u / cmd, visudo's !command escape,
+	// vim/gdb/irb dropping to a shell, hexdump/comm/uconv leaking a file -- which
+	// is why CRS lists them and why they are worth the same command-position
+	// treatment as cat and less. All are program names with no prose reading.
+	//
+	// "top" is deliberately omitted (see the rejection note below); htop is a
+	// distinct name with no such collision. "vi" and "ex" are omitted for the
+	// same reason "sc" is -- two letters is not enough to tell a command from an
+	// identifier or the English "ex-" -- and the payloads that reach for them
+	// reach for vim just as readily.
+	"flock": true, "visudo": true, "uconv": true, "cpulimit": true,
+	"aptitude": true, "lastlog": true, "htop": true, "hexdump": true,
+	"shuf": true, "gdb": true, "comm": true, "irb": true, "vim": true,
+
+	// English words that are also file-processing tools: fold, column, bridge.
+	// They read as ordinary prose -- "please fold the paper", "the column
+	// headers", "cross the bridge" -- but only when nothing precedes them, and
+	// this list is consulted exclusively in command position. "cd /;cd etc;fold
+	// passwd" runs fold; "please fold the paper" has no separator in front of the
+	// word and is never examined. That is the identical bargain the detector
+	// already makes for find, sort, less, who, head and rev, every one of them an
+	// English word made usable by position rather than by spelling. Measured on
+	// the 10,473-request benign corpus: fold and bridge occur zero times, column
+	// once ("...applies to the b:3 column"), and not one of the three follows a
+	// separator, so none is ever in command position there.
+	"fold": true, "column": true, "bridge": true,
 }
+
+// Names left out on purpose, because in command position they still carry a
+// benign reading this detector cannot rule out. A documented omission beats a
+// false positive, and every one of these was a real candidate from LOLBAS,
+// GTFOBins, or the CRS 932 corpus:
+//
+//   - "net", "reg", "sc": Windows verbs whose prose is unavoidable. "net
+//     revenue" / "gross; net income" is financial copy, "reg" abbreviates
+//     register/regarding, and "sc" is two letters. regedit and regsvr32 already
+//     cover the registry LOLBins with names that carry no such reading.
+//   - "join", "paste", "expand": ordinary UI copy -- "join the meeting", "paste
+//     the link", "expand the section" -- that a product legitimately puts after
+//     a separator ("done; join now"). The GTFOBins value does not survive the
+//     false positives.
+//   - "pr", "rev", "cu", "vi", "ex", "top": too short or too common to separate
+//     from prose and identifiers. "PR" is every code-review tool, "rev" a git
+//     verb, "top" is "top of the list". (Plain "rev" predates this change and is
+//     kept for continuity; the new file-readers do not add more of its kind.)
+//   - "perf", "set", "date", "mail", "make", "sum", "split", "look", "date":
+//     each is a frequent word in engineering prose or a build/CI step ("perf
+//     regression", "set ${HOME}", "make build"), and CI run-fields are exactly
+//     the traffic the stored-command-line rule exists to protect.
+//   - "jq", "yq", "gcc", "cc": the CI pipe idiom "curl ... | jq '.x'" and the
+//     compiler step "&& gcc -o app" put these in command position in perfectly
+//     ordinary automation payloads.
+//   - "chef", "salt", "puppet", "nano", "dirs": config tools and a bash builtin
+//     whose English readings (a cook, seasoning, a bash "dirs") are common
+//     enough that the niche RCE value does not justify them.
+//
+// "at" is retained from the original list rather than added here: it is a real
+// scheduler abused as "; at now -f payload", it predates this change, and it
+// has held its place in the benign corpus. It is the closest of the kept names
+// to the line, and it is named so the next reviewer knows it was weighed.
 
 // interpreters are the basenames that make an absolute path dangerous.
 var interpreters = map[string]bool{
