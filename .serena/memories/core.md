@@ -63,6 +63,11 @@ literals hit, or by tightening the broad ones. Built and reverted with a
 counterexample: tolerant matching makes the detector match text its own literals
 are absent from, so both are bypasses.
 
+[[redteam_round6_blueteam]] — the hardening pass: 92.6% detection at **0.00%**
+false positives. Every FP was a sentence fragment scored as a whole imperative;
+the fix is to require the fragment to be aimed at the model. Also the anchor
+idea, which is how a widened match stays prefilterable.
+
 [[redteam_round5]] — the statistics that mean something: 24.7% → 82.4% detection
 on 85 novel adversarial payloads, FP rate flat. Also the measured reason to put
 per-rule normalisation in an **operator** and not a transform chain (a chain cost
