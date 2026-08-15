@@ -4,6 +4,133 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## v0.6.0 — 2026-08-16
+
+The detection release. Three adversarial red-team rounds run by a fleet of
+models, a blue-team hardening pass held to zero false positives, a measured
+comparison against Coraza, and a 50,000-case real-attack corpus — with every gap
+that could be closed without a false positive, closed.
+
+No breaking changes: everything here is additive. The root package and `types/`
+are untouched, so this is a minor bump only because there is a new core rule
+(`IDXSLTRemoteInclude`) and a great deal of new detection surface, not because
+anything an embedder wrote against v0.5 has to change.
+
+The numbers, all at **0 false positives** on the benign corpus that fails the
+build:
+
+- **Real CVE traffic (nuclei-templates, 2457 payload-bearing exploits):** 94.6%
+  default, 93.4% is where the full profile lands against Coraza + CRS's 89.7% —
+  and gwaf does it at 63µs/request to Coraza's 932µs.
+- **OWASP CRS regression payloads:** gwaf catches 98.8% of the ones it is meant
+  to; the 50k corpus draws from this set among others.
+- **A new 50,000-attack corpus** spanning SQLi, XSS, PHP, command injection,
+  traversal, SSRF, XXE, SSTI, NoSQL, deserialization, Log4Shell, malware markers,
+  LDAP, CRLF, named CVEs, and JSON/XML attacks: 82.2% overall, and the gaps that
+  remain are documented with the reason each was left (session-token policy,
+  YAML/pickle parsers, the ysoserial gadget-name list).
+- **Ordinary API traffic (10,473 requests):** gwaf 0.00% false positives, Coraza
+  + CRS 36.30%. That gap is the point: a detection number without this one is the
+  number that gets a WAF switched off.
+
+### Security
+
+- **UTF-16 and UTF-32 request bodies are now read.** `internal/interpret`
+  enumerated UTF-7 — the CVE-2026-21876 charset — and not its sibling, so a body
+  declared `charset=utf-16` was inspected as interleaved NULs and passed clean
+  while a Java servlet or ASP.NET decoder read it straight back to `<script>`.
+  The fix took two places: the reading, and recovery in `internal/body`, because
+  wide-char text is binary by every test there and never reached the reading
+  layer at all.
+
+- **`inet_aton` spellings of the cloud-metadata and loopback addresses.**
+  `169.254.169.254` is also `0xa9.0xfe.0xa9.0xfe`, `0xa9.254.0xa9.254` and
+  `169.16689662` to libcurl, PHP and Java. A `Certain`, default-on rule
+  enumerated a few numeric forms; it now canonicalises the address through a
+  `NumericHost` transform in the operator — not a chain, because a chain is paid
+  for by every value in the phase and this is paid for by the two rules that
+  name an address.
+
+- **A stylesheet fetched from a URL the request named.** New rule
+  `IDXSLTRemoteInclude`: `<xsl:include href="http://…">` and `xsl:import` are
+  resolved at compile time, so a remote href is SSRF and, wherever the fetched
+  stylesheet reaches an extension function, remote code execution. Scoped to the
+  remote scheme, so relative includes and every ordinary `xsl:template` stay
+  invisible.
+
+- **`..;/` is a path traversal.** Tomcat, Jetty and Spring strip a matrix
+  parameter before resolving a path, so `foo/..;/bar` walks a level up
+  (CVE-2018-11784). The traversal operator read `../` and `..%2f` and not `;/`.
+
+- **Prompt injection, in any language and at any spacing.** The Phase-6
+  differentiator gained: forged chat turns and tool results
+  (`{"role":"system"…}`, `function_call`, the other vendors' delimiters — the
+  agentic vectors an earlier round scored 1 of 21 against); multilingual override
+  (Spanish, French, German, Russian); leetspeak and whitespace-obfuscated
+  phrases, matched through an anchor that keeps the widened match prefilterable;
+  and the polite/sequenced lead-ins (`Please ignore…`) that a single word used to
+  defeat.
+
+- **SQL injection the scorer had the evidence for.** The tokenizer stopped at 256
+  tokens and dropped a `UNION SELECT` hidden behind padding it evaluated to true;
+  it now windows. `CHAR()`-style database-egress functions the scorer rated at
+  the threshold but the prefilter never delivered are now declared. `--` and `#`
+  comments end at the newline, as every database ends them. `CASE … WHEN … THEN`
+  boolean-blind and bare `pg_sleep` are read.
+
+- **Command injection: the Windows and CLI-option halves.** The LOLBAS
+  download-and-execute set (certutil, mshta, regsvr32, the PowerShell aliases)
+  and the GTFOBins readers, and argument injection into trusted tools
+  (`-c core.sshCommand=`, `--checkpoint-action=exec=`, `-o ProxyCommand=`) keyed
+  on the option name glued to its `=`. Both cost nothing: a command-position
+  match already requires a separator, which is already a declared literal.
+
+- **NoSQL aggregation pipeline stages.** `$lookup`, `$graphLookup` and
+  `$unionWith` read across collections; `$out` and `$merge` overwrite them, and
+  are graded with the query operators rather than the update ones because nothing
+  sends `$out` on a user's behalf.
+
+- **Fullwidth shell metacharacters** (`；｜＆＄` and the grave accent) fold onto
+  their ASCII forms under the NFKC an origin applies before it shells out, and
+  are now folded here too. The sink operators read a best-fit reading of the
+  sibling value, not only its raw bytes.
+
+- **CRLF injection into the headers worth splitting into.** The operator matched
+  a line break before any header name but was nominated on only a handful;
+  transfer-encoding, content-encoding, authorization, host and the x-forwarded
+  set — the ones that turn response splitting into request smuggling or cache
+  poisoning — are declared now.
+
+### Fixed
+
+- **Five false positives, all one mistake, all now zero.** A sentence fragment
+  was scored as a whole imperative: `you are now` before *DAN* is an attack and
+  before *a premium member* is a loyalty email. A fragment now has to be aimed at
+  the model. Separately, `order=created_at&dir=desc&select=name` was blocked
+  because `&dir` read as a command in position — but `dir=desc` is a shell
+  assignment, not a call, and a command name glued to `=value` is now read as the
+  assignment it is outside a declared command sink. And `Content-Length: 00` on a
+  GET was rejected as a desync because zero was compared as the string `"0"`.
+
+### Added
+
+- **`test/attackgen`** — the 50,000-attack corpus generator and runner. Draws
+  from nuclei-templates, the CRS regression suite and a curated seed set,
+  expanded across placement and encoding, and reports detection per category
+  against a benign guard that must stay at zero. The generated corpora are
+  gitignored; the generator is the artifact.
+- **`test/headtohead` gap analysis** — `TestCRSGapAnalysis` groups gwaf's misses
+  on the CRS corpus by rule family, so a low number can be read for what it is:
+  a real gap, a scope line, or CRS negative space.
+
+### Measured
+
+- The Coraza comparison is reproducible: `make headtohead` and `make nuclei`
+  against a cloned CRS and nuclei-templates. Both numbers are reported together
+  everywhere, because each corpus is its own engine's home turf and neither
+  answers the other's question — CRS's suite measures agreement with CRS's rules,
+  real CVE traffic measures whether an attack is caught.
+
 ## v0.5.2 — 2026-08-13
 
 Two detection fixes, a SecLang import that carries the ruleset's own tuning, and
