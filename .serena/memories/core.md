@@ -63,6 +63,12 @@ literals hit, or by tightening the broad ones. Built and reverted with a
 counterexample: tolerant matching makes the detector match text its own literals
 are absent from, so both are bypasses.
 
+[[coraza_comparison]] — the head-to-head, and the rule for reading it: Coraza
+detects 80.6% on CRS's own corpus and false-positives on 36.30% of ordinary API
+traffic, where gwaf is 26.3% and 0.00%. Most of the "gap" is CRS negative space
+(it wants the number 4294967296 blocked). Read the payloads before chasing a
+competitor's number.
+
 [[redteam_round6_blueteam]] — the hardening pass: 92.6% detection at **0.00%**
 false positives. Every FP was a sentence fragment scored as a whole imperative;
 the fix is to require the fragment to be aimed at the model. Also the anchor
