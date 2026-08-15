@@ -2226,6 +2226,21 @@ func crlfHeaderInjection() rules.Operator {
 		"\nset-cookie:", "\rset-cookie:", "\nlocation:", "\rlocation:",
 		"\ncontent-type:", "\rcontent-type:", "\ncontent-length:",
 		"\rcontent-length:", "\nrefresh:", "\nlink:",
+		// The operator matches any header name after a line break, but the
+		// prefilter only nominated it on the handful above -- so a break
+		// followed by one of the headers that turns response splitting into
+		// request smuggling or a redirect-to-attacker slipped past the
+		// automaton and the rule never ran. These are the rest of the headers
+		// worth splitting into: transfer-encoding and content-encoding smuggle a
+		// second request, authorization and www-authenticate forge credentials,
+		// and the host/forwarding set poisons a cache. A line break glued to any
+		// of them has no benign reading, which is what keeps the literal
+		// selective while it closes the gap.
+		"\ntransfer-encoding:", "\rtransfer-encoding:",
+		"\ncontent-encoding:", "\rcontent-encoding:",
+		"\nauthorization:", "\rauthorization:",
+		"\nwww-authenticate:", "\nhost:", "\rhost:",
+		"\nx-forwarded-for:", "\nx-forwarded-host:", "\nx-forwarded-proto:",
 	)
 }
 
