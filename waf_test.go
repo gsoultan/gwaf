@@ -113,6 +113,86 @@ func TestZeroConfigBlocksAttacks(t *testing.T) {
 	}
 }
 
+// TestCLIOptionInjectionEndToEnd drives the CLI argument-injection payloads
+// through a zero-config WAF, proving the whole path — prefilter nomination on
+// the "name=" literal, operator scan, and a block at the default confidence —
+// not just the detector in isolation. A backend that splices an attacker value
+// in as a separate argv element of git, ssh, tar or rsync runs each of these.
+func TestCLIOptionInjectionEndToEnd(t *testing.T) {
+	w := newWAF(t)
+
+	blocked := []struct {
+		name string
+		arg  string
+	}{
+		{"git core.sshCommand", "-c core.sshCommand=id"},
+		{"git upload-pack", "--upload-pack=id"},
+		{"ssh ProxyCommand spaced", "-o ProxyCommand=id"},
+		{"ssh ProxyCommand glued", "-oProxyCommand=id;"},
+		{"tar checkpoint-action", "--checkpoint=1 --checkpoint-action=exec=sh x.sh"},
+		{"info-zip unzip-command", "--unzip-command=id"},
+		// Percent-encoded spaces, the shape CVE-2023-45878 used: the rule's
+		// transform chain decodes before the detector reads, so the "name=" is
+		// still seen. Value is one arg the application would hand to a shell.
+		{"encoded proxycommand", "-o%20ProxyCommand=id"},
+	}
+	for _, tt := range blocked {
+		t.Run("blocks/"+tt.name, func(t *testing.T) {
+			d := run(t, w, req{args: map[string]string{"repo": tt.arg}})
+			if !d.Blocked() {
+				t.Errorf("not blocked: verdict=%v score=%d rule=%d arg=%q",
+					d.Verdict(), d.Score(), d.RuleID(), tt.arg)
+			}
+			if d.RuleID() == 0 || d.Message() == "" {
+				t.Errorf("blocked without attribution: rule=%d msg=%q", d.RuleID(), d.Message())
+			}
+		})
+	}
+
+	// Benign traffic that carries option-shaped values, prose with the option
+	// words, and fields that merely end in the same bytes. Not one may block:
+	// a single new false positive switches the whole firewall off.
+	pass := []struct {
+		name string
+		req  req
+	}{
+		{"plain flags", req{args: map[string]string{"q": "--verbose -o output.txt"}}},
+		{"git commit line", req{args: map[string]string{"cmd_help": `git commit -m "fix the bug"`}}},
+		{"webpack config flag", req{args: map[string]string{"build": "--config webpack.config.js"}}},
+		{"sort param", req{args: map[string]string{"sort": "-created_at"}}},
+		{"array param", req{target: "/list?page%5Bsize%5D=20"}},
+		{"filter param", req{args: map[string]string{"filter": "active"}}},
+		{"equation", req{args: map[string]string{"formula": "e=mc2"}}},
+		{"negative number", req{args: map[string]string{"delta": "-42"}}},
+		{"iso date", req{args: map[string]string{"since": "2026-08-05T07:38:00Z"}}},
+		{"uuid", req{args: map[string]string{"id": "550e8400-e29b-41d4-a716-446655440000"}}},
+		{"base64 padded", req{args: map[string]string{"token": "YWRtaW46cGFzc3dvcmQ="}}},
+		{"jwt with dashes", req{args: map[string]string{"t": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.a-b_c"}}},
+		{"git editor config", req{args: map[string]string{"opt": "core.editor=vim"}}},
+		{"field ends in Command", req{args: map[string]string{"getProxyCommand": "1"}}},
+		{"utm params", req{args: map[string]string{"utm_source": "google", "utm_medium": "cpc"}}},
+		{"checkpoint prose", req{args: map[string]string{"note": "we reached a checkpoint in the deploy"}}},
+		{"proxy prose", req{args: map[string]string{"msg": "upload your proxy settings first"}}},
+		{"receive-pack prose", req{args: map[string]string{"doc": "the receive-pack docs are unclear"}}},
+		{"filename with dashes", req{args: map[string]string{"file": "my-report-2026-final.pdf"}}},
+		{"docker run", req{args: map[string]string{"run": "docker run -e NODE_ENV=production -p 8080:80 app"}}},
+		{"makefile line", req{method: "POST", body: `{"line":"CFLAGS = -O2 -Wall"}`}},
+		{"json config body", req{method: "POST", body: `{"editor":"core.editor=nano","theme":"dark"}`}},
+		{"semver", req{args: map[string]string{"v": "1.2.3-beta.4+build.567"}}},
+		{"hex hash", req{args: map[string]string{"etag": "d41d8cd98f00b204e9800998ecf8427e"}}},
+		{"proxy field name", req{args: map[string]string{"proxycommand": "enabled"}}}, // name w/o "=" value
+	}
+	for _, tt := range pass {
+		t.Run("passes/"+tt.name, func(t *testing.T) {
+			d := run(t, w, tt.req)
+			if d.Blocked() {
+				t.Errorf("FALSE POSITIVE: rule=%d msg=%q verdict=%v",
+					d.RuleID(), d.Message(), d.Verdict())
+			}
+		})
+	}
+}
+
 // TestBenignTrafficPasses is the other half of the contract. A detector that
 // blocks everything passes any recall-only test, so false positives are checked
 // with the same weight as detection.

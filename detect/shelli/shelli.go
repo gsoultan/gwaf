@@ -118,6 +118,22 @@ const (
 	// attacker — /etc/passwd, /etc/shadow, /proc/self/environ. Weak, because
 	// prose and configuration discuss these files legitimately.
 	SignalSensitivePath
+
+	// SignalOptionInjection is the *name* of a command-line option that turns a
+	// trusted tool into a shell — "-o ProxyCommand=id", "-c core.sshCommand=id",
+	// "--upload-pack=id", "--checkpoint-action=exec=sh". A backend that splices an
+	// attacker value in as a separate argv element of git, ssh, tar, curl or rsync
+	// executes these, and they carry no separator, no interpreter path, and no
+	// command in command position, so every other signal scores them zero.
+	//
+	// Strong, and for a different reason than the others: not that the shape is
+	// exotic, but that the *option name* is. "ProxyCommand", "sshCommand",
+	// "upload-pack", "checkpoint-action", "use-compress-program" are not English
+	// words and have no benign reading as a request parameter. The name alone in
+	// prose still does not fire — the value must read as an option, which here
+	// means the name is glued to its "=" ("ProxyCommand=", not "the ProxyCommand
+	// setting"), the exact form the argv injection takes.
+	SignalOptionInjection
 )
 
 // String implements fmt.Stringer so a decision can say what it saw.
@@ -153,6 +169,9 @@ func (s Signal) String() string {
 	if s&SignalSensitivePath != 0 {
 		add("sensitive_path")
 	}
+	if s&SignalOptionInjection != 0 {
+		add("option_injection")
+	}
 	if len(out) == 0 {
 		return "none"
 	}
@@ -172,7 +191,8 @@ const Threshold = 5
 func weightOf(s Signal) int {
 	switch s {
 	case SignalCommandPosition, SignalInterpreterPath, SignalIFSSeparator,
-		SignalSubstringExpansion, SignalANSIQuoting, SignalGlobCommand:
+		SignalSubstringExpansion, SignalANSIQuoting, SignalGlobCommand,
+		SignalOptionInjection:
 		return 5
 	case SignalVariableCommand, SignalSensitivePath:
 		return 3
@@ -254,6 +274,55 @@ var sensitivePaths = []string{
 	"/.ssh/id_rsa", "/etc/hosts", "/var/log/auth.log",
 }
 
+// dangerousOptions are command-line option *names* that hand a trusted tool a
+// command to run. This is the single source of truth: Literals() derives its
+// prefilter strings from it (name + "="), so a name cannot be classified here
+// without also being prefilterable — the drift that produces a rule which
+// compiles, lints clean, and silently never fires.
+//
+// Lowercased and matched folded, which is correct rather than lax: git config
+// variables ("core.sshCommand") and ssh options ("ProxyCommand") are both
+// case-insensitive to the tools that parse them, so "-o proxycommand=id" is the
+// same instruction as "-o ProxyCommand=id".
+//
+// Kept as byte strings for the reason ianaTopLevelTypes is: this runs on the hot
+// path and a map lookup would need a []byte-to-string conversion (CLAUDE.md §4).
+//
+// Every entry is an RCE primitive an attacker reaches only by injecting an argv
+// element into git, ssh, tar, rsync or info-zip:
+//
+//   - proxycommand, sshcommand, fsmonitor  — git/ssh run the value as a command
+//   - upload-pack, receive-pack            — git runs the named program (also scp -S)
+//   - checkpoint-action                    — tar --checkpoint-action=exec=... (GTFOBins)
+//   - use-compress-program                 — tar runs the value as the (de)compressor
+//   - unzip-command                        — info-zip runs the value to unpack
+//
+// Two forms the confirmed-bypass set includes are deliberately *not* here,
+// because keying on them cannot be made false-positive-free, which is the harder
+// half of this rule:
+//
+//   - "-e sh" (rsync/ssh remote shell). "-e" is not a name, it is a bare flag,
+//     and "grep -e sh" / "sed -e sh" are ordinary commands a CI `run` field
+//     carries as data. The remote-shell form with a *path* — "-e /bin/sh" — is
+//     already caught by SignalInterpreterPath, so only the bare "-e sh" is
+//     uncovered, and it has a benign reading gwaf cannot exclude without knowing
+//     which tool is being invoked (the embedder's knowledge, not one request's).
+//   - "-K /tmp/evil.conf" (curl reads an attacker config). "-K" is a bare flag;
+//     its long form "--config" is the option git, npm, and webpack all take, so
+//     "--config webpack.config.js" in a build field would be a false positive.
+//     Curl config injection is also the weakest primitive of the set — it is RCE
+//     only if the attacker also controls the named file.
+//
+// This is the same discipline as the backtick-in-Markdown limit above and the
+// sha256sum/timeout calibration in the command list: a name that has any benign
+// reading as request data is left out, because a false positive switches the
+// whole firewall off (CLAUDE.md §4).
+var dangerousOptions = [][]byte{
+	[]byte("proxycommand"), []byte("sshcommand"), []byte("fsmonitor"),
+	[]byte("upload-pack"), []byte("receive-pack"), []byte("checkpoint-action"),
+	[]byte("use-compress-program"), []byte("unzip-command"),
+}
+
 // Verdict is the result of analysing one value.
 type Verdict struct {
 	Signals Signal
@@ -326,6 +395,11 @@ func (d *Detector) AnalyzeIn(value []byte, commandSink bool) Verdict {
 
 	scanExpansions(src, mark)
 	scanPaths(src, mark)
+	// Unconditional, and deliberately not behind the isStoredCommandLine gate
+	// below: an injected "--upload-pack=id" is an attack whether or not the field
+	// usually holds a command line, and the option name is not one of that
+	// command's own separators to be suppressed.
+	scanOptionInjection(src, mark)
 
 	// Separators inside a value that is already a command line are that
 	// command's own syntax, not an injection point. Paths are still read above:
@@ -837,6 +911,57 @@ func scanPaths(src []byte, mark func(Signal, int, int)) {
 	}
 }
 
+// scanOptionInjection looks for a dangerous command-line option name glued to
+// its "=", the shape argv injection into git, ssh, tar or rsync takes.
+//
+// The "=" is the anchor and the whole point. A bare "ProxyCommand" is a word
+// that appears in ssh documentation; "ProxyCommand=" is an assignment, and no
+// benign request value contains it. Anchoring on "=" is what lets the name alone
+// stay out of prose without a separate value-shape check, and it is why the
+// declared literals carry the "=" too — a more selective automaton for free.
+func scanOptionInjection(src []byte, mark func(Signal, int, int)) {
+	for e := 0; e < len(src); e++ {
+		if src[e] != '=' {
+			continue
+		}
+		for _, name := range dangerousOptions {
+			p := e - len(name)
+			if p < 0 || !equalFoldASCII(src[p:e], name) {
+				continue
+			}
+			if optionNameStart(src, p) {
+				mark(SignalOptionInjection, p, len(name)+1)
+			}
+			// At most one name ends at this '='; none is a suffix of another.
+			break
+		}
+	}
+}
+
+// optionNameStart reports whether the option name beginning at p sits where it
+// reads as an injected option rather than as the tail of an ordinary word.
+//
+// A name preceded by nothing, by punctuation, or by a "-o"-style glued short
+// option is a real option boundary: "core.sshCommand=", "--upload-pack=",
+// "-o ProxyCommand=", and ssh's glued "-oProxyCommand=" all qualify. A name
+// preceded by letters does not — "getProxyCommand=1" is a field that merely ends
+// in the same bytes, and this check is the whole reason it is not a false
+// positive.
+func optionNameStart(src []byte, p int) bool {
+	if p == 0 {
+		return true
+	}
+	c := src[p-1]
+	if !isWordByte(c) {
+		// '.', '-', '/', space, quotes, ',' — punctuation an option name follows.
+		return true
+	}
+	// A word byte precedes it. The one legitimate case is ssh's glued short
+	// option "-oProxyCommand=id", a single option letter between the dash and the
+	// name; anything else is a longer word ending in these bytes.
+	return p >= 2 && src[p-2] == '-' && isLetter(c)
+}
+
 // ---- byte helpers -----------------------------------------------------------
 
 func fold(c byte) byte {
@@ -852,6 +977,10 @@ func isWordByte(c byte) bool {
 }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func isLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
 
 func isSpace(c byte) bool {
 	switch c {
@@ -997,6 +1126,16 @@ func (o *operator) Literals() ([]string, bool) {
 		"/busybox", "/python", "/perl", "/ruby", "/php", "/node",
 		"/nc", "/ncat", "/netcat",
 	}
+	// Option-injection names, unconditionally: the signal weighs 5 and so reaches
+	// even the default threshold alone, which means its literals are always
+	// required, not only at the lower Medium bar. Each is the name glued to its
+	// "=", the exact byte sequence scanOptionInjection fires on, so the automaton
+	// gate is both sound (no scoring value lacks it) and selective (it appears in
+	// no benign request). Derived from dangerousOptions, never restated, so the
+	// list cannot drift from the classifier.
+	for _, name := range dangerousOptions {
+		lits = append(lits, string(name)+"=")
+	}
 	// At a threshold a weak signal can reach alone, its own literals become
 	// required. Sensitive paths are the only weak signal that fires without a
 	// separator; a bare variable in command position needs one, and separators
@@ -1007,8 +1146,8 @@ func (o *operator) Literals() ([]string, bool) {
 	return lits, true
 }
 
-// Cost prices one analysis: three passes with local lookahead.
-func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 6 }
+// Cost prices one analysis: four passes with local lookahead.
+func (o *operator) Cost() types.Fuel { return types.CostLiteralMatch * 7 }
 
 // leadingSpace returns the index of the first non-space byte.
 func leadingSpace(src []byte) int {
@@ -1186,4 +1325,4 @@ func (o *sinkOperator) Literals() ([]string, bool) {
 	return out, true
 }
 
-func (o *sinkOperator) Cost() types.Fuel { return types.CostLiteralMatch * 6 }
+func (o *sinkOperator) Cost() types.Fuel { return types.CostLiteralMatch * 7 }

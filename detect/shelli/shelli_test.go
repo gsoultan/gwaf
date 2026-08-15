@@ -66,6 +66,108 @@ func TestCommandInjectionIsDetected(t *testing.T) {
 	}
 }
 
+// TestOptionInjectionIsDetected covers the CLI argument-injection class: an
+// attacker value spliced in as a separate argv element of a trusted tool, which
+// carries no separator, no interpreter path, and no command in command position,
+// so every other shelli signal scores it zero.
+func TestOptionInjectionIsDetected(t *testing.T) {
+	d := New()
+
+	t.Run("dangerous option names fire", func(t *testing.T) {
+		for _, c := range []struct {
+			name    string
+			payload string
+		}{
+			{"git core.sshCommand", "-c core.sshCommand=id"},
+			{"git upload-pack", "--upload-pack=id"},
+			{"git receive-pack", "--receive-pack=touch /tmp/x"},
+			{"git fsmonitor", "-c core.fsmonitor=id"},
+			{"ssh ProxyCommand spaced", "-o ProxyCommand=id"},
+			{"ssh ProxyCommand glued", "-oProxyCommand=id;"},
+			{"tar checkpoint-action", "--checkpoint=1 --checkpoint-action=exec=sh x.sh"},
+			{"tar use-compress-program", "--use-compress-program=id"},
+			{"info-zip unzip-command", "--unzip-command=id"},
+			// Case folds the way the tools parse these names.
+			{"folded proxycommand", "-o proxycommand=id"},
+			{"folded sshcommand", "-C CORE.SSHCOMMAND=id"},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				v := d.Analyze([]byte(c.payload))
+				if !v.Detected() {
+					t.Errorf("not detected: score=%d signals=%v", v.Score, v.Signals)
+				}
+				if v.Signals&SignalOptionInjection == 0 {
+					t.Errorf("signals = %v, want option_injection set", v.Signals)
+				}
+			})
+		}
+	})
+
+	// The remote-shell form written with a *path* is already covered by the
+	// interpreter-path signal, so only the bare "-e sh" is uncovered.
+	t.Run("remote shell with a path still fires via interpreter_path", func(t *testing.T) {
+		v := d.Analyze([]byte("-e /bin/sh"))
+		if !v.Detected() || v.Signals&SignalInterpreterPath == 0 {
+			t.Errorf("expected interpreter_path; score=%d signals=%v", v.Score, v.Signals)
+		}
+	})
+
+	// Two forms in the confirmed-bypass set are deliberately not keyed on,
+	// because doing so cannot be made false-positive-free. Pinned so the decision
+	// is visible and does not silently regress into a bare-flag matcher.
+	t.Run("bare flags with a benign reading are deliberately not keyed on", func(t *testing.T) {
+		for _, payload := range []string{
+			"-e sh",             // "grep -e sh" / "sed -e sh" are ordinary commands
+			"-K /tmp/evil.conf", // "-K"/"--config" collides with git, npm, webpack
+		} {
+			if v := d.Analyze([]byte(payload)); v.Signals&SignalOptionInjection != 0 {
+				t.Errorf("%q fired option_injection; the bare-flag reading is not "+
+					"distinguishable from benign traffic without tool context", payload)
+			}
+		}
+	})
+}
+
+// TestOptionInjectionBenignLookalikes is the counterweight. Option names are the
+// evidence, and the "=" glue is what keeps a word in prose or a field that
+// merely ends in the same bytes from firing.
+func TestOptionInjectionBenignLookalikes(t *testing.T) {
+	d := New()
+	values := []string{
+		// Ordinary flags and CLI help text: no "=", nothing to anchor on.
+		"--verbose", "-o output.txt", "--output report.txt", "-l -a -h",
+		"git commit -m \"msg\"", "docker run -e NODE_ENV=production -p 8080:80 app",
+		"--config webpack.config.js", // curl/webpack "--config" collision, no "="
+
+		// Option-shaped query and config values with "=" but no dangerous name.
+		"sort=-created_at", "page[size]=20", "filter=active", "e=mc2",
+		"redirect_to=/dashboard/settings", "utm_source=google&utm_medium=cpc",
+		"CFLAGS = -O2 -Wall", "git config core.editor=vim", // editor/pager excluded
+
+		// Field names that merely end in a dangerous name's bytes.
+		"getProxyCommand=1", "refreshCommand=now", "myUploadPackId=7",
+
+		// Identifiers, dates, hashes, base64 — the "=" here is padding or syntax.
+		"-1", "-42", "2026-08-05T07:38:00Z",
+		"550e8400-e29b-41d4-a716-446655440000",
+		"YWRtaW46cGFzc3dvcmQ=", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.a-b_c",
+		"d41d8cd98f00b204e9800998ecf8427e", "1.2.3-beta.4+build.567",
+
+		// Prose containing the option words, without the assignment.
+		"reached a checkpoint in the workflow",
+		"upload your proxy settings to the server",
+		"the receive-pack documentation is unclear",
+		"my-report-2026-final.pdf",
+	}
+	for _, v := range values {
+		t.Run(v, func(t *testing.T) {
+			if got := d.Analyze([]byte(v)); got.Detected() {
+				t.Errorf("false positive: score=%d signals=%v", got.Score, got.Signals)
+			}
+		})
+	}
+}
+
 // TestBenignTextPasses is the counterweight. Most command names are ordinary
 // English words, which is exactly why position decides and presence does not.
 func TestBenignTextPasses(t *testing.T) {
