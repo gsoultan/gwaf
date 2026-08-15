@@ -9,18 +9,30 @@
 # This is the same principle the project applies to its own security gates: a
 # check that can be skipped reports success it did not earn. The commit author is
 # the human who shipped the work. Tooling is not a contributor.
+#
+# The vendor list is deliberately broad. This hook matched Claude alone until a
+# sweep of the sibling repos found "Co-authored-by: Junie <junie@jetbrains.com>"
+# sitting in an ancestor of every branch in gateon, having walked straight past
+# the Claude-only pattern. Agents are interchangeable; the rule is about tooling,
+# not about one vendor.
+#
+# Matching is on agent name *and* vendor domain rather than on Co-Authored-By
+# wholesale, because a human co-author is a real contributor and must survive.
 msg="$1"
 [ -f "$msg" ] || exit 0
+
+vendors='claude|anthropic|junie|jetbrains\.com|copilot|cursor|devin|cognition|codex|chatgpt|openai|gemini|jules|aider|windsurf|codeium|sourcegraph'
+pattern="^((co-)?(authored|assisted)-by:.*($vendors)|.*generated with \\[?($vendors)|🤖 generated with)"
 
 # grep -c prints a count and exits 1 when that count is zero, so an "|| echo 0"
 # fallback appends a *second* zero and the arithmetic test then fails. Take the
 # printed count and normalise it instead.
-before=$(grep -ciE '^(co-authored-by:[[:space:]]*claude|.*generated with \[?claude code)' "$msg" 2>/dev/null)
+before=$(grep -ciE "$pattern" "$msg" 2>/dev/null)
 case "$before" in ''|*[!0-9]*) before=0 ;; esac
 [ "$before" -eq 0 ] && exit 0
 
 tmp="$msg.tmp.$$"
-grep -viE '^(co-authored-by:[[:space:]]*claude|.*generated with \[?claude code|🤖 generated with)' "$msg" > "$tmp" && mv "$tmp" "$msg"
+grep -viE "$pattern" "$msg" > "$tmp" && mv "$tmp" "$msg"
 
 # Collapse the blank lines the removal leaves behind.
 tmp="$msg.tmp.$$"
