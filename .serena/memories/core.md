@@ -63,6 +63,12 @@ literals hit, or by tightening the broad ones. Built and reverted with a
 counterexample: tolerant matching makes the detector match text its own literals
 are absent from, so both are bypasses.
 
+[[attack_corpus_50k]] — the 50k real-attack harness (test/attackgen/). gwaf is
+94.6% on nuclei CVE traffic and 98.8% on CRS, 82.2% on the full adversarial
+expansion, at 0 false positives. Records the recurring finding: a low-scoring
+category is usually an operator that already matches sitting behind a prefilter
+that never nominates it -- read the misses, fix the literal, not the signal.
+
 [[coraza_comparison]] — the head-to-head, and the rule for reading it: Coraza
 detects 80.6% on CRS's own corpus and false-positives on 36.30% of ordinary API
 traffic, where gwaf is 26.3% and 0.00%. Most of the "gap" is CRS negative space
