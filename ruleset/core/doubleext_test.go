@@ -50,3 +50,61 @@ func TestDoubleExtensionNeedsAPlausibleExtension(t *testing.T) {
 		}
 	})
 }
+
+// TestDoubleExtensionSeparatorsNeedTheAttackShape is the regression for a second
+// false-positive class, found the same way as the first: an embedder's benign
+// corpus, this time a pasted Ruby backtrace.
+//
+// The separator switch returned true the moment an executable extension was
+// followed by ";", ":", ",", a space or a tab, on the stated premise that "none
+// of these appears in a filename by convention, so no further test is needed".
+// The premise is true of a filename and false of the *value* the rule scans,
+// which is arbitrary request text that may merely contain one.
+//
+// A colon after a script name is how every stack trace, compiler and linter on
+// earth reports a line: "orders_controller.rb:22", "deploy.sh:10: syntax error".
+// A comma after one is how every list of files is written. Those are refused,
+// and a bug tracker, a CI dashboard or a support desk transports them all day.
+//
+// The attack shapes all put a *second extension* or an NTFS stream after the
+// separator — "x.asp;.jpg", "x.php:.jpg", "x.php::$DATA" — so requiring that is
+// what separates them, and it costs no bypass: a filter reads an extension, and
+// a line number is not one.
+//
+// Space and tab are in the same switch and produce no false positive today only
+// because the rule's chain strips whitespace, so "see deploy.sh for details"
+// arrives welded as "seedeploy.shfordetails". They are held to the same test
+// rather than left to depend on that.
+func TestDoubleExtensionSeparatorsNeedTheAttackShape(t *testing.T) {
+	o := doubleExtension()
+
+	t.Run("parser confusion still blocked", func(t *testing.T) {
+		for _, attack := range []string{
+			"x.asp;.jpg",   // IIS semicolon truncation
+			"x.php:.jpg",   // NTFS alternate data stream
+			"x.php::$DATA", // the same, naming the default stream
+			"x.php .jpg",   // trailing-space strippers
+			"x.php,.jpg",
+		} {
+			if _, ok := o.Eval(nil, []byte(attack)); !ok {
+				t.Errorf("missed %q", attack)
+			}
+		}
+	})
+
+	// As the chain delivers them: lowercased, whitespace stripped.
+	t.Run("stack traces and file lists pass", func(t *testing.T) {
+		for _, benign := range []string{
+			"app/controllers/orders_controller.rb:22:in`show'",
+			"implicit_render.rb:6:in`send_action'",
+			"deploy.sh:10:syntaxerrornearunexpectedtoken",
+			"files:report.sh,notes.txt",
+			"rundeploy.sh;thentest.sh",
+			"lib/tasks/import.rb:14",
+		} {
+			if _, ok := o.Eval(nil, []byte(benign)); ok {
+				t.Errorf("false positive on %q", benign)
+			}
+		}
+	})
+}

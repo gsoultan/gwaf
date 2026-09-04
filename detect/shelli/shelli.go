@@ -976,6 +976,53 @@ func isStoredCommandLine(src []byte) bool {
 	return commands[word]
 }
 
+// inBinaryDir reports whether the "/name" starting at slash sits directly inside
+// a binary directory — /bin/sh, /usr/sbin/sh — rather than being the last
+// component of some other path.
+//
+// This used to ask only whether the slash was preceded by a non-space byte, and
+// call that "a path component". Any URL with two or more components ending in an
+// interpreter name satisfied it, so "/api/v1/dash" and
+// "https://app.example.com/dash" each scored 5 and blocked on their own while
+// "/dash" alone did not: the false positive appeared when a route acquired a
+// prefix. "dash" is the Debian Almquist shell, so the name really is an
+// interpreter — the mistake was treating "preceded by anything" as evidence that
+// the value names an executable.
+//
+// What makes /bin/sh an executable is the directory it is in, and no web route
+// serves its content out of /bin. Requiring the parent component to be bin or
+// sbin keeps every real interpreter path and drops the routes, and it mirrors the
+// reasoning already applied to what *follows* the name a few lines above.
+//
+// A value naming an interpreter somewhere writable — "/tmp/sh", "./sh" — no
+// longer scores here on its own. That is deliberate: reaching it requires having
+// already written a binary onto the host, and in command position it is still
+// caught by SignalCommandPosition, which resolves the last component of any path.
+//
+// No allocation and no case folding, for the same reason as the caller: /BIN/SH
+// does not resolve on a case-sensitive filesystem.
+func inBinaryDir(src []byte, slash int) bool {
+	if slash == 0 {
+		return false
+	}
+	// Walk back over the parent component, which ends at slash-1.
+	end := slash
+	i := slash - 1
+	for i >= 0 && isWordByte(src[i]) {
+		i--
+	}
+	// The component must be non-empty and itself introduced by a separator, so
+	// that "abin/sh" and "combin/sh" do not read as /bin/sh.
+	if i+1 == end || (i >= 0 && src[i] != '/') {
+		return false
+	}
+	switch string(src[i+1 : end]) {
+	case "bin", "sbin":
+		return true
+	}
+	return false
+}
+
 // scanPaths looks for interpreter paths and sensitive files.
 func scanPaths(src []byte, mark func(Signal, int, int)) {
 	for i := 0; i < len(src); i++ {
@@ -1002,9 +1049,8 @@ func scanPaths(src []byte, mark func(Signal, int, int)) {
 		if j < len(src) && (src[j] == '.' || src[j] == '/') {
 			continue
 		}
-		if interpreters[plainWord(src[i+1:j])] && i > 0 && src[i-1] != ' ' {
-			// Preceded by a path component, so this is /bin/sh rather than a
-			// sentence that happens to contain "/sh".
+		if interpreters[plainWord(src[i+1:j])] && inBinaryDir(src, i) {
+			// The directory is what makes this an executable rather than a route.
 			mark(SignalInterpreterPath, i, j-i)
 		}
 	}

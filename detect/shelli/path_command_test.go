@@ -78,3 +78,69 @@ func TestPathCommandWordResolvesTheLastComponent(t *testing.T) {
 		}
 	}
 }
+
+// TestURLPathEndingInAnInterpreterNameStaysQuiet is the regression for a false
+// positive an embedder hit in production traffic: a redirect parameter holding
+// an ordinary dashboard link was refused.
+//
+// SignalInterpreterPath asked only whether the "/name" was preceded by a
+// non-space byte, and called that "a path component". Any URL with two or more
+// components ending in an interpreter name therefore satisfied it, so
+// "/api/v1/dash" and "https://app.example.com/dash" both scored 5 and blocked on
+// their own, while "/dash" alone did not — the false positive appeared when the
+// route got a prefix.
+//
+// "dash" is the Debian Almquist shell, so the name really is an interpreter; the
+// mistake was reading "preceded by anything" as evidence that the value names an
+// executable. What makes /bin/sh an executable is the directory, and no web
+// route serves its content out of /bin.
+func TestURLPathEndingInAnInterpreterNameStaysQuiet(t *testing.T) {
+	d := New()
+	for _, benign := range []string{
+		// The reported case, in both the forms an embedder sees it.
+		"/api/v1/dash",
+		"https://app.example.com/dash",
+		"https://app.example.com/sh",
+		"/admin/sh",
+		"/app/zsh",
+		"/reports/2026/dash",
+		// A dashboard link under a prefix is the shape that started this.
+		"/tenant/acme/dash",
+		"next=/console/dash",
+		// Words that merely begin with an interpreter name were already fine and
+		// must stay that way.
+		"https://app.example.com/dashboard",
+		"/api/v1/dashboard",
+		"/docs/shell-scripting",
+	} {
+		if v := d.Analyze([]byte(benign)); v.Detected() {
+			t.Errorf("false positive on %q (score %d, signals %v)", benign, v.Score, v.Signals)
+		}
+	}
+}
+
+// TestInterpreterPathInABinaryDirectoryStillFires is the other half: narrowing
+// the signal must not cost the detection it exists for.
+//
+// A value naming /bin/sh is not describing a file, and it carries no separator
+// and nothing in command position, so this signal is the only one that sees it.
+func TestInterpreterPathInABinaryDirectoryStillFires(t *testing.T) {
+	d := New()
+	for _, payload := range []string{
+		"/bin/sh",
+		"/bin/bash",
+		"/usr/bin/sh",
+		"/usr/bin/python",
+		"/usr/local/bin/bash",
+		"/sbin/sh",
+		"/usr/sbin/sh",
+		"cmd=/bin/sh",
+		"shell=/usr/bin/zsh",
+		// Traversal inside the path does not change which directory it resolves in.
+		"/usr/../bin/sh",
+	} {
+		if v := d.Analyze([]byte(payload)); !v.Detected() {
+			t.Errorf("missed %q (score %d, signals %v)", payload, v.Score, v.Signals)
+		}
+	}
+}

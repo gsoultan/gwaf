@@ -2627,6 +2627,35 @@ func hasAnySuffix(b []byte, suffixes []string) bool {
 // canonicalization bug class in CLAUDE.md §2 — so the operator does not pick one
 // reading, it checks whether a dangerous extension appears anywhere before the
 // end with a delimiter after it.
+
+// streamOrExtensionFollows reports whether what comes after an ambiguous
+// separator is the attack shape rather than ordinary text.
+//
+// The attacks all continue into something an upload filter would read as the
+// real extension, or into an NTFS stream name:
+//
+//	x.asp;.jpg     x.php:.jpg     x.php .jpg     x.php::$DATA     x.php:$DATA
+//
+// Anything else — a line number, a word, another path component — is text that
+// merely follows a filename.
+func streamOrExtensionFollows(rest []byte) bool {
+	if len(rest) == 0 {
+		return false
+	}
+	switch rest[0] {
+	case '.':
+		// A second extension: "x.asp;.jpg".
+		return true
+	case '$':
+		// "x.php:$DATA".
+		return true
+	case ':':
+		// "x.php::$DATA" — the doubled colon naming the default stream.
+		return len(rest) > 1 && rest[1] == '$'
+	}
+	return false
+}
+
 func doubleExtension() rules.Operator {
 	// Extensions a server will hand to an interpreter.
 	exec := []string{
@@ -2663,12 +2692,28 @@ func doubleExtension() rules.Operator {
 					continue // final extension: an ordinary request for a script
 				}
 				switch c := foldByte(lower[end]); c {
-				case ';', '\\', ' ', '\t', '%', 0, ':', ',':
-					// Truncation and parser-confusion characters. None of these
-					// appears in a filename by convention, so no further test is
-					// needed: "x.asp;.jpg" (IIS), "x.php%00.png" (null
-					// truncation), "x.php:.jpg" (NTFS streams).
+				case '\\', '%', 0:
+					// Truncation characters. A backslash, a percent or a raw NUL
+					// after an extension has no reading in ordinary text at all,
+					// so the separator alone is the finding: "x.php%00.png".
 					return true
+				case ';', ' ', '\t', ':', ',':
+					// Parser confusion, but these *do* appear after a filename in
+					// ordinary text, which the original "none of these appears in
+					// a filename by convention" missed: the rule scans arbitrary
+					// request values, not filenames. A colon after a script name
+					// is how every stack trace and linter reports a line —
+					// "orders_controller.rb:22", "deploy.sh:10: syntax error" —
+					// and a comma is how every list of files is written. A bug
+					// tracker or a CI dashboard transports those all day.
+					//
+					// Every attack here puts a second extension or an NTFS stream
+					// after the separator, so requiring that is what tells them
+					// apart, and it costs no bypass: an upload filter reads an
+					// extension, and a line number is not one.
+					if streamOrExtensionFollows(lower[end+1:]) {
+						return true
+					}
 				case '/':
 					// nginx PATH_INFO: "/x.php/anything" is handed to PHP-FPM as
 					// a script even though the request names a directory.
