@@ -138,6 +138,11 @@ func (r *Result) Reset() {
 type Evaluator struct {
 	candidates bitset.Set
 
+	// keyMaterialised records whether ctx.Key already holds the current value's
+	// key. Reset when the value changes; see evalRule for why the conversion is
+	// lazy rather than hoisted.
+	keyMaterialised bool
+
 	// argNames and argValues back EvalContext.Siblings. They are rebuilt once
 	// per phase from values the engine already holds and reuse their capacity,
 	// so a request that needs them allocates nothing after warm-up and a
@@ -212,6 +217,9 @@ func (e *Evaluator) Eval(
 		// any rule's normalization. A value with no ambiguity yields exactly one
 		// reading and costs a single detection pass, so benign traffic is
 		// unaffected; only genuinely ambiguous input pays for alternatives.
+		// A new value invalidates the materialised key. See evalRule.
+		e.keyMaterialised = false
+
 		classes := interpret.Detect(v.Data)
 		e.readings.Build(v.Data, classes)
 		if !meter.Spend(budget.Fuel(len(v.Data)) * budget.CostPerByteScanned) {
@@ -346,9 +354,30 @@ func (e *Evaluator) evalRule(
 	}
 
 	e.ctx.Target = v.Target
-	// The key is materialised as a string only for the operator's context,
-	// which is reached solely for candidate rules -- rare on real traffic.
-	e.ctx.Key = string(v.Key)
+
+	// Materialise the key at most once per value.
+	//
+	// This was an unconditional `e.ctx.Key = string(v.Key)`, and its comment
+	// said the conversion was "reached solely for candidate rules -- rare on
+	// real traffic". evalRule runs for every (reading x group x candidate rule)
+	// combination while v.Key is constant across all of them, so an embedder's
+	// allocation profile of a *benign* 16 KiB JSON POST against a large ruleset
+	// put **90% of every object allocated** on that one line: with many parsed
+	// fields and enough rules for the prefilter to nominate, "rare" is the
+	// common case and the cost is fields x candidates rather than fields.
+	//
+	// Hoisting it to the value loop outright cost the zero-allocation SLO,
+	// because a request no rule is a candidate for stopped skipping it -- so it
+	// stays lazy and is remembered instead. Benign traffic that reaches no
+	// candidate still allocates nothing; traffic that does pays once per value.
+	//
+	// EvalContext.Key is a string on a frozen extension interface (§4), so
+	// making it a []byte view is a design review rather than a refactor. This
+	// needs neither.
+	if !e.keyMaterialised {
+		e.ctx.Key = string(v.Key)
+		e.keyMaterialised = true
+	}
 
 	out.RulesEvaluated++
 	m, hit := r.Op.Eval(&e.ctx, data)

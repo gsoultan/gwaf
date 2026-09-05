@@ -4,6 +4,56 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## v0.6.1 — unreleased
+
+A patch: two rules narrowed, one allocation removed, nothing an embedder wrote
+against v0.6.0 has to change.
+
+Both rule changes come from an embedder's benign corpus — 405 requests ordinary
+applications serve, held to zero refusals — and both are the same mistake: a
+rule asking a question about a *filename* while scanning a *value* that merely
+contains one.
+
+- **`SignalInterpreterPath` no longer fires on a route.** It asked whether the
+  `/name` was preceded by a non-space byte and called that a path component, so
+  `/api/v1/dash` and `https://app.example.com/dash` scored 5 and blocked while
+  `/dash` alone did not — the false positive appeared when a route acquired a
+  prefix. `dash` is a real shell; the mistake was reading "preceded by anything"
+  as evidence of an executable. The parent component must now be `bin` or
+  `sbin`, which keeps every real interpreter path and drops every route.
+- **`IDDoubleExtension` no longer fires on a stack trace or a file list.** The
+  separator switch returned true the moment an executable extension was
+  followed by `;`, `:`, `,`, a space or a tab, on the stated premise that none
+  of those appears in a filename. True of a filename, false of request text:
+  `orders_controller.rb:22` is how every stack trace reports a line and
+  `report.sh, notes.txt` is how every file list is written, and a bug tracker
+  transports both all day. Every attack in that switch continues into a second
+  extension or an NTFS stream — `x.asp;.jpg`, `x.php:.jpg`, `x.php::$DATA` — so
+  that is now required, and it costs no bypass: an upload filter reads an
+  extension, and a line number is not one.
+
+Together they took that corpus from 1.23% refused to 0.49%, and the two
+refusals left are ones the embedder chose to keep.
+
+- **The evaluator no longer materialises a value's key once per candidate
+  rule.** `evalRule` ran `string(v.Key)` on every (reading × group × candidate)
+  combination while the key was constant across all of them, and its comment
+  said the path was "rare on real traffic". An embedder's allocation profile of
+  a benign 16 KiB JSON POST against a large ruleset put 90% of every object
+  allocated on that line. It is now materialised at most once per value and
+  remembered — lazily, because hoisting it outright cost the zero-allocation
+  SLO on requests no rule is a candidate for. Through that embedder:
+  **−72.7% allocations** (2060 → 563 per request) and **−40.8% bytes**.
+
+  Recorded honestly: this is not reproducible in-tree. `RulesetScaling` keys
+  its synthetic rules on tokens no benign body contains, so the prefilter
+  nominates nothing and it measures the prefilter rather than the evaluator —
+  which is why it reads 0 B/op at 10,000 rules. Several attempts to build a
+  benchmark that nominates many candidates per parsed field either matched
+  and short-circuited, nominated one rule per field, or exhausted the budget
+  before reaching the conversion. The verification stands on the embedder's
+  paired measurement; a benchmark that measures nothing was not shipped.
+
 ## v0.6.0 — 2026-08-16
 
 The detection release. Three adversarial red-team rounds run by a fleet of
