@@ -4,7 +4,7 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
-## v0.6.1 — unreleased
+## v0.6.1 — 2026-09-06
 
 A patch: two rules narrowed, one allocation removed, nothing an embedder wrote
 against v0.6.0 has to change.
