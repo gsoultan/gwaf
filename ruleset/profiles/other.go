@@ -85,9 +85,25 @@ func Laravel() []rules.Exception {
 // rather than a weaker ruleset.
 func IssueTracker() []rules.Exception {
 	const note = "this application stores attack payloads as content by design; the field is displayed, never executed or queried"
-	out := make([]rules.Exception, 0, 8)
+	out := make([]rules.Exception, 0, 16)
 	for _, r := range []types.RuleID{
 		core.IDXSSSemantic, core.IDSQLiSemantic, core.IDShelliSemantic, core.IDPHPSemantic,
+
+		// The Medium tier of the same four detections.
+		//
+		// These live in their own 5xxx band so that an exception written against
+		// a default-tier rule can never accidentally silence the opt-in one --
+		// which is exactly why a profile has to name them, and why exempting only
+		// the semantic rules left this one half applied. An embedder running a
+		// paste service at paranoia 2 still had a Rails backtrace, a pasted regex
+		// and an HTML template refused, by 5010 and 5011, while the rules they
+		// mirror were already exempt.
+		//
+		// The direction is the point: a lower bar fires more readily on prose, so
+		// on an application whose purpose is to store attack text the Medium tier
+		// is the *more* likely of the two to refuse the page, not the less.
+		core.IDXSSSuspicious, core.IDSQLiSuspicious, core.IDShelliSuspicious,
+		core.IDPHPSuspicious,
 	} {
 		for _, k := range []string{"description", "body"} {
 			out = append(out, rules.Exception{

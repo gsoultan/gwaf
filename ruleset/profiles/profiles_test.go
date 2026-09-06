@@ -8,7 +8,9 @@ import (
 
 	"github.com/gsoultan/gwaf"
 	"github.com/gsoultan/gwaf/rules"
+	"github.com/gsoultan/gwaf/ruleset/core"
 	"github.com/gsoultan/gwaf/ruleset/profiles"
+	"github.com/gsoultan/gwaf/types"
 )
 
 // TestEveryExceptionIsScopedAndExplained is the invariant that keeps a profile
@@ -110,6 +112,55 @@ func TestProfileFixesFalsePositivesWithoutWeakeningDetection(t *testing.T) {
 	for _, c := range attacks {
 		if !send(tuned, c.path, c.field, c.value) {
 			t.Errorf("exception leaked: %s (%s %s=%q)", c.why, c.path, c.field, c.value)
+		}
+	}
+}
+
+// TestIssueTrackerCoversBothConfidenceTiers is the regression for a gap an
+// embedder found: the profile exempted the semantic rules and left their
+// lower-confidence counterparts to block the same content.
+//
+// The 5xxx band is the Medium tier, and its own comment says it lives in a
+// separate band "so an exception written against a default-tier rule can never
+// accidentally silence the opt-in one". That is the right design and it is
+// exactly why this profile has to name both: exempting IDSQLiSemantic bought
+// nothing while IDSQLiSuspicious still fired on the same stored SQL.
+//
+// The direction matters. A lower bar fires more readily on prose, so on an
+// application whose purpose is to store attack text the Medium tier is *more*
+// likely to be the one that refuses it, not less. An embedder running a paste
+// service at paranoia 2 had a Rails backtrace, a pasted regex and an HTML
+// template all refused by 5010 and 5011 while the semantic rules they mirror
+// were already exempt.
+func TestIssueTrackerCoversBothConfidenceTiers(t *testing.T) {
+	exempt := map[types.RuleID]bool{}
+	for _, e := range profiles.IssueTracker() {
+		exempt[e.RuleID] = true
+	}
+
+	// Every detection this profile exempts at the default tier must also be
+	// exempt at the Medium tier, or the exception only half applies.
+	pairs := []struct {
+		name              string
+		semantic, suspect types.RuleID
+	}{
+		{"SQLi", core.IDSQLiSemantic, core.IDSQLiSuspicious},
+		{"XSS", core.IDXSSSemantic, core.IDXSSSuspicious},
+		{"shell", core.IDShelliSemantic, core.IDShelliSuspicious},
+		{"PHP", core.IDPHPSemantic, core.IDPHPSuspicious},
+	}
+	for _, p := range pairs {
+		if !exempt[p.semantic] {
+			t.Errorf("%s: the profile does not exempt %d, so this pairing is stale",
+				p.name, p.semantic)
+			continue
+		}
+		if !exempt[p.suspect] {
+			t.Errorf("%s: rule %d is exempt but its Medium-tier counterpart %d is not.\n"+
+				"A lower bar fires more readily on prose, so on an application that "+
+				"stores attack text as content it is the more likely of the two to "+
+				"refuse the page. Exempting one and not the other means the profile "+
+				"only half applies.", p.name, p.semantic, p.suspect)
 		}
 	}
 }

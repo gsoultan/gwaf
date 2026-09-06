@@ -4,6 +4,22 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## v0.6.2 — 2026-09-06
+
+`profiles.IssueTracker` now exempts the Medium tier as well as the default one.
+
+It named the four semantic rules — XSS, SQLi, shell, PHP — and not their 5xxx
+counterparts, so the exception only half applied. The band exists so that an
+exception written against a default-tier rule cannot accidentally silence the
+opt-in one, which is the right design and precisely why a profile has to name
+both. An embedder running a paste service at paranoia 2 still had a Rails
+backtrace, a pasted regex and an HTML template refused, by 5010 and 5011, while
+the rules they mirror were already exempt.
+
+The direction is the point: a lower bar fires more readily on prose, so on an
+application whose purpose is to store attack text the Medium tier is the *more*
+likely of the two to refuse the page, not the less.
+
 ## v0.6.1 — 2026-09-06
 
 A patch: two rules narrowed, one allocation removed, nothing an embedder wrote
