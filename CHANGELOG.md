@@ -4,7 +4,7 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
-## Unreleased
+## v0.6.3 — 2026-10-05
 
 Six target kinds that compiled and could never match now carry values.
 
