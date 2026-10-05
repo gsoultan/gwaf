@@ -107,6 +107,14 @@ type Transaction struct {
 	// already evaluated against the same operators.
 	bodyStart int
 
+	// queryEnd is the index in values where the header phase began, and so
+	// where query arguments end; -1 until it runs. headerViewsDone and
+	// bodyViewsDone record that the derived collections in views.go have been
+	// built, so a phase cannot build them twice.
+	queryEnd        int
+	headerViewsDone bool
+	bodyViewsDone   bool
+
 	// Response-phase state. responseStart is the index in values where response
 	// data begins, so response phases do not re-walk the request.
 	responseStart int
@@ -195,6 +203,9 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.oversizeLen = 0
 	tx.resolvers = tx.resolvers[:0]
 	tx.bodyStart = -1
+	tx.queryEnd = -1
+	tx.headerViewsDone = false
+	tx.bodyViewsDone = false
 	tx.responseStart = -1
 	tx.respBodySpan = types.Span{}
 	tx.respBodyLen = 0
@@ -1189,6 +1200,9 @@ func (tx *Transaction) checkBodySchema(name, value []byte) bool {
 
 // ProcessRequestHeaders evaluates the request-headers phase.
 func (tx *Transaction) ProcessRequestHeaders() Decision {
+	if tx.queryEnd < 0 {
+		tx.queryEnd = len(tx.values)
+	}
 	if tx.headerCount > tx.waf.cfg.limits.MaxHeaders {
 		return tx.limitExceeded("header count")
 	}
@@ -1240,6 +1254,9 @@ func (tx *Transaction) ProcessRequestHeaders() Decision {
 	if d, rejected := tx.schemaViolation(); rejected {
 		return d
 	}
+	if !tx.deriveHeaderViews() {
+		return tx.limitExceeded("cookie count")
+	}
 	return tx.runPhase(types.PhaseRequestHeaders)
 }
 
@@ -1279,7 +1296,14 @@ func (tx *Transaction) schemaViolation() (Decision, bool) {
 // says so rather than reporting the response clean.
 
 // SetResponseStatus records the upstream status code.
+//
+// It opens the response window, as AddResponseHeader does. It did not, and an
+// embedder that reports the status before the headers -- the natural order, and
+// the one net/http's WriteHeader imposes -- had the status recorded just before
+// the window began, where no response-phase rule ever saw it. A rule on
+// RESPONSE_STATUS compiled and never matched.
 func (tx *Transaction) SetResponseStatus(status int) {
+	tx.markResponse()
 	var buf [8]byte
 	tx.recordString(types.Target{Kind: types.TargetResponseStatus}, "",
 		string(itoaBytes(buf[:0], status)), false)
@@ -1409,6 +1433,12 @@ func (tx *Transaction) ProcessRequestBody() Decision {
 	if tx.argCount > tx.waf.cfg.limits.MaxArgs {
 		return tx.limitExceeded("argument count")
 	}
+	// Built before the oversize check, because ARGS_JOINED can itself be the
+	// value that is too large to inspect.
+	if !tx.deriveHeaderViews() {
+		return tx.limitExceeded("cookie count")
+	}
+	tx.deriveBodyViews()
 	if tx.oversizeKey != "" {
 		return tx.oversizeExceeded()
 	}
