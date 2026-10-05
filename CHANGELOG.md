@@ -4,6 +4,35 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## Unreleased
+
+Six target kinds that compiled and could never match now carry values.
+
+`ARGS_GET`, `ARGS_POST`, `ARGS_JOINED`, `REQUEST_COOKIES` and
+`REQUEST_COOKIE_NAMES` were defined in `types`, accepted by the compiler and
+mapped from their SecLang names by the bridge, and no transaction ever recorded
+a value under any of them. `RESPONSE_STATUS` was recorded, but before the
+response window `AddResponseHeader` opens, so a response-phase rule never saw
+it. Every rule on these — every imported CRS rule reading `REQUEST_COOKIES`
+among them — was inert, with nothing saying so.
+
+- `ARGS_GET` is the `ARGS` entries recorded before the header phase ran (the
+  query, and anything handed over with `AddArgument` by then); `ARGS_POST` is
+  the ones recorded after. Both share the `ARGS` readings, so the `;` split, the
+  joined duplicates and the schema-inert marks carry over unchanged.
+- `REQUEST_COOKIES` and `REQUEST_COOKIE_NAMES` split every `Cookie` header on
+  `;`, undecoded. A pair with no `=` is read as both a name and a value. More
+  cookies than `Limits.MaxArgs` is a limit refusal, not a silent cut.
+- `ARGS_JOINED` is every `ARGS` value concatenated with no separator, built in
+  the body phase; one longer than `MaxValueLen` is reported as oversize.
+- `SetResponseStatus` opens the response window.
+
+**Behaviour change.** A rule on any of these that never fired will now fire.
+An embedder with such a rule in blocking mode will see refusals it never saw,
+and a SecLang import's cookie rules go live with it. Nothing is built unless a
+loaded rule reads the kind, so a ruleset that reads none of them — the core
+ruleset reads none — pays one bitmask test per kind per request phase.
+
 ## v0.6.2 — 2026-09-06
 
 `profiles.IssueTracker` now exempts the Medium tier as well as the default one.
