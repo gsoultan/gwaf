@@ -36,6 +36,7 @@ import (
 	"io"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gsoultan/gwaf"
 	"github.com/gsoultan/gwaf/types"
@@ -137,11 +138,66 @@ const MaxPathBytes = 2048
 // name to 1.05 MiB rather than to nothing, because Target renders as
 // "ARGS:<key>" and carried the whole name back in through a field that does not
 // look like it holds attacker input. The rule is the category, not the field.
+//
+// n bounds the string as the JSON sink writes it, not as it arrived. The bound
+// used to be on raw bytes, and the ceiling on a whole record was derived from
+// it on the assumption that escaping "can triple a byte". It can sextuple one:
+// encoding/json writes a byte that is not valid UTF-8 as \ufffd, a control
+// character as \u0001, and -- because it escapes HTML by default -- '<', '>'
+// and '&' as <, > and &. A 2048-byte path of '<' is 12 KiB on
+// the wire, and it is written twice, in Path and in the suggested exception,
+// so a request made of exactly the characters an attack is made of produced a
+// record half again over the ceiling. The fuzz harness found it with a path of
+// 0xa3 bytes. Bounding what is written keeps the ceiling a derivation rather
+// than a hope.
 func bound(s string, n int) string {
-	if len(s) <= n {
+	if len(s) <= n && encodedWidth(s) <= n {
 		return s
 	}
-	return s[:n] + "…(truncated)"
+	width := 0
+	for i, r := range s {
+		w := escapedWidth(s, i, r)
+		if width+w > n {
+			return s[:i] + "…(truncated)"
+		}
+		width += w
+	}
+	return s
+}
+
+// encodedWidth is how many bytes encoding/json writes for s, between the quotes.
+func encodedWidth(s string) int {
+	width := 0
+	for i, r := range s {
+		width += escapedWidth(s, i, r)
+	}
+	return width
+}
+
+// invalidByteAt reports whether s[i] begins a byte sequence that is not UTF-8:
+// ranging over such a string yields utf8.RuneError for it, as it does for a
+// genuine U+FFFD, and only the decoded width tells the two apart.
+func invalidByteAt(s string, i int) bool {
+	_, size := utf8.DecodeRuneInString(s[i:])
+	return size == 1
+}
+
+// escapedWidth is how many bytes encoding/json writes for the rune r decoded
+// at s[i:], with HTML escaping on, as json.Marshal has it.
+func escapedWidth(s string, i int, r rune) int {
+	const escaped = len(`\u0000`) // and \ufffd: one byte in, six bytes out
+	switch {
+	case r == utf8.RuneError && invalidByteAt(s, i):
+		// A byte that is not UTF-8 is written as \ufffd. A genuine U+FFFD in
+		// the input is three valid bytes and is written as itself.
+		return escaped
+	case r == '"', r == '\\', r == '\n', r == '\r', r == '\t', r == '\b', r == '\f':
+		return 2
+	case r < 0x20, r == '<', r == '>', r == '&', r == ' ', r == ' ':
+		return escaped
+	default:
+		return utf8.RuneLen(r)
+	}
 }
 
 // Context is what the caller knows and gwaf does not.
