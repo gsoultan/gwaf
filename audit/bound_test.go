@@ -57,6 +57,12 @@ func TestRecordIsBoundedRegardlessOfInput(t *testing.T) {
 		{"huge everything", strings.Repeat("k", big), strings.Repeat("A", big) + sqli, "/" + strings.Repeat("p", big)},
 		{"name carries the attack", sqli + strings.Repeat("k", big), "1", "/search"},
 		{"multibyte name", strings.Repeat("é", big/2), sqli, "/search"},
+		// Each of these is one byte in and six bytes out of encoding/json:
+		// a path made of what an attack is made of, a path that is not
+		// UTF-8, a parameter name of control characters.
+		{"path of angle brackets", "q", sqli, "/" + strings.Repeat("<", big)},
+		{"path that is not utf-8", "q", sqli, "/" + strings.Repeat("\xa3", big)},
+		{"name of control characters", strings.Repeat("\x01", big), sqli, "/search"},
 	}
 
 	for _, tc := range cases {

@@ -6,6 +6,19 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **Audit records are bounded on the wire, not on arrival.** `audit.NewRecord`
+  cut every attacker-influenced string at a byte count and the ceiling on a
+  whole record was derived from that, assuming JSON escaping "can triple a
+  byte". It sextuples one: `encoding/json` writes a byte that is not UTF-8 as
+  `\ufffd`, a control character as `\u0001`, and, escaping HTML by default,
+  `<`, `>` and `&` as `\u003c`, `\u003e` and `\u0026`. A 2048-byte path of
+  `<` -- the characters an attack is made of -- was 12 KiB in the record and
+  written twice, so a request could drive the sink to half again over its
+  ceiling. `FuzzRecordIsBounded` found it with a path of `0xa3` bytes. The
+  bound is now on the encoded width, and a new fuzz harness
+  (`FuzzEncodedWidthIsWhatJSONWrites`) fails the build if that width ever
+  disagrees with what `encoding/json` writes.
+
 Two deserialization classes that reached the origin on v0.6.3 are now detected.
 A CVE/adversarial test on 2026-10-25 drove both through a live gateway.
 
