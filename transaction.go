@@ -121,6 +121,12 @@ type Transaction struct {
 	respBodySpan  types.Span
 	respBodyLen   int
 	respTruncated bool
+	// respKeySpan is the "body" key, appended with the first chunk so it sits
+	// in front of the body rather than after it. respDeclared is the length the
+	// origin declared, used only to size the arena once; it never decides what
+	// is inspected.
+	respKeySpan  types.Span
+	respDeclared int
 
 	// nestedBuf backs a second base64 layer. Separate from decodeBuf because
 	// the first layer's output is this one's input.
@@ -210,6 +216,8 @@ func (tx *Transaction) reset(rs *rules.Ruleset) {
 	tx.respBodySpan = types.Span{}
 	tx.respBodyLen = 0
 	tx.respTruncated = false
+	tx.respKeySpan = types.Span{}
+	tx.respDeclared = 0
 }
 
 // Close returns the transaction to its pool. It is safe to call more than once.
@@ -1312,6 +1320,9 @@ func (tx *Transaction) SetResponseStatus(status int) {
 // AddResponseHeader records one response header.
 func (tx *Transaction) AddResponseHeader(name, value string) {
 	tx.markResponse()
+	if equalFoldASCII(name, "content-length") {
+		tx.respDeclared = tx.declaredLength(value)
+	}
 	tx.addValue(types.Target{Kind: types.TargetResponseHeaders, Name: name}, name, value)
 	tx.addValue(types.Target{Kind: types.TargetResponseHeaderNames}, name, name)
 }
@@ -1348,19 +1359,90 @@ func (tx *Transaction) WriteResponseBody(chunk []byte) Decision {
 		return tx.limitExceeded("response body size")
 	}
 
-	span, ok := tx.arena.Append(chunk)
-	if !ok {
+	if tx.respBodySpan.Len == 0 && !tx.startResponseBody(len(chunk)) {
 		tx.respTruncated = true
 		return tx.limitExceeded("response body size")
 	}
-	if tx.respBodySpan.Len == 0 {
-		tx.respBodySpan = span
-	} else {
-		// Chunks are contiguous in the arena, so the accumulated body is one
-		// span growing rather than a list to stitch together later.
-		tx.respBodySpan.Len += span.Len
+	if !tx.appendResponseChunk(chunk) {
+		tx.respTruncated = true
+		return tx.limitExceeded("response body size")
 	}
 	return tx.Decision()
+}
+
+// startResponseBody places the body's key and sizes the arena for the body.
+//
+// The key goes first so that the body is the last thing appended and its span
+// can be recorded as the value directly. Copying it again after the last chunk,
+// as this once did, doubled the arena a final time for nothing.
+//
+// The arena is sized once, to the declared length when there is one. That is a
+// hint about capacity and nothing else: a short body leaves the reservation
+// unused, a long one grows past it as before, and MaxBodySize bounds it either
+// way. It waits for the first chunk so that a HEAD response or a 304, which
+// declare a length and carry no body, reserve nothing.
+func (tx *Transaction) startResponseBody(first int) bool {
+	key, ok := tx.arena.AppendString(responseBodyKey)
+	if !ok {
+		return false
+	}
+	tx.respKeySpan = key
+	tx.arena.Grow(max(tx.respDeclared, first))
+	return true
+}
+
+// appendResponseChunk appends a chunk to the accumulated body, keeping it one
+// contiguous span.
+//
+// Chunks are usually adjacent, but anything recorded between two of them -- a
+// trailer passed to AddResponseHeader is the ordinary case -- lands in between.
+// Growing the span by the chunk's length then covered those bytes and left the
+// same number at the end of the body unread, so a leak placed there passed. The
+// body is moved to the end instead, which costs a copy only in that case.
+func (tx *Transaction) appendResponseChunk(chunk []byte) bool {
+	body := tx.respBodySpan
+	if body.Len > 0 && int(body.End()) != tx.arena.Len() {
+		moved, dst, ok := tx.arena.Alloc(int(body.Len) + len(chunk))
+		if !ok {
+			return false
+		}
+		n := copy(dst, tx.arena.Resolve(body))
+		copy(dst[n:], chunk)
+		tx.respBodySpan = moved
+		return true
+	}
+	span, ok := tx.arena.Append(chunk)
+	if !ok {
+		return false
+	}
+	if body.Len == 0 {
+		tx.respBodySpan = span
+	} else {
+		tx.respBodySpan.Len += span.Len
+	}
+	return true
+}
+
+// responseBodyKey names the response body for exceptions and Explain.
+const responseBodyKey = "body"
+
+// declaredLength reads a response Content-Length as a sizing hint. Anything it
+// cannot use -- not a number, or more than would be inspected -- reads as zero,
+// which means no hint rather than a wrong one.
+func (tx *Transaction) declaredLength(value string) int {
+	v := trimOWS(value)
+	if v == "" || !isAllDigits(v) {
+		return 0
+	}
+	limit := tx.waf.cfg.limits.MaxBodySize
+	n := 0
+	for i := 0; i < len(v); i++ {
+		n = n*10 + int(v[i]-'0')
+		if n > limit {
+			return 0
+		}
+	}
+	return n
 }
 
 // ProcessResponseBody evaluates the response-body phase over everything
@@ -1372,10 +1454,19 @@ func (tx *Transaction) ProcessResponseBody() Decision {
 		return tx.limitExceeded("response body size")
 	}
 	if tx.respBodySpan.Len > 0 {
-		body := tx.arena.Resolve(tx.respBodySpan)
-		tx.recordFieldBytes(types.TargetResponseBody, []byte("body"), body, false)
+		tx.recordResponseBody()
 	}
 	return tx.runPhase(types.PhaseResponseBody)
+}
+
+// recordResponseBody records the accumulated body where it already lies in the
+// arena, under the same value-length ceiling recordFieldBytes applies.
+func (tx *Transaction) recordResponseBody() {
+	if int(tx.respBodySpan.Len) > tx.waf.cfg.limits.MaxValueLen {
+		tx.noteOversize(responseBodyKey, int(tx.respBodySpan.Len))
+		return
+	}
+	tx.appendValue(types.Target{Kind: types.TargetResponseBody}, tx.respKeySpan, tx.respBodySpan, false)
 }
 
 // markResponse records where response values begin, so the response phases

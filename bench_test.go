@@ -90,6 +90,29 @@ func BenchmarkBenignLargeBody(b *testing.B) {
 	}
 }
 
+// BenchmarkResponseText measures a 256 KiB text response streamed in 32 KiB
+// chunks with no declared length, the shape a chunked origin produces.
+func BenchmarkResponseText(b *testing.B) { benchResponse(b, false) }
+
+// BenchmarkResponseTextDeclared is the same body with its Content-Length
+// forwarded, which lets the arena be sized once instead of doubling.
+func BenchmarkResponseTextDeclared(b *testing.B) { benchResponse(b, true) }
+
+func benchResponse(b *testing.B, declare bool) {
+	w := mustWAF(b)
+	body := responseBody(256 << 10)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	b.ResetTimer()
+
+	for b.Loop() {
+		if streamResponse(w, body, declare).Blocked() {
+			b.Fatal("benign response blocked")
+		}
+	}
+}
+
 // BenchmarkAttack measures the detection path, so a regression there is visible
 // too — a WAF that is only fast when it finds nothing is not fast.
 func BenchmarkAttack(b *testing.B) {
