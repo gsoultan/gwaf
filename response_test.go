@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -223,5 +225,161 @@ func TestDecisionStringIsUseful(t *testing.T) {
 	}
 	if strings.Contains(s, "\n") {
 		t.Errorf("String() spans lines, which breaks grep: %q", s)
+	}
+}
+
+// TestResponseBodyInterleavedWithHeaders keeps the whole body inspected when
+// something else lands in the arena between two chunks.
+//
+// The accumulated body was one span grown by each chunk's length on the
+// assumption that chunks are contiguous. A response header added between
+// chunks -- a trailer is the ordinary case -- broke that: the span kept its
+// start and grew by the second chunk's length, so it covered the header bytes
+// instead and left the same number of bytes at the end of the body unread. A
+// leak placed there was never inspected.
+func TestResponseBodyInterleavedWithHeaders(t *testing.T) {
+	w := newWAF(t)
+
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.SetRequestLine("GET", "/api/v1/orders", "HTTP/1.1")
+	if d := tx.ProcessRequestHeaders(); d.Blocked() {
+		t.Fatalf("request blocked: %v", d)
+	}
+	tx.SetResponseStatus(500)
+	tx.AddResponseHeader("Content-Type", "text/plain")
+	if d := tx.ProcessResponseHeaders(); d.Blocked() {
+		t.Fatalf("response headers blocked: %v", d)
+	}
+
+	tx.WriteResponseBody([]byte("upstream said: "))
+	tx.AddResponseHeader("Grpc-Message", strings.Repeat("x", 512))
+	tx.WriteResponseBody([]byte(strings.Repeat(" ", 64) +
+		"-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----"))
+
+	if d := tx.ProcessResponseBody(); !d.Blocked() {
+		t.Errorf("private key at the end of an interleaved body was not detected: %v", d)
+	}
+}
+
+// responseBody returns n bytes of benign text.
+func responseBody(n int) []byte {
+	body := make([]byte, n)
+	for i := range body {
+		body[i] = byte('a' + i%26)
+	}
+	return body
+}
+
+// streamResponse drives a response through a transaction in 32 KiB chunks,
+// the way an embedder that streams feeds it.
+func streamResponse(w *gwaf.WAF, body []byte, declare bool) gwaf.Decision {
+	tx := w.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("GET", "/asset", "HTTP/1.1")
+	tx.ProcessRequestHeaders()
+	tx.SetResponseStatus(200)
+	tx.AddResponseHeader("Content-Type", "text/html")
+	if declare {
+		tx.AddResponseHeader("Content-Length", strconv.Itoa(len(body)))
+	}
+	tx.ProcessResponseHeaders()
+	for off := 0; off < len(body); off += 32 << 10 {
+		tx.WriteResponseBody(body[off:min(off+32<<10, len(body))])
+	}
+	return tx.ProcessResponseBody()
+}
+
+// TestResponseBodyMemoryIsBounded holds the response path to a small multiple of
+// the body it inspects.
+//
+// A 256 KiB response used to allocate ~2 MiB: the arena doubled its way up
+// chunk by chunk, then the finished body was copied into it a second time to
+// record it as a value, which doubled it once more. The body is now recorded
+// where it already lies, and a declared length sizes the arena once.
+func TestResponseBodyMemoryIsBounded(t *testing.T) {
+	w := newWAF(t)
+	const size = 256 << 10
+	body := responseBody(size)
+
+	cases := []struct {
+		name    string
+		declare bool
+		ceiling int
+	}{
+		// Doubling still applies without a length; what is gone is the copy.
+		{"chunked", false, 3 * size},
+		{"declared length", true, size + size/2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			streamResponse(w, body, c.declare) // warm the pools
+
+			const runs = 20
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			for range runs {
+				if d := streamResponse(w, body, c.declare); d.Blocked() {
+					t.Fatalf("benign response blocked: %v", d)
+				}
+			}
+			runtime.ReadMemStats(&after)
+
+			per := int(after.TotalAlloc-before.TotalAlloc) / runs
+			if per > c.ceiling {
+				t.Errorf("%d bytes allocated per %d-byte response, want at most %d", per, size, c.ceiling)
+			}
+		})
+	}
+}
+
+// TestResponseDeclaredLengthIsOnlyAHint keeps the declared length from deciding
+// what is inspected: a body longer than declared is read to the end, and a
+// length that is not a number or exceeds the limit is ignored.
+func TestResponseDeclaredLengthIsOnlyAHint(t *testing.T) {
+	w := newWAF(t)
+	leak := "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----"
+	body := strings.Repeat("ordinary text ", 4096) + leak
+
+	for _, declared := range []string{"16", "0", "-1", "abc", "99999999999999999999", " 32 "} {
+		t.Run(declared, func(t *testing.T) {
+			tx := w.NewTransaction()
+			defer tx.Close()
+			tx.SetRequestLine("GET", "/asset", "HTTP/1.1")
+			tx.ProcessRequestHeaders()
+			tx.SetResponseStatus(200)
+			tx.AddResponseHeader("Content-Type", "text/plain")
+			tx.AddResponseHeader("Content-Length", declared)
+			tx.ProcessResponseHeaders()
+			for off := 0; off < len(body); off += 4096 {
+				tx.WriteResponseBody([]byte(body[off:min(off+4096, len(body))]))
+			}
+			if d := tx.ProcessResponseBody(); !d.Blocked() {
+				t.Errorf("leak at the end of a body declared as %q was not detected: %v", declared, d)
+			}
+		})
+	}
+}
+
+// TestResponseBodyNearArenaLimitIsInspected keeps a body that fits the arena
+// inspected when it does not fit twice.
+//
+// Recording the body used to copy it into the arena a second time, and when the
+// copy did not fit, the body was dropped without a word: no value, no limit
+// decision, and the response passed uninspected. The body is now recorded in
+// place, so fitting once is enough.
+func TestResponseBodyNearArenaLimitIsInspected(t *testing.T) {
+	w := newWAF(t, gwaf.WithLimits(gwaf.Limits{
+		MaxBodySize:  1 << 20,
+		MaxArenaSize: 1<<20 + 64<<10,
+	}))
+	leak := "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----"
+	body := strings.Repeat("ordinary text ", (700<<10)/14) + leak
+
+	d := respond(t, w, 200, map[string]string{"Content-Type": "text/plain"}, body)
+	if !d.Blocked() {
+		t.Errorf("leak in a %d-byte body under a %d-byte arena was not detected: %v",
+			len(body), 1<<20+64<<10, d)
 	}
 }

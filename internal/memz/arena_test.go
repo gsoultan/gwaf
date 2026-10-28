@@ -160,3 +160,32 @@ func BenchmarkAppendReset(b *testing.B) {
 		a.Reset()
 	}
 }
+
+// TestGrowSizesExactly checks that Grow reserves what is asked rather than the
+// next power of two, keeps contents, and refuses past the limit without change.
+func TestGrowSizesExactly(t *testing.T) {
+	a := NewArena(16, 1000)
+	span, _ := a.AppendString("keep")
+
+	if !a.Grow(300) {
+		t.Fatal("Grow(300) refused under the limit")
+	}
+	if got, want := a.Cap(), 304; got != want {
+		t.Errorf("Cap = %d, want %d", got, want)
+	}
+	if got := string(a.Resolve(span)); got != "keep" {
+		t.Errorf("contents after Grow = %q, want %q", got, "keep")
+	}
+	if !a.Grow(10) || a.Cap() != 304 {
+		t.Errorf("Grow within capacity reallocated: Cap = %d", a.Cap())
+	}
+	if a.Grow(1000) {
+		t.Error("Grow past the limit succeeded")
+	}
+	if a.Cap() != 304 || a.Len() != 4 {
+		t.Errorf("refused Grow changed the arena: Len = %d, Cap = %d", a.Len(), a.Cap())
+	}
+	if a.Grow(-1) {
+		t.Error("Grow(-1) succeeded")
+	}
+}
