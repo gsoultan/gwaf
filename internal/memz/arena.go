@@ -130,6 +130,35 @@ func (a *Arena) reserve(n int) bool {
 	return true
 }
 
+// Grow ensures capacity for n more bytes, sizing the backing array to exactly
+// that rather than to the next power of two.
+//
+// It is for a caller that knows how much is coming. Appending a large value
+// chunk by chunk otherwise doubles its way up, and the copies made at each step
+// add up to about twice the final capacity, which itself overshoots the need by
+// up to half. A response body of 256 KiB cost ~1 MiB that way before a byte of
+// it was inspected.
+//
+// The bool reports whether the capacity is there. Growth past the limit is
+// refused without changing anything, so a hint that turns out to be too large
+// costs nothing; the Alloc that would really exceed the limit still fails.
+func (a *Arena) Grow(n int) bool {
+	if n < 0 {
+		return false
+	}
+	need := len(a.buf) + n
+	if a.limit > 0 && need > a.limit {
+		return false
+	}
+	if need <= cap(a.buf) {
+		return true
+	}
+	grown := make([]byte, len(a.buf), need)
+	copy(grown, a.buf)
+	a.buf = grown
+	return true
+}
+
 // Reset returns the arena to empty, retaining its capacity for reuse.
 //
 // Capacity above maxRetainedSize is released so that one oversized request does

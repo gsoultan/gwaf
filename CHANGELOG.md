@@ -6,6 +6,26 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **A response body is no longer partly inspected when something lands between
+  two chunks.** `WriteResponseBody` grew one span by each chunk's length on the
+  assumption that chunks are adjacent in the arena. A response header added
+  between two chunks -- a trailer is the ordinary case -- broke that, and the
+  span covered the header bytes and left the same number at the end of the body
+  unread, so a leak placed there passed. The body is moved to the end of the
+  arena in that case. `TestResponseBodyInterleavedWithHeaders`.
+- **Response inspection costs about the body, not seven times it.** A 256 KiB
+  text response allocated 1.95 MiB: the arena doubled its way up chunk by
+  chunk, then the finished body was copied into it again to record it as a
+  value, which doubled it once more. The body is now recorded where it already
+  lies, and a declared `Content-Length` sizes the arena once, on the first
+  chunk (`memz.Arena.Grow`). The length is a capacity hint only and is bounded
+  by `MaxBodySize`; it never decides what is inspected. 256 KiB: 272 KiB with a
+  declared length, 520 KiB chunked, `TestResponseBodyMemoryIsBounded` holds both.
+- **A response body that fit the arena once but not twice was never
+  inspected.** The second copy failing dropped the body without a value or a
+  limit decision, and the response passed. Recording in place removes the copy;
+  `TestResponseBodyNearArenaLimitIsInspected`.
+
 - **Audit records are bounded on the wire, not on arrival.** `audit.NewRecord`
   cut every attacker-influenced string at a byte count and the ceiling on a
   whole record was derived from that, assuming JSON escaping "can triple a
