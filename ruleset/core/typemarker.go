@@ -74,13 +74,22 @@ func TypeMarkerRule(id types.RuleID) rules.Rule {
 // element as "items[0].__class". Matching the whole path would miss every
 // marker that is not at the top level, which is where they actually appear:
 // a POP chain is a nested object by construction.
+//
+// The nesting separators are '.', '[' and ']' -- the ones recordArgName writes.
+// A '/' is deliberately NOT one, because '/' is a *character inside a marker
+// name*: jsonpickle keys its class on "py/object" and the Ruby marshal-to-JSON
+// form on "rb/object". Splitting on '/' reduced both to "object", which is in no
+// marker table, so a jsonpickle or Ruby gadget -- backslashed or dotted -- was
+// never matched by this rule at all. The body parser never uses '/' to join a
+// nested path (recordArgName joins with '.'), so a '/' seen here is always part
+// of a single field name and must be kept.
 func lastKeySegment(key string) string {
 	if len(key) > maxParamNameLen {
 		return ""
 	}
 	for i := len(key) - 1; i >= 0; i-- {
 		switch key[i] {
-		case '.', ']', '[', '/':
+		case '.', ']', '[':
 			return lowerASCII(key[i+1:])
 		}
 	}
@@ -206,3 +215,179 @@ func isQualifiedClassName(v []byte, unambiguous bool) bool {
 // maxClassNameLen bounds the scan. A fully-qualified name is long but not
 // unbounded, and this reads attacker input.
 const maxClassNameLen = 256
+
+// dottedMarkerKeys are the subset of unambiguous markers whose *dotted* value is
+// an attack in its own right, not just the backslashed PHP form TypeMarkerRule
+// already reads.
+//
+// jsonpickle keys its class on "py/object" and the Ruby marshal-to-JSON form on
+// "rb/object", and both name the class as a dotted path -- "subprocess.Popen",
+// "os.system" -- never as a PHP namespace, so TypeMarkerRule's backslash
+// prefilter cannot reach them. These two keys also have no benign reading: a
+// client has no reason to post a pickled Python or Ruby object to an API, and an
+// endpoint that unpickles one is already the vulnerability. That is what makes
+// blocking a dotted value under them safe where the same relaxation under
+// "@class" or "$type" is not -- Jackson default typing and Json.NET legitimately
+// carry dotted class names in those, so they stay backslash-only.
+var dottedMarkerKeys = map[string]bool{
+	"py/object": true,
+	"rb/object": true,
+}
+
+// TypeMarkerDottedRule reports a Python or Ruby polymorphic marker whose value
+// is a dotted class path -- the form TypeMarkerRule is structurally unable to
+// see.
+//
+// TypeMarkerRule keys its prefilter on a backslash, so a backslash-free value --
+// which is every Python and Ruby class name -- never reaches its operator. This
+// rule keys instead on the marker *name* in the argument-name collection, which
+// is the selective anchor the engine can afford: a dot appears in nearly every
+// value and cannot be prefiltered without pricing every request, but "py/object"
+// and "rb/object" appear in essentially no benign argument name. When the name
+// fires, the operator reads the paired value through the sibling view and asks
+// whether it is a dotted class path. This is the "rule of its own, anchored on
+// the marker name" that TypeMarkerRule's Literals comment defers to.
+func TypeMarkerDottedRule(id types.RuleID) rules.Rule {
+	return rules.Rule{
+		ID:    id,
+		Phase: types.PhaseRequestHeaders,
+		// The name collection, because the evidence is the name. The value is
+		// read from the sibling view once the name has fired.
+		Targets:    []types.Target{{Kind: types.TargetArgNames}},
+		Transforms: decodeChain,
+		Op:         typeMarkerDottedOp{},
+		Actions:    []rules.Action{rules.Block},
+		Severity:   types.SeverityCritical,
+		Confidence: types.Certain,
+		Msg:        "Polymorphic type marker selecting a class (Python/Ruby)",
+		Tags:       []string{"rce", "deserialization", "owasp-a08"},
+	}
+}
+
+type typeMarkerDottedOp struct{}
+
+func (typeMarkerDottedOp) Name() string { return "type_marker_dotted" }
+
+func (typeMarkerDottedOp) Eval(ctx *rules.EvalContext, value []byte) (rules.Match, bool) {
+	if ctx == nil {
+		return rules.Match{}, false
+	}
+	// value is an argument *name*. Its leaf is the marker; the class name is in
+	// the sibling argument that shares that name.
+	leaf := lastKeySegment(string(value))
+	if !dottedMarkerKeys[leaf] {
+		return rules.Match{}, false
+	}
+	classVal, ok := siblingClassValue(ctx, value, leaf)
+	if !ok {
+		return rules.Match{}, false
+	}
+	if isDottedClassName(classVal) {
+		return rules.WholeValue(value), true
+	}
+	return rules.Match{}, false
+}
+
+func (typeMarkerDottedOp) Literals() ([]string, bool) {
+	// Both marker names, and nothing weaker. Each is a selective token absent
+	// from benign argument names, so benign rule evaluation stays at zero --
+	// which the dot this covers could never do.
+	return []string{"py/object", "rb/object"}, true
+}
+
+func (typeMarkerDottedOp) Cost() types.Fuel { return types.CostLiteralMatch * 2 }
+
+// siblingClassValue returns the value paired with an argument name whose leaf is
+// a marker.
+//
+// The exact name is tried first -- the top-level case, where the name collection
+// and the value collection share a key. Only on a miss does it scan by leaf,
+// which covers a nested marker: the value collection keys it with its flattened
+// path ("payload.py/object") while the name collection emits the bare leaf. The
+// scan runs only after a selective marker literal has already fired, so it is
+// off the benign path entirely, and its length is the argument count of a
+// request that already carries a pickle marker.
+func siblingClassValue(ctx *rules.EvalContext, name []byte, leaf string) ([]byte, bool) {
+	if v, ok := ctx.SiblingValue(string(name)); ok {
+		return v, true
+	}
+	for i, n := range ctx.Siblings.Names {
+		if i >= len(ctx.Siblings.Values) {
+			break
+		}
+		if lastKeySegment(string(n)) == leaf {
+			return ctx.Siblings.Values[i], true
+		}
+	}
+	return nil, false
+}
+
+// isDottedClassName reports whether v is a dotted or namespaced class path: at
+// least two identifier segments joined by a separator. It mirrors
+// isQualifiedClassName's per-segment validation but does not require a
+// backslash, because Python and Ruby class paths are not written with one --
+// Python joins with '.' ("subprocess.Popen"), Ruby with '::'
+// ("Gem::Requirement"), and a backslash is accepted too so the same test covers
+// a PHP namespace that arrives under one of these keys. A bare word, a number, a
+// version and a media type all fail the two-segment-of-identifiers test; so does
+// a value whose first segment character is not a letter or '_', and a lone ':'
+// (which no class path contains) rejects outright.
+func isDottedClassName(v []byte) bool {
+	if len(v) > maxClassNameLen {
+		return false
+	}
+	// .NET writes "Namespace.Type, Assembly"; weigh only the type name.
+	for i, c := range v {
+		if c == ',' {
+			v = v[:i]
+			break
+		}
+	}
+	if len(v) < 3 {
+		return false
+	}
+	segments := 0
+	start := 0
+	i := 0
+	for i <= len(v) {
+		sep := 0
+		switch {
+		case i == len(v):
+			sep = 0 // end of input closes the final segment
+		case v[i] == '.' || v[i] == '\\':
+			sep = 1
+		case v[i] == ':':
+			// A class path uses '::' (Ruby); a single ':' belongs to no class
+			// name and is a reason to reject the whole value.
+			if i+1 < len(v) && v[i+1] == ':' {
+				sep = 2
+			} else {
+				return false
+			}
+		default:
+			i++
+			continue
+		}
+		seg := v[start:i]
+		if len(seg) == 0 {
+			return false
+		}
+		c := seg[0]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_') {
+			return false
+		}
+		for _, b := range seg {
+			if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' ||
+				b >= '0' && b <= '9' || b == '_' || b == '$' || b == '-') {
+				return false
+			}
+		}
+		segments++
+		if sep == 0 {
+			break
+		}
+		i += sep
+		start = i
+	}
+	return segments >= 2
+}
