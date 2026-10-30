@@ -130,18 +130,28 @@ func (typeMarkerOp) Cost() types.Fuel { return types.CostLiteralMatch * 2 }
 //
 // The separator carries the evidence. "product" and "primary" are values an
 // ordinary API puts in a field called "type" or "class"; `GuzzleHttp\Psr7\FnStream`
-// and "java.lang.Runtime" are not names anything but a deserializer asks for.
+// is not a name anything but a deserializer asks for.
 //
-// unambiguous relaxes the bar, and it comes from the *key* rather than the
-// value. A field called "__class" or "py/object" has no reading other than
-// "instantiate this", so two segments are enough and "subprocess.Popen" is
-// caught. A field called "class" or "@type" is a CSS class and a schema.org type
-// in far more traffic than it is a gadget, so a dotted value must be genuinely
-// namespaced -- three segments -- or carry a backslash, which nothing but a PHP
-// namespace does. That is what tells "java.lang.Runtime" from "photo.jpeg".
+// A backslash is required, full stop -- it is the PHP namespace separator, and
+// also the one thing Literals() can key the prefilter on without matching every
+// request (see there for why a dot cannot). So the forms this catches are the
+// backslashed ones: `vendor\package\Class`. A value that is only dot-separated
+// -- "subprocess.Popen" under "py/object", "System.Diagnostics.Process" under
+// "$type", bare "java.lang.Runtime" -- is NOT matched here. The prefilter never
+// surfaces a backslash-free value to this operator in the first place, so this
+// is a hard scope limit, not a tunable one; covering the dotted markers needs
+// the separate marker-name-anchored rule that Literals() describes.
 //
-// .NET writes "Namespace.Type, Assembly"; only the part before the comma is the
-// type name.
+// unambiguous comes from the *key* (a field called "__class" or "py/object" has
+// no reading other than "instantiate this", a field called "class" or "@type"
+// is a CSS class and a schema.org type far more often than a gadget). It is kept
+// so the marker-name rule can tighten the bar per key class, but because a
+// backslash and two segments are already required of every value, it does not by
+// itself change this function's verdict today.
+//
+// .NET writes "Namespace.Type, Assembly"; the comma is stripped below so only
+// the type name is weighed -- though a purely dotted .NET name still falls under
+// the backslash limit above.
 func isQualifiedClassName(v []byte, unambiguous bool) bool {
 	if len(v) > maxClassNameLen {
 		return false
