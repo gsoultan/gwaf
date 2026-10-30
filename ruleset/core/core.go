@@ -75,11 +75,15 @@ const (
 	// cannot spend 8% of the latency budget on requests it cannot match.
 	//
 	//	gwaf.New(gwaf.WithRuleset(rules.Set{core.CRLFHeaderRule(1007)}))
-	IDOffOriginURL    types.RuleID = 1013
-	IDSplitPath       types.RuleID = 1015
-	IDTypeMarker      types.RuleID = 4020
-	IDConfigTraversal types.RuleID = 1009
-	IDScriptInUpload  types.RuleID = 1010
+	IDOffOriginURL types.RuleID = 1013
+	IDSplitPath    types.RuleID = 1015
+	IDTypeMarker   types.RuleID = 4020
+	// IDTypeMarkerDotted is the Python/Ruby companion to IDTypeMarker: it reads
+	// the dotted class path those markers carry, which the backslash-anchored
+	// IDTypeMarker cannot see.
+	IDTypeMarkerDotted types.RuleID = 4027
+	IDConfigTraversal  types.RuleID = 1009
+	IDScriptInUpload   types.RuleID = 1010
 	// 2001-2004 were literal SQL injection rules: tautology, UNION SELECT,
 	// comment sequences, and stacked statements. All four are superseded by
 	// IDSQLiSemantic, which recognises the same constructs by grammar and
@@ -1852,6 +1856,7 @@ func requestRules() rules.Set {
 		},
 		offOriginURLRule(IDOffOriginURL),
 		TypeMarkerRule(IDTypeMarker),
+		TypeMarkerDottedRule(IDTypeMarkerDotted),
 		SplitPathRule(IDSplitPath),
 	}
 }
