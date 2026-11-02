@@ -6,6 +6,20 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **A request in absolute form is judged as the same request in origin form.**
+  RFC 9112 §3.2.2 requires a server to accept `GET http://host/index.php`, and
+  `SetRequestLine` recorded that target as written. REQUEST_URI then held an
+  absolute URL ending in `.php`, which is exactly what the core RFI rule (4014)
+  looks for, so every PHP, JSP, ASP and CGI page was blocked for any client
+  that sent absolute form while the identical origin-form request passed.
+  REQUEST_PATH was wrong too: it began `http:`, so it matched no closed-schema
+  operation and a closed schema refused the request as undeclared. REQUEST_URI
+  and REQUEST_PATH now hold the origin form the application receives; the
+  scheme and authority stay in REQUEST_LINE, and the authority is the Host the
+  embedder supplies. Only `scheme://` targets are rewritten. An RFI URL in a
+  parameter still blocks in both forms. `TestAbsoluteFormIsJudgedAsOriginForm`,
+  `FuzzOriginStart`.
+
 - **A response body is no longer partly inspected when something lands between
   two chunks.** `WriteResponseBody` grew one span by each chunk's length on the
   assumption that chunks are adjacent in the arena. A response header added

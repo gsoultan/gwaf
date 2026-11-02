@@ -314,10 +314,17 @@ func (tx *Transaction) Decision() Decision {
 const maxRequestLineLen = 8 << 10
 
 // SetRequestLine records the method, target, and protocol.
+//
+// target is the request-target exactly as it arrived. An absolute-form target
+// ("http://host/path?q", RFC 9112 §3.2.2) is recorded as REQUEST_URI and
+// REQUEST_PATH in origin form ("/path?q" and "/path"); the scheme and authority
+// stay in REQUEST_LINE, and the authority is the request's Host, which the
+// embedder supplies as a header. See originStart for why.
 func (tx *Transaction) SetRequestLine(method, target, proto string) {
 	tx.addValue(types.Target{Kind: types.TargetRequestMethod}, "", method)
 	tx.reqMethod = method
-	tx.addValue(types.Target{Kind: types.TargetRequestURI}, "", target)
+	origin := originStart(target)
+	tx.recordRequestURI(target, origin)
 	tx.addValue(types.Target{Kind: types.TargetRequestProtocol}, "", proto)
 
 	// The start line as it appeared on the wire. Built rather than captured
@@ -340,9 +347,20 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 		tx.addValueBytes(types.Target{Kind: types.TargetRequestLine}, "", tx.lineBuf)
 	}
 
-	path, query := target, ""
-	if i := indexByte(target, '?'); i >= 0 {
-		path, query = target[:i], target[i+1:]
+	uri := target
+	if origin >= 0 {
+		uri = target[origin:]
+	}
+	path, query := uri, ""
+	if i := indexByte(uri, '?'); i >= 0 {
+		path, query = uri[:i], uri[i+1:]
+	}
+	if origin >= 0 && (path == "" || path[0] != '/') {
+		// "http://host" and "http://host?q" have an empty path, which RFC 9110
+		// §4.2.3 says means "/". Only for absolute form: any other target is
+		// recorded as sent, because "../etc/passwd" must stay what a traversal
+		// rule reads.
+		path = "/"
 	}
 	tx.addValue(types.Target{Kind: types.TargetRequestPath}, "", path)
 	tx.reqPath = path
@@ -363,6 +381,83 @@ func (tx *Transaction) SetRequestLine(method, target, proto string) {
 	}
 
 	tx.addQueryArguments(query)
+}
+
+// recordRequestURI records REQUEST_URI in origin form.
+//
+// origin is originStart(target). It may use lineBuf, which is free: the arena
+// copies every value, and REQUEST_LINE rebuilds the buffer from the start.
+func (tx *Transaction) recordRequestURI(target string, k int) {
+	if k < 0 {
+		tx.addValue(types.Target{Kind: types.TargetRequestURI}, "", target)
+		return
+	}
+	rest := target[k:]
+	if rest != "" && rest[0] == '/' {
+		tx.addValue(types.Target{Kind: types.TargetRequestURI}, "", rest)
+		return
+	}
+	// "http://host?q" is "/?q" in origin form. Built in the transaction's
+	// buffer rather than by concatenation, so the rare form costs no allocation
+	// once the buffer has grown; the request-line bound caps it.
+	if len(rest)+1 > maxRequestLineLen {
+		tx.addValue(types.Target{Kind: types.TargetRequestURI}, "", rest)
+		return
+	}
+	tx.lineBuf = append(append(tx.lineBuf[:0], '/'), rest...)
+	tx.addValueBytes(types.Target{Kind: types.TargetRequestURI}, "", tx.lineBuf)
+}
+
+// originStart reports where the origin-form part of an absolute-form
+// request-target begins: the index just past "scheme://authority", or -1 when
+// target is not in absolute form.
+//
+// # Why the scheme and authority are not part of REQUEST_URI
+//
+// RFC 9112 §3.2.2 requires a server to accept "GET http://host/index.php" and
+// §3.2.2 again makes the authority the request's Host. Nothing about that line
+// is an attack, but recorded as written it reads as one: the core RFI rule
+// looks for an absolute URL that ends in a script extension, and this one
+// does, so every PHP, JSP and ASP page on a site was blocked for any client
+// that sent absolute form -- a forward proxy, an HTTP library pointed at a
+// proxy URL, a load balancer configured to. Path rules were wrong the other
+// way: a path that began "http:" matched no prefix and no closed-schema
+// operation, so a closed schema refused every such request as undeclared.
+//
+// Origin form is what the application receives. net/http routes on URL.Path,
+// a reverse proxy forwards origin form, and nginx and Apache both resolve the
+// path from the absolute target the same way, so recording the path is
+// inspecting what the backend interprets, which is the one thing invariant 1
+// requires. Nothing is dropped: REQUEST_LINE keeps the target as sent, and the
+// authority is the Host header the embedder supplies (the net/http middleware
+// sets it from r.Host, which net/http takes from the absolute URL).
+//
+// The scheme grammar is RFC 3986's -- a letter, then letters, digits, "+",
+// "-" or "." -- followed by "://". The authority ends at the first "/", "?"
+// or "#". Anything else, including the network-path form "//host/x", which an
+// origin server reads as a path, is left untouched.
+func originStart(target string) int {
+	if target == "" || !isASCIILetter(target[0]) {
+		return -1
+	}
+	i := 1
+	for i < len(target) && isSchemeByte(target[i]) {
+		i++
+	}
+	if len(target)-i < 3 || target[i] != ':' || target[i+1] != '/' || target[i+2] != '/' {
+		return -1
+	}
+	i += 3
+	for i < len(target) && target[i] != '/' && target[i] != '?' && target[i] != '#' {
+		i++
+	}
+	return i
+}
+
+func isASCIILetter(c byte) bool { return c|0x20 >= 'a' && c|0x20 <= 'z' }
+
+func isSchemeByte(c byte) bool {
+	return isASCIILetter(c) || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'
 }
 
 // addQueryArguments records each query-string pair as an argument.
