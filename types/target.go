@@ -14,7 +14,7 @@ const (
 	TargetInvalid TargetKind = iota
 
 	TargetRequestMethod
-	TargetRequestURI      // full request target, including query
+	TargetRequestURI      // request target in origin form, including query
 	TargetRequestPath     // path only, query stripped
 	TargetRequestProtocol // e.g. HTTP/1.1
 
