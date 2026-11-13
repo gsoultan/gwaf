@@ -1,0 +1,11 @@
+# Exceptions to `make vuln`, one advisory in one module per line:
+#
+#   <module dir as in MODULES> <OSV ID> <why it is not actionable>
+#
+# Only for advisories with NO fixed version. internal/tools/vulngate fails the
+# gate as soon as a fix ships (upgrade, then delete the line) or the advisory is
+# no longer reported (delete the line). Anything with a fix is fixed, never
+# listed here (CLAUDE.md §4).
+
+./adapters/echo GO-2026-6875 Echo's reverse-proxy middleware forwards X-Real-IP by default; the adapter never mounts it, and no Echo release (latest v4.16.4, 2026-11-13) has a fix.
+./adapters/echo GO-2026-6872 Echo's rate-limiter middleware trusts X-Forwarded-For by default; the adapter never mounts it, and no Echo release (latest v4.16.4, 2026-11-13) has a fix.
