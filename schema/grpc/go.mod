@@ -10,7 +10,7 @@ go 1.26.11
 
 require (
 	github.com/gsoultan/gwaf v0.0.0
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/protobuf v1.36.12
 )
 
 replace github.com/gsoultan/gwaf => ../../

@@ -14,16 +14,16 @@ replace github.com/gsoultan/gwaf/test/conformance => ../conformance
 replace github.com/gsoultan/gwaf/seclang => ../../seclang
 
 require (
-	github.com/corazawaf/coraza/v3 v3.7.0
+	github.com/corazawaf/coraza/v3 v3.8.1
 	github.com/gsoultan/gwaf v0.0.0
 	github.com/gsoultan/gwaf/middleware v0.0.0-00010101000000-000000000000
 	github.com/gsoultan/gwaf/test/conformance v0.0.0-00010101000000-000000000000
 )
 
 require (
-	github.com/corazawaf/libinjection-go v0.3.2 // indirect
+	github.com/corazawaf/libinjection-go v0.3.3 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
-	github.com/goccy/go-yaml v1.18.0 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/gotnospirit/makeplural v0.0.0-20180622080156-a5f48d94d976 // indirect
 	github.com/gotnospirit/messageformat v0.0.0-20221001023931-dfe49f1eb092 // indirect
 	github.com/gsoultan/gwaf/seclang v0.0.0-00010101000000-000000000000 // indirect
@@ -35,10 +35,10 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/valllabh/ocsf-schema-golang v1.0.3 // indirect
-	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	rsc.io/binaryregexp v0.2.0 // indirect
 )
