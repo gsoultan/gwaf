@@ -1,0 +1,70 @@
+# Copyright (c) 2026 Gembit Soultan Shirazi <gembit.soultan@gmail.com>. All rights reserved.
+#
+# The weekly security sweep.
+#
+# CI runs govulncheck on every push, which only tells us about advisories that
+# existed when someone last pushed. gwaf can sit untouched for weeks while a CVE
+# is disclosed in a dependency an adapter pins, or in the standard library every
+# embedder links, and nothing here would say so until the next unrelated commit.
+# This runs the same scan on a clock, plus a check no push-time gate can make:
+# whether the Go toolchain go.mod names is still the newest patch release.
+#
+# A failing scheduled run emails the repository owner, which is the report.
+
+name: security
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Monday 06:00 UTC, an hour after Dependabot opens its PRs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vuln:
+    name: govulncheck (every module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: make vuln
+
+  # Dependabot never moves the `go` line in go.mod, and the standard library is
+  # where net/http, crypto/tls and the HTTP/2 code every embedder runs live. A Go
+  # patch release often ships its security fixes before govulncheck has an
+  # advisory naming a function we call, so this reports the gap directly.
+  #
+  # The release list is the module proxy's toolchain index, the source `go`
+  # itself downloads toolchains from. If it cannot be read the job fails rather
+  # than passes (CLAUDE.md §6: a check that skips reports success it did not
+  # earn).
+  go-toolchain:
+    name: Go toolchain is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare go.mod with the newest Go patch release
+        run: |
+          set -euo pipefail
+          current="$(awk '$1 == "go" { print $2; exit }' go.mod)"
+          minor="$(echo "$current" | cut -d. -f1,2)"
+          list="$(curl -fsS --retry 3 https://proxy.golang.org/golang.org/toolchain/@v/list)"
+          latest="$(echo "$list" \
+            | sed -nE "s/^v0\.0\.1-go(${minor//./\\.}\.[0-9]+)\.linux-amd64$/\1/p" \
+            | sort -V | tail -n1)"
+          newest_minor="$(echo "$list" \
+            | sed -nE 's/^v0\.0\.1-go([0-9]+\.[0-9]+)\.[0-9]+\.linux-amd64$/\1/p' \
+            | sort -V | tail -n1)"
+          if [ -z "$latest" ]; then
+            echo "::error::no Go $minor.x release found in the toolchain index; cannot judge go.mod's go $current"
+            exit 1
+          fi
+          echo "go.mod: go $current; newest $minor.x: $latest; newest stable line: $newest_minor"
+          if [ "$current" != "$latest" ]; then
+            echo "::error::go.mod pins Go $current but $latest is out. Patch releases carry standard-library security fixes; bump the go line in every module's go.mod and GO_VERSION in ci.yml to $latest."
+            exit 1
+          fi
