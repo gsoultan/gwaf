@@ -6,7 +6,7 @@
 // suite still exercises the real library, because it imports it like anyone else.
 module github.com/gsoultan/gwaf/test/conformance
 
-go 1.26.5
+go 1.26.11
 
 replace github.com/gsoultan/gwaf => ../../
 

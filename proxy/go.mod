@@ -10,7 +10,7 @@
 // in httputil or the proxy's flags.
 module github.com/gsoultan/gwaf/proxy
 
-go 1.26.5
+go 1.26.11
 
 require (
 	github.com/gsoultan/gwaf v0.0.0

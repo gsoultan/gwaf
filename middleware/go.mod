@@ -9,7 +9,7 @@
 // lost. See the fifth ownership test in CLAUDE.md §1.
 module github.com/gsoultan/gwaf/middleware
 
-go 1.26.5
+go 1.26.11
 
 require github.com/gsoultan/gwaf v0.0.0
 

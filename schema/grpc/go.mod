@@ -6,7 +6,7 @@
 // should not acquire a protobuf runtime because a different user speaks gRPC.
 module github.com/gsoultan/gwaf/schema/grpc
 
-go 1.26.5
+go 1.26.11
 
 require (
 	github.com/gsoultan/gwaf v0.0.0

@@ -5,7 +5,7 @@
 // module boundary while the measurement still runs against the real library.
 module github.com/gsoultan/gwaf/test/headtohead
 
-go 1.26.5
+go 1.26.11
 
 replace github.com/gsoultan/gwaf => ../../
 

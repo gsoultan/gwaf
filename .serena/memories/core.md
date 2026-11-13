@@ -4,7 +4,7 @@
 An **embeddable Go WAF library**. Imported, not deployed. No daemon, no server,
 no UI. Zero CGO, **zero third-party dependencies** (CI-enforced via `make deps`).
 
-Module: `github.com/gsoultan/gwaf`. Go 1.26.5. Apache-2.0.
+Module: `github.com/gsoultan/gwaf`. Go 1.26.11. Apache-2.0.
 
 ## The thesis
 > Every other WAF is an interpreter. gwaf is a compiler.

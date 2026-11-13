@@ -6,7 +6,7 @@
 // different user wanted OpenAPI.
 module github.com/gsoultan/gwaf/schema/openapi
 
-go 1.26.5
+go 1.26.11
 
 require (
 	github.com/gsoultan/gwaf v0.0.0

@@ -7,7 +7,7 @@
 // non-net/http server cleanly, that would be a tier-1 gap.
 module github.com/gsoultan/gwaf/adapters/fiber
 
-go 1.26.5
+go 1.26.11
 
 require (
 	github.com/gofiber/fiber/v2 v2.52.5

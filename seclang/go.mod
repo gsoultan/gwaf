@@ -11,7 +11,7 @@
 // frontend produces -- and adds nothing the typed API cannot express.
 module github.com/gsoultan/gwaf/seclang
 
-go 1.26.5
+go 1.26.11
 
 require github.com/gsoultan/gwaf v0.0.0
 
