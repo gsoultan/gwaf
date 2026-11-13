@@ -93,7 +93,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: go install honnef.co/go/tools/cmd/staticcheck@latest
-      - run: staticcheck ./...
+      # Every module, through the Makefile, not just the root. The root module
+      # is the one place with no third-party code; the adapters and integrations
+      # an adopter actually pulls in live in the other modules (CLAUDE.md §4).
+      - run: make lint
 
   vuln:
     name: govulncheck
@@ -104,7 +107,12 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
-      - run: govulncheck ./...
+      # Every module. `govulncheck ./...` at the root scanned the one module
+      # that has zero third-party dependencies by design -- the one place a
+      # dependency CVE cannot exist -- while the gin, echo, fiber and proxy
+      # modules adopters inherit went unscanned in CI. `make vuln` walks
+      # MODULES, the same list `make check` uses locally.
+      - run: make vuln
 
   # Parsers and canonicalization take attacker input directly, so every one has
   # a fuzz target and every PR gets a short run. The nightly job below goes deep.

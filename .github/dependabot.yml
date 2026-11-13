@@ -1,0 +1,62 @@
+# Copyright (c) 2026 Gembit Soultan Shirazi <gembit.soultan@gmail.com>. All rights reserved.
+#
+# Weekly library updates, opened as pull requests so each one runs the full CI
+# gate -- tests, corpus, calibration, SLOs, govulncheck on every module -- before
+# it can land.
+#
+# The core module is not listed: it has zero third-party dependencies by design
+# (`make deps` enforces it), so there is nothing to update. The dependency risk
+# lives entirely in the adapter, integration and test modules, which is where
+# this looks. Modules inside this repository (github.com/gsoultan/*) are wired
+# with local replace directives and are ignored.
+#
+# An adopter inherits these pins whether or not we call the vulnerable path
+# (CLAUDE.md §4), so a stale x/net in the gin adapter is our CVE, not theirs.
+#
+# Minor and patch bumps are grouped into one PR a week; majors stay separate,
+# since a major is an API change. Security updates are opened as soon as an
+# advisory lands and are not held for the weekly batch.
+
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /middleware
+      - /examples
+      - /schema/openapi
+      - /schema/grpc
+      - /seclang
+      - /adapters/gin
+      - /adapters/echo
+      - /adapters/fiber
+      - /proxy
+      - /test/extension
+      - /test/conformance
+      - /test/headtohead
+      - /test/pentest
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: github.com/gsoultan/*
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Workflow actions run with repository access; keep their pins moving
+  # deliberately rather than never.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ['*']
