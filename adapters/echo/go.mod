@@ -4,7 +4,7 @@
 // func(http.Handler) http.Handler and composes with all of them directly.
 module github.com/gsoultan/gwaf/adapters/echo
 
-go 1.26.5
+go 1.26.11
 
 require (
 	github.com/gsoultan/gwaf v0.0.0

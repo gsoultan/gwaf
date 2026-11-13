@@ -4,7 +4,7 @@
 // func(http.Handler) http.Handler and composes with all of them directly.
 module github.com/gsoultan/gwaf/adapters/gin
 
-go 1.26.5
+go 1.26.11
 
 require (
 	github.com/gin-gonic/gin v1.10.0
