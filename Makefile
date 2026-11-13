@@ -270,6 +270,13 @@ fuzz:
 ##
 ## Runs inside `make check` rather than as a target somebody remembers, because
 ## we ship security infrastructure and a scan nobody runs is not a control.
+##
+## A module with lines in .govulncheck-allow goes through internal/tools/vulngate,
+## which accepts only the advisories listed for it, and only while they have no
+## fixed version and are still reported. Every other module runs plain
+## govulncheck, so an exception can never widen past the module that needs it.
+VULN_ALLOW := .govulncheck-allow
+
 .PHONY: vuln
 vuln:
 	@if [ ! -x "$(GOVULNCHECK)" ]; then \
@@ -278,7 +285,12 @@ vuln:
 		exit 1; \
 	fi
 	@for m in $(MODULES); do \
-		echo "govulncheck $$m"; (cd $$m && $(GOVULNCHECK) ./...) || exit 1; \
+		echo "govulncheck $$m"; \
+		if grep -q "^$$m " $(VULN_ALLOW); then \
+			$(GO) run ./internal/tools/vulngate -module $$m -allow $(VULN_ALLOW) -govulncheck $(GOVULNCHECK) || exit 1; \
+		else \
+			(cd $$m && $(GOVULNCHECK) ./...) || exit 1; \
+		fi; \
 	done
 
 ## deps: assert the core module has no third-party dependencies.
