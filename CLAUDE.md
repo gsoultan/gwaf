@@ -3,7 +3,7 @@
 `gwaf` is an embeddable, Go-native Web Application Firewall **library**. Not a product, not a
 proxy appliance. The proxy binary is a thin consumer of the library, never the other way around.
 
-**Toolchain: Go 1.26.5. Zero CGO. Ever.**
+**Toolchain: Go 1.26.11. Zero CGO. Ever.**
 
 ---
 
