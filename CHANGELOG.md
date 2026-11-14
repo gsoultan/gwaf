@@ -6,6 +6,25 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **Two opt-in rule sets, `ruleset/signatures` and `ruleset/leaks`, so an
+  embedder no longer has to carry them.** gateon kept about a hundred rules of
+  its own beside the core ruleset, and nearly all of them asked gwaf's question
+  -- is this one request an attack? -- from the request alone. That is
+  detection, and detection kept in an embedder is detection a second embedder
+  cannot have and gwaf cannot test. `signatures.All()` is 38 indicator rules:
+  named exploits (MOVEit, GoAnywhere, Follina, Text4Shell, Shellshock), web
+  shell, ransomware and scanner markers, and keyword rules that reach a little
+  past the structural detectors. `leaks.Credentials()`, `leaks.Disclosure()` and
+  `leaks.Inbound()` are 47 rules for a credential, a card number or a stack
+  trace in a response and a credential in a request, with `leaks.CardNumber()`
+  exported as an operator. Nothing loads unless asked for, core gains no
+  dependency, and the IDs sit in the optional-bundle range (100001-100038,
+  110001-111019). Seven of gateon's rules were not moved because core already
+  matched every payload they did. Two were declared Medium, measured above the
+  Medium ceiling on the benign corpus (1.5% and 1.07%), and ship as Low:
+  `TestSignaturesEarnTheirConfidence` now holds the set to the gate core is
+  held to.
+
 - **A request in absolute form is judged as the same request in origin form.**
   RFC 9112 §3.2.2 requires a server to accept `GET http://host/index.php`, and
   `SetRequestLine` recorded that target as written. REQUEST_URI then held an
