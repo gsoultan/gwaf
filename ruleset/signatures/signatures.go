@@ -51,6 +51,14 @@ const (
 	IDScannerHeader       types.RuleID = 100036
 	IDWebShellProbe       types.RuleID = 100037
 	IDSensitiveFileProbe  types.RuleID = 100038
+
+	// The five below state in one literal what a structural rule in core also
+	// reads. See the comment above them in the table for why they are here.
+	IDLog4Shell          types.RuleID = 100039
+	IDSpring4Shell       types.RuleID = 100040
+	IDPrototypePollution types.RuleID = 100041
+	IDNullByte           types.RuleID = 100042
+	IDPHPOpenTag         types.RuleID = 100043
 )
 
 // spec is the compact form of a rule. A rules.Rule literal repeated across the
@@ -114,6 +122,13 @@ var (
 		{Kind: types.TargetArgs},
 		{Kind: types.TargetRequestHeaders},
 		{Kind: types.TargetRequestURI},
+	}
+
+	tArgsHeadersURIBody = []types.Target{
+		{Kind: types.TargetArgs},
+		{Kind: types.TargetRequestHeaders},
+		{Kind: types.TargetRequestURI},
+		{Kind: types.TargetRequestBody},
 	}
 
 	// Parsed body arguments are merged into TargetArgs, so the raw body target
@@ -559,5 +574,60 @@ var specs = []spec{
 		severity: types.SeverityCritical, conf: types.Certain,
 		msg:  "Sensitive file discovery attempt",
 		tags: []string{"scanner", "recon"},
+	},
+
+	// The five rules below overlap core on purpose. On gwaf's attack corpus
+	// core.Default matches every payload they do, and the first draft of this
+	// package left them out for that reason. That measured the wrong thing. Each
+	// is one fixed literal, tagged for the exploit it names, and core's rule for
+	// the same payload is a structural detector tagged for the language it
+	// parses. An embedder that switches the Java rules off because nothing behind
+	// it runs Java loses core's Log4Shell rule with them; one that switches path
+	// traversal off loses core's NUL rule. These stay, because a literal that
+	// names one exploit has nothing to tune and no reason to be switched off with
+	// the family. They also do not depend on a parser reaching a verdict.
+	{
+		id: IDLog4Shell, phase: types.PhaseRequestBody, targets: tArgsHeadersURIBody,
+		xform:    norm,
+		op:       rx.MustNew(`\$\{jndi:(?:ldap|rmi|dns|nis|iiop|corba|nds|http):`),
+		severity: types.SeverityCritical, conf: types.Certain,
+		msg:  "Log4Shell RCE attempt",
+		tags: []string{"rce", "cve-2021-44228"},
+	},
+	{
+		id: IDSpring4Shell, phase: types.PhaseRequestBody, targets: tArgsNamesBody,
+		xform:    decoded,
+		op:       op.Contains("class.module.classLoader"),
+		severity: types.SeverityCritical, conf: types.Certain,
+		msg:  "Spring4Shell RCE attempt",
+		tags: []string{"rce", "cve-2022-22965"},
+	},
+	{
+		id: IDPrototypePollution, phase: types.PhaseRequestBody, targets: tArgsNamesBody,
+		xform:    decoded,
+		op:       op.ContainsAny("__proto__", "constructor.prototype"),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "Prototype pollution attempt",
+		tags: []string{"generic"},
+	},
+	// Header phase only, and deliberately so. A body-phase twin, as
+	// IDShellshockBody is for Shellshock, would match every binary upload,
+	// because a PNG carries NULs in its first eight bytes. A WAF that refuses
+	// image uploads is a worse outcome than a narrow rule.
+	{
+		id: IDNullByte, phase: types.PhaseRequestHeaders, targets: tArgsHeadersURI,
+		xform:    decoded,
+		op:       op.Contains("\x00"),
+		severity: types.SeverityCritical, conf: types.Certain,
+		msg:  "Null byte injection attempt",
+		tags: []string{"generic"},
+	},
+	{
+		id: IDPHPOpenTag, phase: types.PhaseRequestBody, targets: tArgs,
+		xform:    norm,
+		op:       op.Contains("<?php"),
+		severity: types.SeverityCritical, conf: types.Certain,
+		msg:  "PHP code in a file upload",
+		tags: []string{"malware", "rce"},
 	},
 }
