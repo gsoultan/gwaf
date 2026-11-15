@@ -6,6 +6,16 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **`WithSchemaMode(SchemaObserve)` and `Transaction.SchemaViolation`.** A
+  schema could only be tried against live traffic by switching the whole WAF
+  to `DetectionOnly`, which stops the rules blocking for as long as the trial
+  lasts. Under `SchemaObserve` a request outside the schema is recorded and
+  carries on to the rules, so a description can be measured against real
+  traffic while attacks are still refused. Validated values stay inert and
+  failed ones are inspected in full, exactly as under the default. The default
+  is `SchemaEnforce` and nothing changes for an embedder that does not set the
+  mode. `schema.ViolationBody` is new: a body sent to an operation that
+  declares none previously had no violation value, only a refusal.
 - **A CVE drill (`make cve`, `docs/CVE-COVERAGE.md`).** "Are we covered?" was
   answered by a manual review each time a CVE landed. Each entry is now the
   exploit's request and a benign neighbour, run against core alone and with the

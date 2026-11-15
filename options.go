@@ -124,6 +124,7 @@ type config struct {
 	onDecide  func(Decision)
 
 	schema     *schema.Schema
+	schemaMode SchemaMode
 	exceptions rules.Exceptions
 	origins    []string
 
@@ -241,6 +242,43 @@ func WithRuleset(set rules.Set) Option {
 // See docs/CONCEPT.md §6 and §9.
 func WithSchema(s *schema.Schema) Option {
 	return func(c *config) { c.schema = s }
+}
+
+// SchemaMode selects what a request outside the schema costs its sender.
+type SchemaMode uint8
+
+const (
+	// SchemaEnforce refuses a request outside the schema before any rule runs.
+	// This is the default, and it is what makes a schema positive security.
+	SchemaEnforce SchemaMode = iota
+
+	// SchemaObserve records the violation and carries on to the rules.
+	//
+	// It exists because a published API description is usually narrower than
+	// the traffic the API really serves, and the only way to find out by how
+	// much is to run it against that traffic. DetectionOnly cannot answer
+	// that: it stops enforcing the rules as well, so trying a schema would
+	// mean switching attack blocking off for as long as the trial lasts.
+	//
+	// Nothing else changes. A value that validates as a constrained type is
+	// still inert and still skips the rules it cannot trigger, and a value
+	// that fails validation is still inspected in full. The violation is read
+	// with Transaction.SchemaViolation.
+	SchemaObserve
+)
+
+// String implements fmt.Stringer.
+func (m SchemaMode) String() string {
+	if m == SchemaObserve {
+		return "observe"
+	}
+	return "enforce"
+}
+
+// WithSchemaMode selects whether a schema violation is refused or recorded.
+// It has no effect without WithSchema.
+func WithSchemaMode(m SchemaMode) Option {
+	return func(c *config) { c.schemaMode = m }
 }
 
 // WithoutCoreRuleset omits the first-party ruleset, leaving only rules the
