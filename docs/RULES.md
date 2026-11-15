@@ -419,7 +419,7 @@ Numeric IDs, because CRS and the entire tooling ecosystem assume them.
 | Range | Owner |
 |---|---|
 | `1 – 99,999` | gwaf core ruleset (reserved) |
-| `100,000 – 899,999` | first-party optional bundles |
+| `100,000 – 899,999` | first-party optional bundles: `ruleset/signatures` (100,001+), `ruleset/leaks` (110,001+) |
 | `900,000 – 999,999` | OWASP CRS, preserved verbatim through the adapter |
 | `1,000,000+` | **your rules** |
 

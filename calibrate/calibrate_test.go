@@ -10,6 +10,7 @@ import (
 	"github.com/gsoultan/gwaf/calibrate"
 	"github.com/gsoultan/gwaf/rules"
 	"github.com/gsoultan/gwaf/rules/op"
+	"github.com/gsoultan/gwaf/ruleset/signatures"
 	"github.com/gsoultan/gwaf/types"
 )
 
@@ -128,6 +129,40 @@ func TestCoreRulesetIsClean(t *testing.T) {
 	}
 	t.Logf("%d rules against %d benign requests; %d matched nothing",
 		len(rep.Rules), rep.Requests, rep.Clean)
+}
+
+// TestSignaturesEarnTheirConfidence holds the opt-in signature set to the same
+// gate as core. A signature is a keyword, and a keyword's false-positive rate
+// is not something its author can know by reading it: two of these were
+// declared Medium, measured above the Medium ceiling here, and are Low now.
+//
+// ruleset/leaks is not measured, and that is a limit of this corpus and not a
+// pass: its response rules need response bodies, which the corpus does not
+// carry, and its inbound rules find a secret in a request, which a benign
+// request can hold -- an administrator saving a webhook URL is not an attack
+// and is exactly what those rules are for.
+func TestSignaturesEarnTheirConfidence(t *testing.T) {
+	waf, err := calibrate.NewWAF(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(signatures.All()))
+	if err != nil {
+		t.Fatalf("NewWAF: %v", err)
+	}
+	loaded, err := calibrate.LoadCorpusFile("../testdata/corpus/benign.jsonl")
+	if err != nil {
+		t.Fatalf("LoadCorpusFile: %v", err)
+	}
+	rep, err := calibrate.Run(waf, loaded)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(rep.Rules) != len(signatures.All()) {
+		t.Fatalf("measured %d rules, the set has %d", len(rep.Rules), len(signatures.All()))
+	}
+	for _, r := range rep.Rules {
+		if !r.Passed() {
+			t.Errorf("rule %s (%s) measured %.4f%%, ceiling %.4f%%: %+v",
+				r.ID, r.Declared, r.Measured*100, r.Ceiling*100, r.Samples)
+		}
+	}
 }
 
 // TestReportsItsOwnLimits guards the honesty of a passing result. A clean run
