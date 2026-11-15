@@ -48,6 +48,34 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
 
+  # Who a commit is credited to is part of what ships. See the script for why.
+  identity:
+    name: commit identity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No commit credited to an AI identity
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            base=$PR_BASE head=$PR_HEAD
+          else
+            head=$PUSH_AFTER
+            base=$PUSH_BEFORE
+            # A new branch has no "before"; check what it adds to main.
+            if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+              base=$(git merge-base origin/main "$head")
+            fi
+          fi
+          bash .github/check-commit-identity.sh "$base" "$head"
+
   # The core module must stay free of third-party dependencies. Everything an
   # embedder inherits from gwaf is a supply-chain liability they did not choose.
   deps:
