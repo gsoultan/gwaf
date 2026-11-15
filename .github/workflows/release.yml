@@ -39,11 +39,11 @@ jobs:
     name: SBOM and provenance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -90,7 +90,7 @@ jobs:
       # SLSA build provenance, signed with the workflow's own OIDC identity and
       # recorded in GitHub's attestation store. Verify with:
       #   gh attestation verify gwaf-<tag>-sbom.tar.gz --repo gsoultan/gwaf
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/gwaf-${{ steps.bundle.outputs.tag }}-sbom.tar.gz
 
