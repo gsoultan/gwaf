@@ -146,6 +146,35 @@ func ExampleWithSchema() {
 	// reason: schema_violation
 }
 
+func ExampleWithSchemaMode() {
+	api, err := schema.New(schema.Operation{
+		Method: "GET",
+		Path:   "/api/v1/orders",
+		Query:  []schema.Field{{Name: "id", Kind: schema.KindInteger}},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Trying a description against real traffic: violations are recorded, and
+	// the rules go on blocking.
+	waf, _ := gwaf.New(gwaf.WithSchema(api), gwaf.WithSchemaMode(gwaf.SchemaObserve))
+	tx := waf.NewTransaction()
+	defer tx.Close()
+
+	tx.SetRequestLine("GET", "/api/v1/orders", "HTTP/1.1")
+	tx.AddArgument("id", "A-1042")
+	tx.ProcessRequestHeaders()
+	d := tx.ProcessRequestBody()
+
+	violation, at := tx.SchemaViolation()
+	fmt.Println("blocked:", d.Blocked())
+	fmt.Println("violation:", violation, "at", at)
+	// Output:
+	// blocked: false
+	// violation: type_mismatch at id
+}
+
 // Rules are Go values, so a typo in a target name is a build failure rather than
 // a rule that silently never fires at three in the morning.
 func ExampleWithRuleset() {

@@ -1370,7 +1370,10 @@ func (tx *Transaction) ProcessRequestHeaders() Decision {
 // It runs before rule evaluation because a request the origin would reject is
 // not worth inspecting.
 func (tx *Transaction) schemaViolation() (Decision, bool) {
-	if tx.violation == schema.ViolationNone {
+	// Under SchemaObserve the violation stays recorded and the rules run: the
+	// request is outside the description, which says nothing yet about whether
+	// the description or the request is the one that is wrong.
+	if tx.violation == schema.ViolationNone || tx.waf.cfg.schemaMode == SchemaObserve {
 		return Decision{}, false
 	}
 	d := Decision{
@@ -1385,6 +1388,21 @@ func (tx *Transaction) schemaViolation() (Decision, bool) {
 		d.verdict = VerdictAllow
 	}
 	return tx.finish(d), true
+}
+
+// SchemaViolation returns the first way this request fell outside the schema,
+// and the parameter, member or path it happened at. It returns ViolationNone
+// and "" for a request inside the schema, and for a WAF with no schema.
+//
+// Under SchemaEnforce the same information arrives in the Decision that
+// refused the request. Under SchemaObserve nothing refuses it, so this is the
+// only place the violation can be read: call it after ProcessRequestBody,
+// because a missing required member is only knowable once the body has ended.
+//
+// The name is the client's bytes. It is data for a log or a count, and is
+// never safe to render as markup.
+func (tx *Transaction) SchemaViolation() (schema.Violation, string) {
+	return tx.violation, tx.violatedAt
 }
 
 // ---- response phase --------------------------------------------------------
@@ -1595,13 +1613,18 @@ func (tx *Transaction) ProcessRequestBody() Decision {
 	// A route declaring no body must not receive one; the origin has no code
 	// path for it, so anything sent is probing.
 	if tx.op != nil && tx.op.NoBody && tx.bodyLen > 0 {
-		return tx.finish(Decision{
-			verdict:        VerdictBlock,
-			reason:         ReasonSchema,
-			status:         tx.waf.cfg.blockCode,
-			detail:         "body sent to an operation that declares none",
-			rulesEvaluated: tx.evaluated,
-		})
+		if tx.waf.cfg.schemaMode != SchemaObserve {
+			return tx.finish(Decision{
+				verdict:        VerdictBlock,
+				reason:         ReasonSchema,
+				status:         tx.waf.cfg.blockCode,
+				detail:         "body sent to an operation that declares none",
+				rulesEvaluated: tx.evaluated,
+			})
+		}
+		if tx.violation == schema.ViolationNone {
+			tx.violation = schema.ViolationBody
+		}
 	}
 	// Required fields are checked once the body has been read, because absence
 	// is only knowable at the end. Doing this here rather than per field is

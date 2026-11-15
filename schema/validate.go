@@ -17,6 +17,9 @@ const (
 	ViolationUndeclared
 	ViolationMissing
 	ViolationRange
+
+	// ViolationBody is a body sent to an operation that declares none.
+	ViolationBody
 )
 
 // String implements fmt.Stringer.
@@ -36,6 +39,8 @@ func (v Violation) String() string {
 		return "missing_required_parameter"
 	case ViolationRange:
 		return "out_of_range"
+	case ViolationBody:
+		return "unexpected_body"
 	default:
 		return "none"
 	}
