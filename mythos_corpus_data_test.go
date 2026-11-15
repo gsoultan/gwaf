@@ -41,7 +41,7 @@ var mythosCorpus = func() []mythCase {
 			arg: "1'-- x\rUNION SELECT password FROM users-- -"},
 		{class: "sqli", name: "classic tautology", arg: sqli, where: inArg, attack: true},
 		{class: "sqli", name: "char concat", arg: "CHAR(39)+CHAR(79)+CHAR(82)", where: inArg, attack: true,
-			open: "detect/sqli scores it 5; Literals() omits char/chr so the prefilter drops it, and bare 'char' is in search/character"},
+			open: "detect/sqli scores the raw value 5, at threshold, but textChain's URLDecode reads an already-decoded '+' as a space, and no reading keeps it"},
 		{class: "sqli", name: "case inference", where: inArg, attack: true,
 			arg: "1 AND 1=CASE WHEN (username='admin') THEN 1 ELSE 0 END"},
 		{class: "sqli", name: "pg_sleep bare", arg: "pg_sleep(5)", where: inArg, attack: true},
