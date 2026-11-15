@@ -6,6 +6,16 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **`leaks.Compromise()`, seven response rules that recognise an exploit by
+  what it returns rather than by its request.** A new file-read or
+  command-injection CVE needs a new request signature before anything
+  recognises the request; an account file, the output of `id`, win.ini,
+  boot.ini, an EC2 role-credential document, a phpinfo() page and a
+  NUL-separated process environment look the same whichever CVE produced them.
+  IDs 110201-110207, Confidence High (documentation prints sample account files
+  and `id` output, so a docs site scopes them away), and included in
+  `leaks.All()`.
+
 - **Two opt-in rule sets, `ruleset/signatures` and `ruleset/leaks`, so an
   embedder no longer has to carry them.** gateon kept about a hundred rules of
   its own beside the core ruleset, and nearly all of them asked gwaf's question

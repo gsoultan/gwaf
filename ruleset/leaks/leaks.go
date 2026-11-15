@@ -45,6 +45,16 @@ const (
 	IDRubyBacktrace   types.RuleID = 110106
 	IDDatabaseError   types.RuleID = 110107
 
+	// Evidence that an exploit already worked: what a successful file read,
+	// command injection or SSRF puts in the response.
+	IDUnixAccountFile     types.RuleID = 110201
+	IDCommandIdentity     types.RuleID = 110202
+	IDWindowsWinIni       types.RuleID = 110203
+	IDWindowsBootIni      types.RuleID = 110204
+	IDCloudRoleCredential types.RuleID = 110205
+	IDPHPInfoPage         types.RuleID = 110206
+	IDProcessEnvironment  types.RuleID = 110207
+
 	// Credentials arriving in a request.
 	IDInboundPrivateKeyPEM   types.RuleID = 111001
 	IDInboundAWSAccessKey    types.RuleID = 111002
@@ -173,6 +183,25 @@ func Credentials() rules.Set { return render(credentialSpecs) }
 // service -- serves them legitimately.
 func Disclosure() rules.Set { return render(disclosureSpecs) }
 
+// Compromise returns the rules that find, in a response body, the output of an
+// exploit that already worked: an account file read through path traversal, the
+// output of `id` from command injection, a cloud role credential fetched through
+// SSRF, a process environment, a phpinfo() page.
+//
+// They look at the result, not the payload. A new remote-code-execution or
+// file-read CVE needs a new request signature before anything recognises its
+// request; what it returns when it works does not change. So these catch the
+// successful half of exploits nobody has written a rule for yet.
+//
+// Refusing the response stops the data leaving. It does not undo a command that
+// already ran on the origin, and an embedder should treat a match as an
+// incident, not as an attack that was stopped.
+//
+// They are Confidence High rather than Certain: documentation and forums print
+// sample account files and `id` output for a living, and a site like that should
+// scope these rules away from the pages that do.
+func Compromise() rules.Set { return render(compromiseSpecs) }
+
 // Inbound returns the credential rules pointed at the request.
 //
 // They log and do not block. Refusing a POST because it contains a secret
@@ -181,9 +210,11 @@ func Disclosure() rules.Set { return render(disclosureSpecs) }
 // a leak, inbound it is a customer paying for something.
 func Inbound() rules.Set { return render(inboundSpecs) }
 
-// All returns Credentials, Disclosure and Inbound together.
+// All returns Credentials, Disclosure, Compromise and Inbound together.
 func All() rules.Set {
-	return append(append(Credentials(), Disclosure()...), Inbound()...)
+	set := append(Credentials(), Disclosure()...)
+	set = append(set, Compromise()...)
+	return append(set, Inbound()...)
 }
 
 var credentialSpecs = []spec{
@@ -449,6 +480,73 @@ var disclosureSpecs = []spec{
 		severity: types.SeverityError, conf: types.Medium,
 		msg:  "Database engine error text in response",
 		tags: []string{"leak", "disclosure"},
+	},
+}
+
+var compromiseSpecs = []spec{
+	{
+		// Two consecutive account lines, the first of them root's. One line
+		// alone is what a tutorial quotes; the shape of the file is the file.
+		id: IDUnixAccountFile, phase: types.PhaseResponseBody, targets: tRespBody,
+		op: rx.MustNew(`root:[x*!]?:0:0:[^:\n]{0,256}:[^:\n]{0,256}:[^:\n]{0,256}\r?\n` +
+			`[a-z_][a-z0-9_.-]{0,31}:[x*!]?:\d{1,10}:\d{1,10}:`),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "Unix account file (/etc/passwd) in response",
+		tags: []string{"compromise", "lfi"},
+	},
+	{
+		// The output of `id`: uid, gid and groups together, each with its name
+		// in parentheses. That is what command injection echoes first.
+		id: IDCommandIdentity, phase: types.PhaseResponseBody, targets: tRespBody,
+		op: rx.MustNew(`uid=\d{1,10}\([a-z_][a-z0-9_.-]{0,31}\) gid=\d{1,10}\([a-z_][a-z0-9_.-]{0,31}\) ` +
+			`groups=\d{1,10}\(`),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "Output of the id command in response",
+		tags: []string{"compromise", "rce"},
+	},
+	{
+		// The first two lines Windows writes into win.ini, the file every
+		// Windows traversal probe asks for because it is always there.
+		id: IDWindowsWinIni, phase: types.PhaseResponseBody, targets: tRespBody,
+		op:       rx.MustNew(`; for 16-bit app support\r?\n\[fonts\]`),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "Windows win.ini contents in response",
+		tags: []string{"compromise", "lfi"},
+	},
+	{
+		id: IDWindowsBootIni, phase: types.PhaseResponseBody, targets: tRespBody,
+		op:       rx.MustNew(`\[boot loader\]\r?\ntimeout=\d{1,5}\r?\ndefault=`),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "Windows boot.ini contents in response",
+		tags: []string{"compromise", "lfi"},
+	},
+	{
+		// The EC2 instance metadata service's role-credential document. An
+		// application has no reason to hand its instance role to a client; a
+		// response carrying this document is SSRF reaching 169.254.169.254
+		// and coming back with keys.
+		id: IDCloudRoleCredential, phase: types.PhaseResponseBody, targets: tRespBody,
+		op:       rx.MustNew(`"Type"\s{0,8}:\s{0,8}"AWS-HMAC"\s{0,8},\s{0,8}"AccessKeyId"`),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "Cloud instance role credentials in response (SSRF to metadata)",
+		tags: []string{"compromise", "ssrf"},
+	},
+	{
+		id: IDPHPInfoPage, phase: types.PhaseResponseBody, targets: tRespBody,
+		op:       rx.MustNew(`<title>(?:PHP \d[\d.]{0,15} - )?phpinfo\(\)</title>`),
+		severity: types.SeverityError, conf: types.High,
+		msg:  "phpinfo() page in response",
+		tags: []string{"compromise", "disclosure"},
+	},
+	{
+		// /proc/self/environ: variables separated by NUL bytes, which no text
+		// a person writes contains. One of the variables every process has,
+		// then a NUL, then another assignment.
+		id: IDProcessEnvironment, phase: types.PhaseResponseBody, targets: tRespBody,
+		op:       rx.MustNew(`(?:PATH|HOME|HOSTNAME|PWD)=[^\x00\n]{0,1000}\x00[A-Z_][A-Z0-9_]{0,63}=`),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "Process environment (/proc/self/environ) in response",
+		tags: []string{"compromise", "lfi"},
 	},
 }
 
