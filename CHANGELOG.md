@@ -6,6 +6,18 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **A CVE drill (`make cve`, `docs/CVE-COVERAGE.md`).** "Are we covered?" was
+  answered by a manual review each time a CVE landed. Each entry is now the
+  exploit's request and a benign neighbour, run against core alone and with the
+  opt-in bundles, and classified as structural (core refuses it with no rule
+  naming it), named, gap, or embedder. Of the twelve HTTP exploits in the first
+  table, ten are structural; the MOVEit session-variable headers and the Citrix
+  single-`../` traversal are recorded gaps. The test fails when any entry's
+  coverage changes, in either direction.
+- **The Mythos corpus fails on a stale `open` note.** Twelve cases marked as
+  open bypasses were already caught, so the corpus was reporting gaps that did
+  not exist.
+
 - **`leaks.Compromise()`, seven response rules that recognise an exploit by
   what it returns rather than by its request.** A new file-read or
   command-injection CVE needs a new request signature before anything

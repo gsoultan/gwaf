@@ -335,6 +335,16 @@ nuclei: ## gwaf vs Coraza + CRS on real CVE exploit traffic from nuclei-template
 nuclei:
 	cd test/headtohead && go test -run TestNucleiHeadToHead -v -timeout 25m .
 
+## cve: the CVE drill -- is a published CVE already covered, and how?
+##
+## One table entry per CVE in cve_drill_test.go: the exploit's request, a benign
+## neighbour, and the coverage it has (structural, named, gap, embedder). Fails
+## when coverage changes in either direction. Regenerate docs/CVE-COVERAGE.md
+## with `go test -run TestCVEDrill -update-cve-doc .`
+.PHONY: cve
+cve:
+	go test -run TestCVEDrill -v .
+
 ## sbom: generate a CycloneDX SBOM for every module.
 ##
 ## SECURITY.md has always said "Releases ship an SBOM and SLSA provenance". It
