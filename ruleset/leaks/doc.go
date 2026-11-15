@@ -4,7 +4,7 @@
 // not be: a credential, a card number or a stack trace in a response, and a
 // credential in a request.
 //
-// # Three sets, because they answer different questions
+// # Four sets, because they answer different questions
 //
 // Credentials is the response direction: a live API key, a card number or a
 // database URL with its password, leaving the origin. Each credential is
@@ -14,6 +14,11 @@
 // Disclosure is the response direction too, and softer: a stack trace or a
 // database error. It is Confidence Medium because some sites serve those on
 // purpose, and the default minimum drops it.
+//
+// Compromise is the response direction too, and looks for the output of an
+// exploit that already worked: an account file, `id` output, a cloud role
+// credential, a process environment. It catches the successful half of
+// exploits whose request no rule recognises yet.
 //
 // Inbound points the credential detectors at the request, and logs where the
 // others block. A key pasted into a support ticket lands in a database, a

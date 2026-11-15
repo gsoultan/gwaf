@@ -311,6 +311,63 @@ var responseCases = []struct {
 		},
 		misses: []string{"SQL syntax highlighting", "SQLSTATE"},
 	},
+	{
+		id: leaks.IDUnixAccountFile, name: "unix-account-file",
+		hits: []string{
+			"root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n",
+			// Alpine and BusyBox images leave the password field empty or starred.
+			"root::0:0:root:/root:/bin/ash\nbin:*:1:1:bin:/bin:/sbin/nologin",
+		},
+		misses: []string{
+			// The single line a tutorial quotes is not the file.
+			"Each line looks like root:x:0:0:root:/root:/bin/bash and describes one account.",
+			"chown root:root /etc/passwd",
+			"root:0:0",
+		},
+	},
+	{
+		id: leaks.IDCommandIdentity, name: "id-output",
+		hits: []string{
+			"uid=0(root) gid=0(root) groups=0(root)",
+			"<pre>uid=33(www-data) gid=33(www-data) groups=33(www-data)\n</pre>",
+		},
+		misses: []string{"uid=0 gid=0", "user uid=1000(alice) logged in", "?uid=0(root)&gid=0(root)"},
+	},
+	{
+		id: leaks.IDWindowsWinIni, name: "win-ini",
+		hits:   []string{"; for 16-bit app support\r\n[fonts]\r\n[extensions]\r\n[mci extensions]"},
+		misses: []string{"[fonts]\nsize=12", "drivers for 16-bit app support"},
+	},
+	{
+		id: leaks.IDWindowsBootIni, name: "boot-ini",
+		hits:   []string{"[boot loader]\r\ntimeout=30\r\ndefault=multi(0)disk(0)rdisk(0)partition(1)\\WINDOWS"},
+		misses: []string{"[boot loader]", "the boot loader timeout=30 is too long"},
+	},
+	{
+		id: leaks.IDCloudRoleCredential, name: "imds-role-credential",
+		hits: []string{
+			"{\n  \"Code\" : \"Success\",\n  \"LastUpdated\" : \"2026-11-15T10:00:00Z\",\n" +
+				"  \"Type\" : \"AWS-HMAC\",\n  \"AccessKeyId\" : \"ASIA" + "EXAMPLEEXAMPLE00\",",
+			`{"Code":"Success","Type":"AWS-HMAC","AccessKeyId":"ASIA` + `EXAMPLEEXAMPLE00"}`,
+		},
+		misses: []string{`{"Type":"user","AccessKeyId":"none"}`, "signature type AWS-HMAC-SHA256"},
+	},
+	{
+		id: leaks.IDPHPInfoPage, name: "phpinfo",
+		hits: []string{
+			"<html><head><title>PHP 8.3.14 - phpinfo()</title>",
+			"<title>phpinfo()</title>",
+		},
+		misses: []string{"<title>How to call phpinfo() safely</title>", "phpinfo() shows configuration"},
+	},
+	{
+		id: leaks.IDProcessEnvironment, name: "proc-environ",
+		hits: []string{
+			"HOSTNAME=web-7d9f\x00PATH=/usr/local/sbin:/usr/local/bin\x00HOME=/root\x00",
+			"PATH=/usr/bin:/bin\x00DB_PASSWORD=hunter2\x00",
+		},
+		misses: []string{"PATH=/usr/bin:/bin\nHOME=/root\n", "export PATH=/usr/bin"},
+	},
 }
 
 // TestResponseRulesDetectWhatTheyName runs each response rule alone, through a
@@ -350,7 +407,7 @@ func TestEveryResponseRuleHasACase(t *testing.T) {
 	for _, tc := range responseCases {
 		covered[tc.id] = true
 	}
-	for _, r := range append(leaks.Credentials(), leaks.Disclosure()...) {
+	for _, r := range append(append(leaks.Credentials(), leaks.Disclosure()...), leaks.Compromise()...) {
 		if !covered[r.ID] {
 			t.Errorf("rule %d (%s) has no test case", r.ID, r.Msg)
 		}
@@ -384,6 +441,35 @@ func TestDisclosureIsBelowTheDefaultConfidence(t *testing.T) {
 	tx.WriteResponseBody([]byte("Traceback (most recent call last):\n  File \"app.py\", line 3"))
 	if d := tx.ProcessResponseBody(); d.Blocked() {
 		t.Errorf("a traceback in a response was blocked at the default confidence: %v", d)
+	}
+}
+
+// TestCompromiseBlocksAtTheDefaultConfidence pins that the exploit-success
+// rules refuse with gwaf.New() defaults, and that the request alone, which
+// carries no signature anything recognises, is not what refused it.
+func TestCompromiseBlocksAtTheDefaultConfidence(t *testing.T) {
+	for _, r := range leaks.Compromise() {
+		if r.Confidence < types.High {
+			t.Errorf("compromise rule %d is %v; the default minimum would drop it", r.ID, r.Confidence)
+		}
+	}
+	w, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(leaks.Compromise()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := w.NewTransaction()
+	defer tx.Close()
+	tx.SetRequestLine("GET", "/download?file=report.pdf", "HTTP/1.1")
+	if d := tx.ProcessRequestHeaders(); d.Blocked() {
+		t.Fatalf("the request was refused before the response: %v", d)
+	}
+	tx.ProcessRequestBody()
+	tx.SetResponseStatus(200)
+	tx.ProcessResponseHeaders()
+	tx.WriteResponseBody([]byte("root:x:0:0:root:/root:/bin/bash\nbin:x:1:1:bin:/bin:/sbin/nologin\n"))
+	d := tx.ProcessResponseBody()
+	if !d.Blocked() {
+		t.Fatalf("an account file in a response was not refused: %v", d)
 	}
 }
 

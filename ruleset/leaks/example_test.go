@@ -72,9 +72,31 @@ func ExampleInbound() {
 }
 
 func ExampleAll() {
-	fmt.Println(len(leaks.All()) == len(leaks.Credentials())+len(leaks.Disclosure())+len(leaks.Inbound()))
+	fmt.Println(len(leaks.All()) ==
+		len(leaks.Credentials())+len(leaks.Disclosure())+len(leaks.Compromise())+len(leaks.Inbound()))
 	// Output:
 	// true
+}
+
+func ExampleCompromise() {
+	// The request is unremarkable; the response is the account file a path
+	// traversal returns when it works.
+	waf, err := gwaf.New(gwaf.WithoutCoreRuleset(), gwaf.WithRuleset(leaks.Compromise()))
+	if err != nil {
+		panic(err)
+	}
+	tx := waf.NewTransaction()
+	defer tx.Close()
+	tx.SetRequestLine("GET", "/download?file=report.pdf", "HTTP/1.1")
+	tx.ProcessRequestHeaders()
+	tx.ProcessRequestBody()
+	tx.SetResponseStatus(200)
+	tx.ProcessResponseHeaders()
+	tx.WriteResponseBody([]byte("root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"))
+	d := tx.ProcessResponseBody()
+	fmt.Println(d.Blocked(), d.RuleID() == leaks.IDUnixAccountFile)
+	// Output:
+	// true true
 }
 
 func ExampleCardNumber() {
