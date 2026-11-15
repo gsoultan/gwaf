@@ -125,6 +125,9 @@ func runMyth(t *testing.T, w *gwaf.WAF, c mythCase) bool {
 // It never fails on an open case: those are counted, named, and printed, because
 // the number this test exists to produce is the honest one. It fails when a case
 // that is *not* marked open regresses, which is what keeps a closed bypass shut.
+// It also fails when a case marked open is caught: an annotation that outlives
+// its fix makes the corpus report gaps that are not there, and a reader picks
+// the wrong work from it.
 func TestMythosCorpus(t *testing.T) {
 	w := mythWAF(t)
 
@@ -147,6 +150,10 @@ func TestMythosCorpus(t *testing.T) {
 		switch {
 		case c.attack && blocked:
 			s.tp++
+			if c.open != "" {
+				regressions = append(regressions,
+					fmt.Sprintf("STALE OPEN [%s] %s is caught; remove its open note: %s", c.class, c.name, c.open))
+			}
 		case c.attack && !blocked:
 			s.fn++
 			if c.open == "" {
