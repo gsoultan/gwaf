@@ -18,7 +18,8 @@ set -euo pipefail
 
 base=${1:?usage: $0 <base> <head>}
 head=${2:?usage: $0 <base> <head>}
-pattern='@anthropic\.com|^Claude$'
+# [.] rather than a backslash escape: awk -v processes escapes and warns on this one.
+pattern='@anthropic[.]com|^Claude$'
 
 bad=$(git log --format='%h%x09%an%x09%ae%x09%cn%x09%ce' "$base..$head" |
 	awk -F '\t' -v re="$pattern" '$2 ~ re || $3 ~ re || $4 ~ re || $5 ~ re')

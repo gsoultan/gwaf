@@ -69,8 +69,10 @@ jobs:
           else
             head=$PUSH_AFTER
             base=$PUSH_BEFORE
-            # A new branch has no "before"; check what it adds to main.
-            if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            # A new branch has no "before", and after a force-push the old tip is
+            # no longer reachable, so it is absent from the clone and the range is
+            # invalid. Either way, check what the branch adds to main.
+            if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
               base=$(git merge-base origin/main "$head")
             fi
           fi
