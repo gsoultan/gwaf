@@ -11,16 +11,19 @@ semver, and the four extension interfaces are frozen hard.
   its own beside the core ruleset, and nearly all of them asked gwaf's question
   -- is this one request an attack? -- from the request alone. That is
   detection, and detection kept in an embedder is detection a second embedder
-  cannot have and gwaf cannot test. `signatures.All()` is 38 indicator rules:
+  cannot have and gwaf cannot test. `signatures.All()` is 43 indicator rules:
   named exploits (MOVEit, GoAnywhere, Follina, Text4Shell, Shellshock), web
   shell, ransomware and scanner markers, and keyword rules that reach a little
   past the structural detectors. `leaks.Credentials()`, `leaks.Disclosure()` and
-  `leaks.Inbound()` are 47 rules for a credential, a card number or a stack
+  `leaks.Inbound()` are 48 rules for a credential, a card number or a stack
   trace in a response and a credential in a request, with `leaks.CardNumber()`
   exported as an operator. Nothing loads unless asked for, core gains no
-  dependency, and the IDs sit in the optional-bundle range (100001-100038,
-  110001-111019). Seven of gateon's rules were not moved because core already
-  matched every payload they did. Two were declared Medium, measured above the
+  dependency, and the IDs sit in the optional-bundle range (100001-100043,
+  110001-111019). Six of the rules overlap core on purpose (Log4Shell,
+  Spring4Shell, `__proto__`, a NUL byte, `<?php` in an upload, a PEM private key
+  in a response): core matches every payload they do, but under the tag of the
+  language it parses, so an embedder that switches the Java rules off would
+  lose the named exploit with them. Two were declared Medium, measured above the
   Medium ceiling on the benign corpus (1.5% and 1.07%), and ship as Low:
   `TestSignaturesEarnTheirConfidence` now holds the set to the gate core is
   held to.

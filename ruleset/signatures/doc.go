@@ -33,7 +33,10 @@
 // them here is what lets a second embedder have them, and what lets one of them
 // be deleted when a structural rule in core comes to cover everything it does.
 // A replay of gwaf's own attack corpus found seven that core already covered in
-// full; those were dropped and not moved.
+// full. One, a literal "<script" match that core's XSS rule answers under the
+// same tag, was dropped. The others are here: each names one exploit, and an
+// embedder that switches a language family off in core should not lose the
+// named exploit with it.
 //
 // # Concurrency
 //

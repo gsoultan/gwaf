@@ -251,6 +251,20 @@ var responseCases = []struct {
 		misses: []string{"PuTTY user guide", "putty-user-key-file"},
 	},
 	{
+		id: leaks.IDPrivateKey, name: "private-key",
+		hits: []string{
+			"-----BEGIN PRIVATE KEY-----\nMIIEvQ",
+			"-----BEGIN RSA PRIVATE KEY-----\nMIIEow",
+			"-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl",
+			"-----BEGIN EC PRIVATE KEY-----\nMHcC",
+		},
+		misses: []string{
+			"-----BEGIN PUBLIC KEY-----\nMIIBIj",
+			"-----BEGIN CERTIFICATE-----\nMIID",
+			"BEGIN PRIVATE KEY",
+		},
+	},
+	{
 		id: leaks.IDGoPanic, name: "go-panic",
 		hits:   []string{"panic: runtime error\n\ngoroutine 1 [running]:\nmain.main()"},
 		misses: []string{"goroutines are cheap", "goroutine leak detected"},
