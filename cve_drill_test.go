@@ -244,7 +244,9 @@ func TestCVEDrill(t *testing.T) {
 		return
 	}
 	cur, err := os.ReadFile(path)
-	if err != nil || string(cur) != doc {
+	// A Windows checkout rewrites the file's line endings (core.autocrlf), and
+	// the comparison is about the table, so the endings are folded first.
+	if err != nil || strings.ReplaceAll(string(cur), "\r\n", "\n") != doc {
 		t.Errorf("%s is out of date; run go test -run TestCVEDrill -update-cve-doc .", path)
 	}
 }
