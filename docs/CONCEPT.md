@@ -386,6 +386,13 @@ Runtime stays memoryless. The output is reviewable, diffable, version-controlled
 model. It's also the honest answer to open-appsec's ML approach: same benefit, full explainability,
 and a human approves every suppression.
 
+The same corpus drafts the positive half. `gwaf tune -schema -corpus corpus.jsonl` prints an OpenAPI
+document describing what the traffic looked like: which paths, which parameters, and the narrowest
+type every observed value fit. It is the answer for an API nobody wrote a document for, and it obeys
+the same rule as the exceptions: a person reads it before anything enforces it, because a draft
+describes the capture and not the API. `schema/infer` is the library underneath, and it keeps shapes
+only, so an embedder may also run a `Learner` against live requests without retaining a single value.
+
 **This shipped as `gwaf tune`, and the split above is the design rather than an
 accident.** The analysis is a pure function of a ruleset and a set of requests, so it belongs to the
 toolchain. Reading *your* access log does not: there is no universal format — gateon's, nginx's
