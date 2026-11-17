@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gsoultan/gwaf/calibrate"
+	"github.com/gsoultan/gwaf/schema/infer"
 )
 
 // runTune turns measured false positives into the narrowest exceptions that
@@ -48,6 +49,10 @@ func runTune(args []string) error {
 		"JSON Lines file of benign requests")
 	force := fs.Bool("force", false,
 		"emit suggestions even when the corpus looks like it contains attacks")
+	draft := fs.Bool("schema", false,
+		"draft an OpenAPI document from the corpus instead of suggesting exceptions")
+	minSamples := fs.Int("min-samples", infer.DefaultLimits().MinSamples,
+		"with -schema: requests an operation or parameter needs before it is drafted")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -100,6 +105,12 @@ func runTune(args []string) error {
 				"pass -force if the corpus is hostile on purpose.\n",
 			rep.Blocking, rep.Requests, rep.BlockingRate()*100, *corpusPath)
 		return fmt.Errorf("corpus does not look benign")
+	}
+
+	// After the check above, not before it: a document drafted from traffic
+	// with attacks in it declares the attacks part of the API.
+	if *draft {
+		return draftSchema(os.Stdout, os.Stderr, corpus, *minSamples)
 	}
 
 	var fired []calibrate.RuleResult

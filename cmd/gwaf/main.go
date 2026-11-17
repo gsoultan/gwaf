@@ -9,6 +9,7 @@
 //	gwaf calibrate [-corpus FILE] [-v]   measure each rule's false-positive rate
 //	gwaf lint                            report prefilter coverage and cost
 //	gwaf tune [-corpus FILE]             suggest narrow exceptions for measured FPs
+//	gwaf tune -schema [-corpus FILE]     draft an OpenAPI document from the same corpus
 package main
 
 import (
@@ -63,6 +64,7 @@ func usage() {
     gwaf explain 7002
     gwaf explain -arg 'q=1'"'"' OR 1=1--'
     gwaf tune -corpus testdata/corpus/benign.jsonl
+    gwaf tune -schema -corpus corpus.jsonl > openapi.draft.json
     gwaf lint -corpus testdata/corpus/benign.jsonl
 
 A rule is *prefiltered* when its operator declares a required literal, and

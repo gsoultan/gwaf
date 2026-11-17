@@ -6,6 +6,20 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **`schema/infer` and `gwaf tune -schema`.** Positive security had one cost
+  nothing in the toolchain paid down: somebody has to write the document, and
+  an API with no OpenAPI description got no schema at all. `infer.Learner`
+  watches requests and drafts one: path identifiers become template segments,
+  and a query parameter is declared an integer, number, boolean, UUID, date or
+  bounded string when every value seen fit that grammar. It keeps shapes and
+  never a value, a hash of one or an enumeration, so a learner fed production
+  traffic holds nothing a breach could leak, and every count a client can drive
+  has a ceiling. A draft is loose by construction (nothing required, nothing
+  strict, no ranges), one value outside a shape widens the field for good, and
+  `infer.WriteOpenAPI` emits JSON that `schema/openapi` compiles back to the
+  same operations. `gwaf tune -schema` drafts from the corpus `tune` already
+  reads, behind the same refusal to learn from traffic with attacks in it. It
+  prints for review; nothing enforces a draft on its own.
 - **`WithSchemaMode(SchemaObserve)` and `Transaction.SchemaViolation`.** A
   schema could only be tried against live traffic by switching the whole WAF
   to `DetectionOnly`, which stops the rules blocking for as long as the trial
