@@ -9,7 +9,7 @@ go 1.26.11
 require (
 	github.com/gsoultan/gwaf v0.0.0
 	github.com/gsoultan/gwaf/middleware v0.0.0
-	github.com/labstack/echo/v4 v4.16.4
+	github.com/labstack/echo/v4 v4.16.5
 )
 
 require (
