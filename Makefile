@@ -258,6 +258,7 @@ fuzz:
 	$(GO) test -run=XXX -fuzz=FuzzAnalyze -fuzztime=$(FUZZTIME) ./detect/promptinjection/
 	$(GO) test -run=XXX -fuzz=FuzzParseJSON -fuzztime=$(FUZZTIME) ./internal/body/
 	$(GO) test -run=XXX -fuzz=FuzzParseForm -fuzztime=$(FUZZTIME) ./internal/body/
+	$(GO) test -run=XXX -fuzz=FuzzSerializedStreamPrefix -fuzztime=$(FUZZTIME) ./internal/body/
 	$(GO) test -run=XXX -fuzz=FuzzParseMultipart -fuzztime=$(FUZZTIME) ./internal/body/
 
 ## vuln: check every module's dependencies and the stdlib for known CVEs.

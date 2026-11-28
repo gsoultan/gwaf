@@ -6,6 +6,33 @@ semver, and the four extension interfaces are frozen hard.
 
 ## Unreleased
 
+- **Native object streams in binary values are detected (rule 4028 is new).**
+  A value gwaf treats as binary, a base64 field of 64 characters or more or a
+  raw request body, is inspected as its printable runs, and the bytes that
+  identify a Java or .NET object stream are not printable. So a realistic
+  base64 Java gadget in a form field, a raw `application/x-java-serialized-object`
+  body (Oracle PeopleSoft CVE-2026-35273), and every BinaryFormatter or
+  ViewState gadget (Idunno.AntiCsrf CVE-2026-131914) passed core. The
+  transaction now records the header of such a stream as its own value before
+  the split; detect/javaser already reads the Java one, and the new
+  `IDDotNetSerialized` reads BinaryFormatter, bare or as a ViewState's
+  top-level object. An ordinary ViewState, whose top-level token is a Pair,
+  still passes.
+- **Client-supplied JNDI environment properties are refused (rule 4029 is
+  new).** SAP NetWeaver CVE-2025-42884 needs no `${jndi:`: the SOAP call names
+  `java.naming.provider.url` and `java.naming.factory.initial` directly, and
+  nothing read them. `IDJNDIEnvironment` matches the `javax.naming.Context`
+  environment keys, at High confidence because an application server's own
+  admin console sends them.
+- **Two named signatures.** `IDMOVEitSessVar` closes the drill's MOVEit gap:
+  the public CVE-2023-34362 exploit sets `X-siLock-SessVar*` headers and never
+  sends `X-siis-session-id`. `IDGeoServerSvcPrefix` refuses a prefixed OGC
+  service name (`service=x/WFS`, CVE-2026-129243), scoped to OGC endpoint paths
+  so CAS's `service=` URLs pass.
+- **Eleven CVEs from the 2026-10-20 to 2026-11-28 KEV and exploitation reports
+  are in the drill**, with five more SeqSQLi mutation cases and .NET
+  serialization as a corpus class.
+
 - **`schema/infer` and `gwaf tune -schema`.** Positive security had one cost
   nothing in the toolchain paid down: somebody has to write the document, and
   an API with no OpenAPI description got no schema at all. `infer.Learner`
