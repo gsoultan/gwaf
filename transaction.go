@@ -1185,6 +1185,7 @@ func (tx *Transaction) recordText(frame int, b []byte) {
 			MaxTotalSize: tx.waf.cfg.limits.MaxBodySize,
 		})
 	}
+	tx.recordSerializedStream(types.TargetRequestBody, name, b)
 	tx.bodyParser.ExtractText(name, b, func(name, value []byte, _ body.Kind) bool {
 		tx.recordValueBytes(types.TargetRequestBody, name, value, false)
 		return true
@@ -1841,6 +1842,7 @@ func (tx *Transaction) recordValueBytes(kind types.TargetKind, key, value []byte
 	tx.decodeBuf = decoded
 
 	if body.IsBinary(decoded) {
+		tx.recordSerializedStream(kind, key, decoded)
 		tx.bodyParser.ExtractText(key, decoded, func(n, v []byte, _ body.Kind) bool {
 			tx.recordFieldBytes(kind, n, v, false)
 			return true
@@ -1859,6 +1861,22 @@ func (tx *Transaction) recordValueBytes(kind types.TargetKind, key, value []byte
 	// what real nesting uses; anything deeper is a payload built to be expensive
 	// rather than to be decoded.
 	tx.recordNestedBase64(kind, key, decoded, 1)
+}
+
+// recordSerializedStream records the header of a native object stream that is
+// about to be split into printable runs.
+//
+// The split is what made these streams invisible: the bytes that identify a
+// Java or .NET object stream are not printable, so ExtractText drops them and
+// the detectors see only the class names inside. The header is recorded as its
+// own value, under the same key, so the stream reaches them as what it is.
+// Only a bounded prefix is kept (body.SerializedStreamPrefix), and nothing is
+// recorded for binary content that does not begin with a recognized header,
+// so an ordinary upload costs one comparison.
+func (tx *Transaction) recordSerializedStream(kind types.TargetKind, key, b []byte) {
+	if n := body.SerializedStreamPrefix(b); n > 0 {
+		tx.recordFieldBytes(kind, key, b[:n], false)
+	}
 }
 
 // maxBase64Depth bounds how many layers of base64 are unwrapped.
@@ -1880,7 +1898,11 @@ func (tx *Transaction) recordNestedBase64(kind types.TargetKind, key, value []by
 	} else {
 		next, ok = body.IsBase64Text(tx.nestedBuf[:0], value)
 	}
-	if !ok || len(next) == 0 || body.IsBinary(next) {
+	if !ok || len(next) == 0 {
+		return
+	}
+	if body.IsBinary(next) {
+		tx.recordSerializedStream(kind, key, next)
 		return
 	}
 	tx.nestedBuf = next

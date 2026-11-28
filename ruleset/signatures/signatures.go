@@ -59,6 +59,9 @@ const (
 	IDPrototypePollution types.RuleID = 100041
 	IDNullByte           types.RuleID = 100042
 	IDPHPOpenTag         types.RuleID = 100043
+
+	IDMOVEitSessVar      types.RuleID = 100044
+	IDGeoServerSvcPrefix types.RuleID = 100045
 )
 
 // spec is the compact form of a rule. A rules.Rule literal repeated across the
@@ -413,6 +416,35 @@ var specs = []spec{
 		severity: types.SeverityCritical, conf: types.Certain,
 		msg:  "MOVEit Transfer SQLi attempt (CVE-2023-34362)",
 		tags: []string{"sqli", "cve-2023-34362"},
+	},
+	{
+		// The public CVE-2023-34362 exploit does not send X-siis-session-id at
+		// all. It reaches moveitisapi.dll with X-siLock-Transaction and sets
+		// session variables through X-siLock-SessVar0..n, which the ISAPI layer
+		// copies into the session that human.aspx then trusts. Those headers
+		// are MOVEit's own server-to-server plumbing; a browser never sends
+		// one, so the header name is the attack.
+		id: IDMOVEitSessVar, phase: types.PhaseRequestHeaders, targets: tHeaderNames,
+		xform:    norm,
+		op:       op.HasPrefix("x-silock-sessvar"),
+		severity: types.SeverityCritical, conf: types.Certain,
+		msg:  "MOVEit Transfer session-variable injection (CVE-2023-34362)",
+		tags: []string{"sqli", "cve-2023-34362"},
+	},
+	{
+		// GeoServer CVE-2026-129243 (KEV, 2026-11-27): the OGC dispatcher
+		// resolves a prefixed service name such as "x/WFS" to WFS, while the
+		// service-security check compares the unresolved string and lets it
+		// through, so an anonymous caller can create and delete WFS stored
+		// queries -- the first step of the CVE-2026-120705 XXE chain. A real
+		// OGC client names a bare service. Scoped to OGC endpoint paths,
+		// because "service=" carrying a URL is how CAS single sign-on works.
+		id: IDGeoServerSvcPrefix, phase: types.PhaseRequestHeaders, targets: tURI,
+		xform:    norm,
+		op:       rx.MustNew(`/(?:ows|wfs|wms|wcs|wps)\b[^?#]*\?(?:[^#]*&)?service=[^&#]*/`),
+		severity: types.SeverityCritical, conf: types.High,
+		msg:  "GeoServer prefixed OGC service name (CVE-2026-129243)",
+		tags: []string{"authz", "cve-2026-129243"},
 	},
 
 	// --------------------------------------------------------------------- xss

