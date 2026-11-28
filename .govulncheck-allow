@@ -7,5 +7,3 @@
 # no longer reported (delete the line). Anything with a fix is fixed, never
 # listed here (CLAUDE.md §4).
 
-./adapters/echo GO-2026-6875 Echo's reverse-proxy middleware forwards X-Real-IP by default; the adapter never mounts it, and no Echo release (latest v4.16.4, 2026-11-13) has a fix.
-./adapters/echo GO-2026-6872 Echo's rate-limiter middleware trusts X-Forwarded-For by default; the adapter never mounts it, and no Echo release (latest v4.16.4, 2026-11-13) has a fix.

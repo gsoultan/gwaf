@@ -4,11 +4,11 @@
 //
 // govulncheck has no ignore list, and that is mostly a virtue: CLAUDE.md §4 says
 // fix findings, do not annotate them away. The one case it cannot handle is an
-// advisory with no fixed version. GO-2026-6875 and GO-2026-6872 describe
+// advisory with no fixed version. GO-2026-6875 and GO-2026-6872 were the first:
 // defaults in Echo's own reverse-proxy and rate-limiter middleware, which the
-// gwaf Echo adapter never uses, yet they list core response methods every Echo
-// program calls, and no Echo release fixes them. A gate that stays red on a
-// finding nobody can act on is a gate people learn to ignore.
+// gwaf Echo adapter never uses, yet they listed core response methods every
+// Echo program calls, and no Echo release fixed them until v4.16.5. A gate that
+// stays red on a finding nobody can act on is a gate people learn to ignore.
 //
 // So an exception is allowed only when all of these hold, and the gate fails the
 // moment one stops holding:
